@@ -159,17 +159,31 @@ function parseKeyValueArgs(raw: string): Record<string, string> {
 }
 
 function extractConnectorMessageArgs(message: string): {
-  action: 'list_running' | 'list_targets' | 'send'
+  action:
+    | 'list_running'
+    | 'list_targets'
+    | 'start'
+    | 'stop'
+    | 'send'
+    | 'send_voice_note'
+    | 'schedule_followup'
   platform?: string
   connectorId?: string
   to?: string
   message?: string
+  voiceText?: string
+  voiceId?: string
   imageUrl?: string
   fileUrl?: string
   mediaPath?: string
   mimeType?: string
   fileName?: string
   caption?: string
+  delaySec?: number
+  followUpMessage?: string
+  followUpDelaySec?: number
+  ptt?: boolean
+  approved?: boolean
 } | null {
   if (!message.toLowerCase().includes('connector_message_tool')) return null
   const parsed = parseKeyValueArgs(message)
@@ -190,21 +204,43 @@ function extractConnectorMessageArgs(message: string): {
   }
 
   const actionRaw = (parsed.action || 'send').toLowerCase()
-  const action = actionRaw === 'list_running' || actionRaw === 'list_targets' || actionRaw === 'send'
+  const action = (
+    actionRaw === 'list_running'
+    || actionRaw === 'list_targets'
+    || actionRaw === 'start'
+    || actionRaw === 'stop'
+    || actionRaw === 'send'
+    || actionRaw === 'send_voice_note'
+    || actionRaw === 'schedule_followup'
+  )
     ? actionRaw
     : 'send'
   const args: {
-    action: 'list_running' | 'list_targets' | 'send'
+    action:
+      | 'list_running'
+      | 'list_targets'
+      | 'start'
+      | 'stop'
+      | 'send'
+      | 'send_voice_note'
+      | 'schedule_followup'
     platform?: string
     connectorId?: string
     to?: string
     message?: string
+    voiceText?: string
+    voiceId?: string
     imageUrl?: string
     fileUrl?: string
     mediaPath?: string
     mimeType?: string
     fileName?: string
     caption?: string
+    delaySec?: number
+    followUpMessage?: string
+    followUpDelaySec?: number
+    ptt?: boolean
+    approved?: boolean
   } = { action }
   const quoted = (key: string): string | undefined => {
     const m = message.match(new RegExp(`${key}\\s*=\\s*(\"([^\"]*)\"|'([^']*)')`, 'i'))
@@ -214,12 +250,19 @@ function extractConnectorMessageArgs(message: string): {
   if (parsed.connectorId) args.connectorId = parsed.connectorId
   if (parsed.to) args.to = parsed.to
   if (payload) args.message = payload
+  if (parsed.voiceText) args.voiceText = parsed.voiceText
+  if (parsed.voiceId) args.voiceId = parsed.voiceId
   args.imageUrl = parsed.imageUrl || quoted('imageUrl')
   args.fileUrl = parsed.fileUrl || quoted('fileUrl')
   args.mediaPath = parsed.mediaPath || quoted('mediaPath')
   args.mimeType = parsed.mimeType || quoted('mimeType')
   args.fileName = parsed.fileName || quoted('fileName')
   args.caption = parsed.caption || quoted('caption')
+  if (parsed.followUpMessage) args.followUpMessage = parsed.followUpMessage
+  if (parsed.delaySec && Number.isFinite(Number(parsed.delaySec))) args.delaySec = Number(parsed.delaySec)
+  if (parsed.followUpDelaySec && Number.isFinite(Number(parsed.followUpDelaySec))) args.followUpDelaySec = Number(parsed.followUpDelaySec)
+  if (parsed.ptt) args.ptt = ['true', '1', 'yes', 'on'].includes(parsed.ptt.toLowerCase())
+  if (parsed.approved) args.approved = ['true', '1', 'yes', 'on'].includes(parsed.approved.toLowerCase())
   return args
 }
 
@@ -283,6 +326,21 @@ function getTodaySpendUsd(): number {
 function findFirstUrl(text: string): string | null {
   const m = text.match(/https?:\/\/[^\s<>"')]+/i)
   return m?.[0] || null
+}
+
+function isMemoryListIntent(message: string): boolean {
+  const text = message.toLowerCase()
+  if (!/\bmemory|memories|remember\b/.test(text)) return false
+  if (/\b(save|store|memorize|add to memory|write to memory|remember this)\b/.test(text)) return false
+  if (/\bmemory_tool\b/.test(text)) return true
+  return (
+    /\blist\b[\s\w]{0,24}\bmemories\b/.test(text)
+    || /\bshow\b[\s\w]{0,24}\bmemories\b/.test(text)
+    || /\bget\b[\s\w]{0,24}\bmemories\b/.test(text)
+    || /\bwhat\b[\s\w]{0,40}\bmemories\b/.test(text)
+    || /\bwhat do you remember\b/.test(text)
+    || /\brecall\b[\s\w]{0,24}\bmemories?\b/.test(text)
+  )
 }
 
 function syncSessionFromAgent(sessionId: string): void {
@@ -845,6 +903,19 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
     } else if (hasToolEnabled(sessionForRun, 'web_search')) {
       await invokeSessionTool('web_search', { query: message.trim(), maxResults: 5 }, 'Auto web_search routing failed')
     }
+  }
+
+  if (
+    canAutoRouteWithTools
+    && calledNames.size === 0
+    && hasToolEnabled(sessionForRun, 'memory')
+    && isMemoryListIntent(message)
+  ) {
+    await invokeSessionTool(
+      'memory_tool',
+      { action: 'list', key: '', scope: 'auto' },
+      'Auto memory listing failed',
+    )
   }
 
   if (requestedToolNames.length > 0) {

@@ -222,6 +222,21 @@ const PLATFORMS: {
   },
 ]
 
+const COMMON_CONFIG_FIELDS: { key: string; label: string; placeholder: string; help?: string }[] = [
+  {
+    key: 'taskFollowups',
+    label: 'Task Follow-ups',
+    placeholder: 'true | false',
+    help: 'Enable automatic connector follow-up messages when this agent completes or fails a task.',
+  },
+  {
+    key: 'taskFollowupTemplate',
+    label: 'Task Follow-up Template',
+    placeholder: 'Task {status}: {title}\\n\\n{summary}',
+    help: 'Optional placeholders: {status}, {title}, {summary}, {taskId}.',
+  },
+]
+
 export function ConnectorSheet() {
   const open = useAppStore((s) => s.connectorSheetOpen)
   const setOpen = useAppStore((s) => s.setConnectorSheetOpen)
@@ -625,7 +640,7 @@ export function ConnectorSheet() {
       )}
 
       {/* Platform-specific config */}
-      {platformConfig.configFields.map((field) => {
+      {[...platformConfig.configFields, ...COMMON_CONFIG_FIELDS].map((field) => {
         const isTagField = field.key === 'allowedJids' || field.key === 'channelIds' || field.key === 'chatIds' || field.key === 'allowFrom'
         if (isTagField) {
           const tags = (config[field.key] || '').split(',').map((s) => s.trim()).filter(Boolean)

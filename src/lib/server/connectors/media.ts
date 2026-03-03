@@ -74,6 +74,11 @@ export function isImageMime(mime: string): boolean {
   return mime.startsWith('image/')
 }
 
+/** Check if a MIME type is audio */
+export function isAudioMime(mime: string): boolean {
+  return mime.startsWith('audio/')
+}
+
 export function inferInboundMediaType(mimeType?: string, fileName?: string, fallback: InboundMediaType = 'file'): InboundMediaType {
   const probe = `${mimeType || ''} ${fileName || ''}`.toLowerCase()
   if (probe.includes('image')) return 'image'

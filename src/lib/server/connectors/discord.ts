@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import type { Connector } from '@/types'
 import type { PlatformConnector, ConnectorInstance, InboundMessage } from './types'
-import { inferInboundMediaType, mimeFromPath, isImageMime } from './media'
+import { downloadInboundMediaToUpload, inferInboundMediaType } from './media'
 import { isNoMessage } from './manager'
 
 const discord: PlatformConnector = {
@@ -32,13 +32,36 @@ const discord: PlatformConnector = {
       if (allowedChannels && !allowedChannels.includes(message.channelId)) return
 
       const attachmentList = Array.from(message.attachments.values())
-      const media = attachmentList.map((a) => ({
-        type: inferInboundMediaType(a.contentType || undefined, a.name || undefined),
-        fileName: a.name || undefined,
-        mimeType: a.contentType || undefined,
-        sizeBytes: a.size || undefined,
-        url: a.url || undefined,
-      }))
+      const media: NonNullable<InboundMessage['media']> = []
+      for (const attachment of attachmentList) {
+        const mediaType = inferInboundMediaType(attachment.contentType || undefined, attachment.name || undefined)
+        const sourceUrl = attachment.url || undefined
+        if (sourceUrl) {
+          try {
+            const stored = await downloadInboundMediaToUpload({
+              connectorId: connector.id,
+              mediaType,
+              url: sourceUrl,
+              fileName: attachment.name || undefined,
+              mimeType: attachment.contentType || undefined,
+            })
+            if (stored) {
+              media.push(stored)
+              continue
+            }
+          } catch (err: unknown) {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            console.warn(`[discord] Media download failed (${attachment.name || 'file'}):`, errMsg)
+          }
+        }
+        media.push({
+          type: mediaType,
+          fileName: attachment.name || undefined,
+          mimeType: attachment.contentType || undefined,
+          sizeBytes: attachment.size || undefined,
+          url: sourceUrl,
+        })
+      }
       const firstImage = media.find((m) => m.type === 'image' && m.url)
 
       const inbound: InboundMessage = {

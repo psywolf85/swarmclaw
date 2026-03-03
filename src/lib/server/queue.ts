@@ -1,5 +1,7 @@
 import { genId } from '@/lib/id'
-import { loadTasks, saveTasks, loadQueue, saveQueue, loadAgents, loadSchedules, saveSchedules, loadSessions, saveSessions, loadSettings } from './storage'
+import fs from 'node:fs'
+import path from 'node:path'
+import { loadTasks, saveTasks, loadQueue, saveQueue, loadAgents, loadSchedules, saveSchedules, loadSessions, saveSessions, loadSettings, loadConnectors, UPLOAD_DIR } from './storage'
 import { notify } from './ws-hub'
 import { WORKSPACE_DIR } from './data-dir'
 import { createOrchestratorSession, executeOrchestrator } from './orchestrator'
@@ -114,6 +116,54 @@ function latestAssistantText(session: SessionLike | null | undefined): string {
   return ''
 }
 
+function isEnabledFlag(value: unknown): boolean {
+  if (typeof value === 'boolean') return value
+  if (typeof value !== 'string') return false
+  const normalized = value.trim().toLowerCase()
+  return normalized === '1'
+    || normalized === 'true'
+    || normalized === 'yes'
+    || normalized === 'on'
+    || normalized === 'enabled'
+}
+
+function normalizeWhatsappTarget(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return trimmed
+  if (trimmed.includes('@')) return trimmed
+  let cleaned = trimmed.replace(/[^\d+]/g, '')
+  if (cleaned.startsWith('+')) cleaned = cleaned.slice(1)
+  if (cleaned.startsWith('0') && cleaned.length >= 10) {
+    cleaned = `44${cleaned.slice(1)}`
+  }
+  cleaned = cleaned.replace(/[^\d]/g, '')
+  return cleaned ? `${cleaned}@s.whatsapp.net` : trimmed
+}
+
+function fillTaskFollowupTemplate(template: string, data: {
+  status: string
+  title: string
+  summary: string
+  taskId: string
+}): string {
+  return template
+    .replaceAll('{status}', data.status)
+    .replaceAll('{title}', data.title)
+    .replaceAll('{summary}', data.summary)
+    .replaceAll('{taskId}', data.taskId)
+}
+
+function maybeResolveUploadMediaPathFromUrl(url: string | undefined): string | undefined {
+  if (!url || !url.startsWith('/api/uploads/')) return undefined
+  const rawName = url.slice('/api/uploads/'.length).split(/[?#]/)[0] || ''
+  let decoded: string
+  try { decoded = decodeURIComponent(rawName) } catch { decoded = rawName }
+  const safeName = decoded.replace(/[^a-zA-Z0-9._-]/g, '')
+  if (!safeName) return undefined
+  const fullPath = path.join(UPLOAD_DIR, safeName)
+  return fs.existsSync(fullPath) ? fullPath : undefined
+}
+
 // Task result extraction now uses Zod-validated structured data
 // from ./task-result.ts (extractTaskResult, formatResultBody)
 
@@ -213,6 +263,78 @@ function notifyMainChatScheduleResult(task: BoardTask): void {
   } catch { /* ignore thread push failure */ }
 
   if (changed) saveSessions(sessions)
+}
+
+async function notifyConnectorTaskFollowups(params: {
+  task: BoardTask
+  statusLabel: string
+  summaryText: string
+  imageUrl?: string
+}) {
+  const { task, statusLabel, summaryText, imageUrl } = params
+
+  const connectors = loadConnectors()
+  const running = (await import('./connectors/manager')).listRunningConnectors()
+  const manager = await import('./connectors/manager')
+
+  const candidates = running.filter((entry) => {
+    if (!entry.supportsSend || !entry.id) return false
+    const connector = connectors[entry.id]
+    if (!connector) return false
+    if (connector.agentId !== task.agentId) return false
+    return isEnabledFlag(connector.config?.taskFollowups)
+  })
+  if (!candidates.length) return
+
+  const summary = summaryText.trim().slice(0, 1400)
+  for (const candidate of candidates) {
+    const connector = connectors[candidate.id]
+    if (!connector) continue
+
+    const channelTargetRaw = candidate.recentChannelId
+      || candidate.configuredTargets[0]
+      || connector.config?.outboundJid
+      || connector.config?.outboundTarget
+      || ''
+    if (!channelTargetRaw) continue
+
+    const channelId = connector.platform === 'whatsapp'
+      ? normalizeWhatsappTarget(channelTargetRaw)
+      : channelTargetRaw
+
+    const template = typeof connector.config?.taskFollowupTemplate === 'string'
+      ? connector.config.taskFollowupTemplate.trim()
+      : ''
+    const message = template
+      ? fillTaskFollowupTemplate(template, {
+          status: statusLabel,
+          title: task.title || task.id,
+          summary,
+          taskId: task.id,
+        })
+      : [
+          `Task ${statusLabel}: ${task.title}`,
+          summary || 'No summary provided.',
+        ].join('\n\n')
+
+    const resolvedMediaPath = maybeResolveUploadMediaPathFromUrl(imageUrl)
+    try {
+      await manager.sendConnectorMessage({
+        connectorId: candidate.id,
+        channelId,
+        text: message,
+        ...(resolvedMediaPath
+          ? {
+              mediaPath: resolvedMediaPath,
+              caption: message,
+            }
+          : {}),
+      })
+    } catch (err: unknown) {
+      const errMsg = err instanceof Error ? err.message : String(err)
+      console.warn(`[queue] Failed task follow-up send on connector ${candidate.id}: ${errMsg}`)
+    }
+  }
 }
 
 /**
@@ -321,6 +443,13 @@ function notifyAgentThreadTaskResult(task: BoardTask): void {
   }
 
   if (changed) saveSessions(sessions)
+
+  void notifyConnectorTaskFollowups({
+    task,
+    statusLabel,
+    summaryText: resultBody || '',
+    imageUrl: firstImage?.url,
+  })
 }
 
 /** Disable heartbeat on a task's session when the task finishes. */

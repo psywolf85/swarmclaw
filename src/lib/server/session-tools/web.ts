@@ -278,10 +278,9 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
 
       if (Array.isArray(content)) {
         const parts: string[] = []
-        let hasBinaryImage = false
+        const contentHasBinaryImage = content.some((c) => c.type === 'image' && !!c.data)
         for (const c of content) {
           if (c.type === 'image' && c.data) {
-            hasBinaryImage = true
             const imageBuffer = Buffer.from(c.data, 'base64')
             const filename = `screenshot-${Date.now()}.png`
             const filepath = path.join(UPLOAD_DIR, filename)
@@ -306,8 +305,8 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
               if (fs.existsSync(srcPath)) {
                 const ext = path.extname(srcPath).slice(1).toLowerCase()
                 const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp']
-                // Skip file-path images if we already have a binary image (avoids duplicates)
-                if (IMAGE_EXTS.includes(ext) && hasBinaryImage) {
+                // Skip file-path images whenever MCP already returned image binary payloads.
+                if (IMAGE_EXTS.includes(ext) && contentHasBinaryImage) {
                   parts.push(isError ? text : cleanPlaywrightOutput(text))
                 } else {
                   const filename = `browser-${Date.now()}.${ext}`

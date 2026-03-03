@@ -10,12 +10,13 @@ import path from 'path'
 import fs from 'fs'
 import type { Connector } from '@/types'
 import type { PlatformConnector, ConnectorInstance, InboundMessage } from './types'
-import { saveInboundMediaBuffer, mimeFromPath, isImageMime } from './media'
+import { saveInboundMediaBuffer, mimeFromPath, isImageMime, isAudioMime } from './media'
 import { isNoMessage } from './manager'
 
 import { DATA_DIR } from '../data-dir'
 
 const AUTH_DIR = path.join(DATA_DIR, 'whatsapp-auth')
+const INBOUND_DEDUPE_TTL_MS = 2 * 60 * 1000
 
 /** Normalize a phone number for JID matching — strip leading 0 or + */
 function normalizeNumber(num: string): string {
@@ -57,6 +58,7 @@ const whatsapp: PlatformConnector = {
     let sock: ReturnType<typeof makeWASocket> | null = null
     let stopped = false
     let socketGen = 0 // Track socket generation to ignore stale events
+    const seenInboundMessageIds = new Map<string, number>()
 
     const instance: ConnectorInstance = {
       connector,
@@ -74,7 +76,15 @@ const whatsapp: PlatformConnector = {
           const fName = options.fileName || path.basename(options.mediaPath)
           let sent
           if (isImageMime(mime)) {
-            sent = await sock.sendMessage(channelId, { image: buf, caption, mimetype: mime })
+            try {
+              sent = await sock.sendMessage(channelId, { image: buf, caption, mimetype: mime })
+            } catch (err: unknown) {
+              const errMsg = err instanceof Error ? err.message : String(err)
+              console.warn(`[whatsapp] Image send failed (${errMsg}); retrying as document: ${fName}`)
+              sent = await sock.sendMessage(channelId, { document: buf, fileName: fName, mimetype: mime, caption })
+            }
+          } else if (isAudioMime(mime)) {
+            sent = await sock.sendMessage(channelId, { audio: buf, mimetype: mime, ptt: options.ptt !== false })
           } else {
             sent = await sock.sendMessage(channelId, { document: buf, fileName: fName, mimetype: mime, caption })
           }
@@ -227,6 +237,22 @@ const whatsapp: PlatformConnector = {
           console.log(`[whatsapp] Processing message: fromMe=${msg.key.fromMe}, jid=${msg.key.remoteJid}, hasConversation=${!!msg.message?.conversation}, hasExtended=${!!msg.message?.extendedTextMessage}`)
 
           if (msg.key.remoteJid === 'status@broadcast') continue
+
+          const msgId = msg.key.id || ''
+          if (msgId) {
+            const now = Date.now()
+            const seenAt = seenInboundMessageIds.get(msgId)
+            if (typeof seenAt === 'number' && now - seenAt <= INBOUND_DEDUPE_TTL_MS) {
+              console.log(`[whatsapp] Skipping duplicate inbound message id: ${msgId}`)
+              continue
+            }
+            seenInboundMessageIds.set(msgId, now)
+            if (seenInboundMessageIds.size > 5000) {
+              for (const [id, ts] of seenInboundMessageIds.entries()) {
+                if (now - ts > INBOUND_DEDUPE_TTL_MS) seenInboundMessageIds.delete(id)
+              }
+            }
+          }
 
           // Skip messages sent by the bot itself (tracked by ID to prevent infinite loops)
           if (msg.key.id && sentMessageIds.has(msg.key.id)) {

@@ -44,6 +44,8 @@ export interface ConnectorInstance {
       mimeType?: string
       fileName?: string
       caption?: string
+      /** Send audio as a WhatsApp voice note (push-to-talk) */
+      ptt?: boolean
     },
   ) => Promise<{ messageId?: string } | void>
   /** Current QR code data URL (WhatsApp only, null when paired) */

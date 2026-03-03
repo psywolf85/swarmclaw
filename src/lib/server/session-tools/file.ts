@@ -6,6 +6,17 @@ import { UPLOAD_DIR } from '../storage'
 import type { ToolBuildContext } from './context'
 import { safePath, truncate, listDirRecursive, MAX_OUTPUT, MAX_FILE } from './context'
 
+const SEND_FILE_DEDUPE_TTL_MS = 30_000
+const recentSendFileResults = new Map<string, { at: number; output: string; uploadPath: string }>()
+
+function pruneRecentSendFileCache(now: number): void {
+  for (const [key, entry] of recentSendFileResults.entries()) {
+    if (now - entry.at > SEND_FILE_DEDUPE_TTL_MS || !fs.existsSync(entry.uploadPath)) {
+      recentSendFileResults.delete(key)
+    }
+  }
+}
+
 export function buildFileTools(bctx: ToolBuildContext): StructuredToolInterface[] {
   const tools: StructuredToolInterface[] = []
 
@@ -197,12 +208,21 @@ export function buildFileTools(bctx: ToolBuildContext): StructuredToolInterface[
       tool(
         async ({ filePath: rawPath }) => {
           try {
+            const now = Date.now()
+            pruneRecentSendFileCache(now)
             // Resolve relative to cwd, but also allow absolute paths
             const resolved = path.isAbsolute(rawPath) ? rawPath : path.resolve(bctx.cwd, rawPath)
             if (!fs.existsSync(resolved)) return `Error: file not found: ${rawPath}`
             const stat = fs.statSync(resolved)
             if (stat.isDirectory()) return `Error: cannot send a directory. Send individual files instead.`
             if (stat.size > 100 * 1024 * 1024) return `Error: file too large (${(stat.size / 1024 / 1024).toFixed(1)}MB). Max 100MB.`
+
+            const sessionId = bctx.ctx?.sessionId || 'no-session'
+            const dedupeKey = `${sessionId}|${resolved}`
+            const cached = recentSendFileResults.get(dedupeKey)
+            if (cached && now - cached.at <= SEND_FILE_DEDUPE_TTL_MS && fs.existsSync(cached.uploadPath)) {
+              return cached.output
+            }
 
             const ext = path.extname(resolved).slice(1).toLowerCase()
             const basename = path.basename(resolved)
@@ -212,14 +232,13 @@ export function buildFileTools(bctx: ToolBuildContext): StructuredToolInterface[
 
             const IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'bmp', 'ico']
             const VIDEO_EXTS = ['mp4', 'webm', 'mov', 'avi', 'mkv']
+            const AUDIO_EXTS = ['mp3', 'ogg', 'wav', 'aac', 'm4a', 'opus']
 
-            if (IMAGE_EXTS.includes(ext)) {
-              return `![${basename}](/api/uploads/${filename})`
-            } else if (VIDEO_EXTS.includes(ext)) {
-              return `![${basename}](/api/uploads/${filename})`
-            } else {
-              return `[Download ${basename}](/api/uploads/${filename})`
-            }
+            const output = (IMAGE_EXTS.includes(ext) || VIDEO_EXTS.includes(ext) || AUDIO_EXTS.includes(ext))
+              ? `![${basename}](/api/uploads/${filename})`
+              : `[Download ${basename}](/api/uploads/${filename})`
+            recentSendFileResults.set(dedupeKey, { at: now, output, uploadPath: dest })
+            return output
           } catch (err: unknown) {
             return `Error sending file: ${err instanceof Error ? err.message : String(err)}`
           }

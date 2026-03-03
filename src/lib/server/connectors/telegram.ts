@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import type { Connector } from '@/types'
 import type { PlatformConnector, ConnectorInstance, InboundMessage, InboundMediaType } from './types'
-import { downloadInboundMediaToUpload, inferInboundMediaType, mimeFromPath, isImageMime } from './media'
+import { downloadInboundMediaToUpload, inferInboundMediaType, mimeFromPath, isImageMime, isAudioMime } from './media'
 import { isNoMessage } from './manager'
 
 const telegram: PlatformConnector = {
@@ -181,6 +181,11 @@ const telegram: PlatformConnector = {
           if (isImageMime(mime)) {
             const msg = await bot.api.sendPhoto(chatId, inputFile, { caption })
             return { messageId: String(msg.message_id) }
+          } else if (isAudioMime(mime)) {
+            const msg = options?.ptt
+              ? await bot.api.sendVoice(chatId, inputFile, { caption })
+              : await bot.api.sendAudio(chatId, inputFile, { caption })
+            return { messageId: String(msg.message_id) }
           } else {
             const msg = await bot.api.sendDocument(chatId, inputFile, { caption })
             return { messageId: String(msg.message_id) }
@@ -193,7 +198,12 @@ const telegram: PlatformConnector = {
         }
         // URL-based file
         if (options?.fileUrl) {
-          const msg = await bot.api.sendDocument(chatId, options.fileUrl, { caption })
+          const mime = options.mimeType || ''
+          const msg = isAudioMime(mime)
+            ? options?.ptt
+              ? await bot.api.sendVoice(chatId, options.fileUrl, { caption })
+              : await bot.api.sendAudio(chatId, options.fileUrl, { caption })
+            : await bot.api.sendDocument(chatId, options.fileUrl, { caption })
           return { messageId: String(msg.message_id) }
         }
         // Text only

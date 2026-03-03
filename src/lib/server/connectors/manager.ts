@@ -36,28 +36,189 @@ import {
   type PairingPolicy,
 } from './pairing'
 
+function resolveUploadPathFromUrl(rawUrl: string): string | null {
+  if (!rawUrl) return null
+  const normalized = rawUrl.trim()
+  const match = normalized.match(/\/api\/uploads\/([^?#)\s]+)/)
+  if (!match) return null
+  let decoded: string
+  try { decoded = decodeURIComponent(match[1]) } catch { decoded = match[1] }
+  const safeName = decoded.replace(/[^a-zA-Z0-9._-]/g, '')
+  if (!safeName) return null
+  const filePath = path.join(UPLOAD_DIR, safeName)
+  return fs.existsSync(filePath) ? filePath : null
+}
+
+function uploadApiUrlFromPath(filePath: string): string | null {
+  const rel = path.relative(UPLOAD_DIR, filePath)
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return null
+  const fileName = path.basename(rel)
+  return `/api/uploads/${encodeURIComponent(fileName)}`
+}
+
+function parseSseDataEvents(raw: string): Array<Record<string, unknown>> {
+  if (!raw) return []
+  const events: Array<Record<string, unknown>> = []
+  const lines = raw.split('\n')
+  for (const line of lines) {
+    if (!line.startsWith('data: ')) continue
+    try {
+      const parsed = JSON.parse(line.slice(6).trim())
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        events.push(parsed as Record<string, unknown>)
+      }
+    } catch { /* ignore malformed event lines */ }
+  }
+  return events
+}
+
+function parseConnectorToolResult(toolOutput: string): { status?: string; to?: string; followUpId?: string } | null {
+  const raw = toolOutput.trim()
+  if (!raw) return null
+  try {
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null
+    const record = parsed as Record<string, unknown>
+    const status = typeof record.status === 'string' ? String(record.status) : undefined
+    const to = typeof record.to === 'string' ? String(record.to) : undefined
+    const followUpId = typeof record.followUpId === 'string' ? String(record.followUpId) : undefined
+    return { status, to, followUpId }
+  } catch {
+    return null
+  }
+}
+
+function canonicalUploadMediaKey(filePath: string): string {
+  const base = path.basename(filePath)
+  const ext = path.extname(base).toLowerCase()
+  const normalized = base
+    .replace(/^\d{10,16}-/, '')
+    .replace(/^(?:browser|screenshot)-\d{10,16}(?:-\d+)?\./, `playwright-capture.`)
+    .toLowerCase()
+  return normalized || `unknown${ext}`
+}
+
+function shouldAllowMultipleMediaSends(userText: string): boolean {
+  const text = (userText || '').toLowerCase()
+  return /\b(all|both|multiple|several|many|every|each|two|three|4|four|screenshots|images|photos|files|documents)\b/.test(text)
+}
+
+function preferSingleBestMediaFile(files: Array<{ path: string; alt: string }>): Array<{ path: string; alt: string }> {
+  if (files.length <= 1) return files
+  const ranked = [...files].sort((a, b) => {
+    const score = (entry: { path: string }) => {
+      const base = path.basename(entry.path).toLowerCase()
+      let value = 0
+      if (/^\d{10,16}-/.test(base)) value += 20
+      if (!base.startsWith('browser-') && !base.startsWith('screenshot-')) value += 10
+      if (base.endsWith('.pdf')) value += 8
+      if (base.endsWith('.png') || base.endsWith('.jpg') || base.endsWith('.jpeg') || base.endsWith('.webp')) value += 6
+      try {
+        const stat = fs.statSync(entry.path)
+        value += Math.min(5, Math.round((stat.mtimeMs % 10_000) / 2_000))
+      } catch { /* ignore stat errors */ }
+      return value
+    }
+    return score(b) - score(a)
+  })
+  return [ranked[0]]
+}
+
+export function selectOutboundMediaFiles(
+  files: Array<{ path: string; alt: string }>,
+  userText: string,
+): Array<{ path: string; alt: string }> {
+  if (files.length === 0) return []
+  const mergedFiles: Array<{ path: string; alt: string }> = []
+  const seenMediaKeys = new Set<string>()
+  for (const candidate of files) {
+    const mediaKey = canonicalUploadMediaKey(candidate.path)
+    if (seenMediaKeys.has(mediaKey)) continue
+    seenMediaKeys.add(mediaKey)
+    mergedFiles.push(candidate)
+  }
+  return shouldAllowMultipleMediaSends(userText || '')
+    ? mergedFiles
+    : preferSingleBestMediaFile(mergedFiles)
+}
+
 /**
  * Extract embedded media references from agent response text.
- * Parses markdown image/link patterns like ![alt](/api/uploads/filename)
- * and resolves them to actual file paths on disk.
+ * Supports markdown images/links and bare upload URLs.
  */
-function extractEmbeddedMedia(text: string): { cleanText: string; files: Array<{ path: string; alt: string }> } {
+export function extractEmbeddedMedia(text: string): { cleanText: string; files: Array<{ path: string; alt: string }> } {
   const files: Array<{ path: string; alt: string }> = []
-  // Match markdown images: ![alt](/api/uploads/filename)
-  const imgRegex = /!\[([^\]]*)\]\(\/api\/uploads\/([^)]+)\)/g
-  let match: RegExpExecArray | null
-  while ((match = imgRegex.exec(text)) !== null) {
-    const [, alt, filename] = match
-    const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, '')
-    const filePath = path.join(UPLOAD_DIR, safeName)
-    if (fs.existsSync(filePath)) {
-      files.push({ path: filePath, alt: alt || '' })
-    }
+  const seen = new Set<string>()
+  let cleanText = text
+
+  const pushFile = (filePath: string, alt: string) => {
+    if (!filePath || seen.has(filePath)) return
+    seen.add(filePath)
+    files.push({ path: filePath, alt: alt.trim() })
   }
+
+  const imageRegex = /!\[([^\]]*)\]\(([^)]+)\)/g
+  cleanText = cleanText.replace(imageRegex, (full, altRaw, urlRaw) => {
+    const filePath = resolveUploadPathFromUrl(String(urlRaw || ''))
+    if (!filePath) return full
+    pushFile(filePath, String(altRaw || ''))
+    return ''
+  })
+
+  const linkRegex = /(?<!!)\[([^\]]*)\]\(([^)]+)\)/g
+  cleanText = cleanText.replace(linkRegex, (full, altRaw, urlRaw) => {
+    const filePath = resolveUploadPathFromUrl(String(urlRaw || ''))
+    if (!filePath) return full
+    pushFile(filePath, String(altRaw || ''))
+    return ''
+  })
+
+  const bareUploadUrlRegex = /(?:https?:\/\/[^\s)]+)?\/api\/uploads\/[^\s)\]]+/g
+  cleanText = cleanText.replace(bareUploadUrlRegex, (full) => {
+    const filePath = resolveUploadPathFromUrl(full)
+    if (!filePath) return full
+    pushFile(filePath, '')
+    return ''
+  })
+
   if (files.length === 0) return { cleanText: text, files }
-  // Strip the image markdown from text — the files will be sent as separate media
-  const cleanText = text.replace(imgRegex, '').replace(/\n{3,}/g, '\n\n').trim()
+  cleanText = cleanText.replace(/\n{3,}/g, '\n\n').trim()
   return { cleanText, files }
+}
+
+function buildInboundAttachmentPaths(msg: InboundMessage): string[] {
+  if (!Array.isArray(msg.media) || msg.media.length === 0) return []
+  const paths: string[] = []
+  const seen = new Set<string>()
+  for (const media of msg.media) {
+    const localPath = typeof media.localPath === 'string' ? media.localPath.trim() : ''
+    if (!localPath || seen.has(localPath)) continue
+    if (!fs.existsSync(localPath)) continue
+    seen.add(localPath)
+    paths.push(localPath)
+  }
+  return paths
+}
+
+function normalizeWhatsappTarget(raw: string): string {
+  const trimmed = raw.trim()
+  if (!trimmed) return trimmed
+  if (trimmed.includes('@')) return trimmed
+  let cleaned = trimmed.replace(/[^\d+]/g, '')
+  if (cleaned.startsWith('+')) cleaned = cleaned.slice(1)
+  if (cleaned.startsWith('0') && cleaned.length >= 10) {
+    cleaned = `44${cleaned.slice(1)}`
+  }
+  cleaned = cleaned.replace(/[^\d]/g, '')
+  return cleaned ? `${cleaned}@s.whatsapp.net` : trimmed
+}
+
+function connectorSupportsBinaryMedia(platform: string): boolean {
+  return platform === 'whatsapp'
+    || platform === 'telegram'
+    || platform === 'slack'
+    || platform === 'discord'
+    || platform === 'openclaw'
 }
 
 /** Sentinel value agents return when no outbound reply should be sent */
@@ -96,6 +257,34 @@ const locks: Map<string, Promise<void>> =
 const genCounterKey = '__swarmclaw_connector_gen__' as const
 const generationCounter: Map<string, number> =
   g[genCounterKey] ?? (g[genCounterKey] = new Map<string, number>())
+
+type ScheduledConnectorFollowup = {
+  id: string
+  connectorId?: string
+  platform?: string
+  channelId: string
+  sendAt: number
+  timer: ReturnType<typeof setTimeout>
+}
+
+const followupKey = '__swarmclaw_connector_followups__' as const
+const scheduledFollowups: Map<string, ScheduledConnectorFollowup> =
+  g[followupKey] ?? (g[followupKey] = new Map<string, ScheduledConnectorFollowup>())
+
+type RouteMessageHandler = (connector: Connector, msg: InboundMessage) => Promise<string>
+const routeHandlerKey = '__swarmclaw_connector_route_handler__' as const
+const routeMessageHandlerRef: { current: RouteMessageHandler } =
+  g[routeHandlerKey] ?? (g[routeHandlerKey] = { current: async () => '[Error] Connector router unavailable.' })
+
+function dispatchInboundConnectorMessage(
+  connectorId: string,
+  fallbackConnector: Connector,
+  msg: InboundMessage,
+): Promise<string> {
+  const connectors = loadConnectors()
+  const currentConnector = connectors[connectorId] as Connector | undefined
+  return routeMessageHandlerRef.current(currentConnector ?? fallbackConnector, msg)
+}
 
 /** Get the current generation number for a connector (0 if never started) */
 export function getConnectorGeneration(connectorId: string): number {
@@ -474,6 +663,9 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
     connectorName: connector.name,
     senderName: msg.senderName,
   }
+  const inboundText = formatInboundUserText(msg)
+  const inboundAttachmentPaths = buildInboundAttachmentPaths(msg)
+  const firstImagePath = msg.media?.find((m) => m.type === 'image')?.localPath
 
   // Parse mentions from the message text
   let mentions = parseMentions(msg.text || '', agents, chatroom.agentIds)
@@ -492,6 +684,8 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
     mentions,
     reactions: [],
     time: Date.now(),
+    ...(firstImagePath ? { imagePath: firstImagePath } : {}),
+    ...(inboundAttachmentPaths.length ? { attachedFiles: inboundAttachmentPaths } : {}),
     source,
   }
   chatroom.messages.push(userMessage)
@@ -520,7 +714,9 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
     try {
       const result = await streamAgentChat({
         session: syntheticSession,
-        message: msg.text || '',
+        message: inboundText,
+        imagePath: firstImagePath || undefined,
+        attachedFiles: inboundAttachmentPaths.length ? inboundAttachmentPaths : undefined,
         apiKey,
         systemPrompt: fullSystemPrompt,
         write: () => {},
@@ -567,10 +763,11 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
   const joined = responses.join('\n\n')
   // Extract embedded media from agent responses and send them via connector
   const extracted = extractEmbeddedMedia(joined)
-  if (extracted.files.length > 0) {
+  const filesToSend = selectOutboundMediaFiles(extracted.files, msg.text || '')
+  if (filesToSend.length > 0) {
     const inst = running.get(connector.id)
     if (inst?.sendMessage) {
-      for (const file of extracted.files) {
+      for (const file of filesToSend) {
         try {
           await inst.sendMessage(msg.channelId, '', { mediaPath: file.path, caption: file.alt || undefined })
           console.log(`[connector] Sent chatroom media to ${msg.platform}: ${path.basename(file.path)}`)
@@ -757,18 +954,32 @@ async function routeMessage(connector: Connector, msg: InboundMessage): Promise<
   // Add connector context
   promptParts.push(`\nYou are receiving messages via ${msg.platform}. The user "${msg.senderName}" is messaging from channel "${msg.channelName || msg.channelId}". Respond naturally and conversationally.
 
+## Response Style
+Be action-first and autonomous: when the user gives an instruction, execute it instead of asking routine follow-up questions.
+Do not end every reply with a question.
+Only ask a question when a specific missing detail blocks progress.
+When a task is complete, state the result plainly and stop.
+
 ## Knowing When Not to Reply
 Real conversations have natural pauses — not every message needs a response. Reply with exactly "NO_MESSAGE" (nothing else) to stay silent when replying would feel unnatural or forced.
 Stay silent for simple acknowledgments ("okay", "alright", "cool", "got it", "sounds good"), conversation closers ("thanks", "bye", "night", "ttyl"), reactions (emoji, "haha", "lol"), and forwarded content with no question attached.
 Always reply when there's a question, task, instruction, emotional sharing, or something genuinely useful to add.
-The test: would a thoughtful friend feel compelled to type something back? If not, NO_MESSAGE.`)
+The test: would a thoughtful friend feel compelled to type something back? If not, NO_MESSAGE.
+
+## Media Delivery Rules
+When the user asks to send media (image, screenshot, PDF, file, or voice note), actually call tools to send it.
+Do not claim "sent" unless a tool call succeeded.
+If voice note is requested, prefer connector_message_tool action=send_voice_note when available.
+If media sending fails, report the exact error and retry with a corrected path/target.`)
   const systemPrompt = promptParts.join('\n\n')
 
   // Add message to session
   const firstImage = msg.media?.find((m) => m.type === 'image')
   const firstImageUrl = msg.imageUrl || (firstImage?.url) || undefined
   const firstImagePath = firstImage?.localPath || undefined
+  const inboundAttachmentPaths = buildInboundAttachmentPaths(msg)
   const inboundText = formatInboundUserText(msg)
+  const modelInputText = inboundText
   // Store the raw user text for display (source.senderName handles attribution).
   // The formatted text with [SenderName] prefix is only used for LLM history context.
   const rawText = (msg.text || '').trim()
@@ -784,6 +995,7 @@ The test: would a thoughtful friend feel compelled to type something back? If no
     time: Date.now(),
     imageUrl: firstImageUrl,
     imagePath: firstImagePath,
+    attachedFiles: inboundAttachmentPaths.length ? inboundAttachmentPaths : undefined,
     source: messageSource,
   })
   session.lastActiveAt = Date.now()
@@ -793,22 +1005,49 @@ The test: would a thoughtful friend feel compelled to type something back? If no
 
   // Stream the response
   let fullText = ''
+  let mediaExtractionText = ''
+  let connectorToolDeliveredCurrentChannel = false
   const hasTools = session.tools?.length && session.provider !== 'claude-cli'
   console.log(`[connector] Routing message to agent "${agent.name}" (${agent.provider}/${agent.model}), hasTools=${!!hasTools}`)
 
   if (hasTools) {
     try {
+      const toolMediaOutputs: string[] = []
       const result = await streamAgentChat({
         session,
-        message: msg.text,
+        message: modelInputText,
         imagePath: firstImagePath,
+        attachedFiles: inboundAttachmentPaths.length ? inboundAttachmentPaths : undefined,
         apiKey,
         systemPrompt,
-        write: () => {},  // no SSE needed for connectors
+        write: (raw) => {
+          for (const event of parseSseDataEvents(raw)) {
+            if (event.t !== 'tool_result') continue
+            const toolOutput = typeof event.toolOutput === 'string' ? event.toolOutput : ''
+            if (!toolOutput) continue
+            toolMediaOutputs.push(toolOutput)
+            if (event.toolName === 'connector_message_tool') {
+              const parsed = parseConnectorToolResult(toolOutput)
+              if (!parsed?.status || !parsed.to) continue
+              const sentLikeStatus = parsed.status === 'sent' || parsed.status === 'voice_sent'
+              if (!sentLikeStatus) continue
+              const inboundTarget = connector.platform === 'whatsapp'
+                ? normalizeWhatsappTarget(msg.channelId)
+                : msg.channelId
+              const outboundTarget = connector.platform === 'whatsapp'
+                ? normalizeWhatsappTarget(parsed.to)
+                : parsed.to
+              if (inboundTarget && outboundTarget && inboundTarget === outboundTarget) {
+                connectorToolDeliveredCurrentChannel = true
+              }
+            }
+          }
+        },
         history: session.messages.slice(-20),
       })
       // Use finalResponse for connectors — strips intermediate planning/tool-use text
-      fullText = result.finalResponse
+      fullText = result.finalResponse || result.fullText
+      mediaExtractionText = [result.fullText || '', ...toolMediaOutputs].filter(Boolean).join('\n\n')
       console.log(`[connector] streamAgentChat returned ${result.fullText.length} chars total, ${fullText.length} chars final`)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err)
@@ -823,7 +1062,7 @@ The test: would a thoughtful friend feel compelled to type something back? If no
 
     await provider.handler.streamChat({
       session,
-      message: msg.text,
+      message: modelInputText,
       imagePath: firstImagePath,
       apiKey,
       systemPrompt,
@@ -839,6 +1078,7 @@ The test: would a thoughtful friend feel compelled to type something back? If no
       active: new Map(),
       loadHistory: () => session.messages.slice(-20),
     })
+    mediaExtractionText = fullText
   }
 
   // If the agent chose NO_MESSAGE, skip saving it to history — the user's message
@@ -881,24 +1121,65 @@ The test: would a thoughtful friend feel compelled to type something back? If no
 
   // Extract embedded media (screenshots, uploaded files) and send them as separate
   // media messages via the connector, then return the cleaned text
-  const extracted = extractEmbeddedMedia(fullText)
-  if (extracted.files.length > 0) {
+  const extractedFromReply = extractEmbeddedMedia(fullText)
+  const extractedFromTools = mediaExtractionText && mediaExtractionText !== fullText
+    ? extractEmbeddedMedia(mediaExtractionText)
+    : { cleanText: mediaExtractionText || fullText, files: [] as Array<{ path: string; alt: string }> }
+  const filesToSend = selectOutboundMediaFiles(
+    [...extractedFromReply.files, ...extractedFromTools.files],
+    msg.text || '',
+  )
+
+  if (filesToSend.length > 0) {
     const inst = running.get(connector.id)
     if (inst?.sendMessage) {
-      for (const file of extracted.files) {
+      for (const file of filesToSend) {
         try {
           await inst.sendMessage(msg.channelId, '', { mediaPath: file.path, caption: file.alt || undefined })
           console.log(`[connector] Sent media to ${msg.platform}: ${path.basename(file.path)}`)
+          logExecution(session.id, 'outbound', 'Connector media sent', {
+            agentId: agent.id,
+            detail: {
+              platform: msg.platform,
+              channelId: msg.channelId,
+              filePath: file.path,
+              fileName: path.basename(file.path),
+            },
+          })
         } catch (err: unknown) {
           console.error(`[connector] Failed to send media ${path.basename(file.path)}:`, err instanceof Error ? err.message : String(err))
+          logExecution(session.id, 'error', 'Connector media send failed', {
+            agentId: agent.id,
+            detail: {
+              platform: msg.platform,
+              channelId: msg.channelId,
+              filePath: file.path,
+              fileName: path.basename(file.path),
+              error: err instanceof Error ? err.message : String(err),
+            },
+          })
         }
       }
+    } else {
+      logExecution(session.id, 'error', 'Connector media skipped: sendMessage unavailable', {
+        agentId: agent.id,
+        detail: {
+          platform: msg.platform,
+          channelId: msg.channelId,
+          fileCount: filesToSend.length,
+          connectorId: connector.id,
+        },
+      })
     }
-    return extracted.cleanText || '(no response)'
+    if (connectorToolDeliveredCurrentChannel) return NO_MESSAGE_SENTINEL
+    return extractedFromReply.cleanText || '(no response)'
   }
 
+  if (connectorToolDeliveredCurrentChannel) return NO_MESSAGE_SENTINEL
   return fullText || '(no response)'
 }
+
+routeMessageHandlerRef.current = routeMessage
 
 /** Start a connector (serialized per ID to prevent concurrent start/stop races) */
 export async function startConnector(connectorId: string): Promise<void> {
@@ -964,7 +1245,11 @@ async function _startConnectorImpl(connectorId: string): Promise<void> {
   generationCounter.set(connectorId, (generationCounter.get(connectorId) ?? 0) + 1)
 
   try {
-    const instance = await platform.start(connector, botToken, (msg) => routeMessage(connector, msg))
+    const instance = await platform.start(
+      connector,
+      botToken,
+      (msg) => dispatchInboundConnectorMessage(connectorId, connector, msg),
+    )
     running.set(connectorId, instance)
 
     // Update status in storage
@@ -995,6 +1280,12 @@ export async function stopConnector(connectorId: string): Promise<void> {
   if (instance) {
     await instance.stop()
     running.delete(connectorId)
+  }
+
+  for (const [followupId, followup] of scheduledFollowups.entries()) {
+    if (followup.connectorId !== connectorId) continue
+    clearTimeout(followup.timer)
+    scheduledFollowups.delete(followupId)
   }
 
   const connectors = loadConnectors()
@@ -1160,6 +1451,7 @@ export async function sendConnectorMessage(params: {
   mimeType?: string
   fileName?: string
   caption?: string
+  ptt?: boolean
 }): Promise<{ connectorId: string; platform: string; channelId: string; messageId?: string }> {
   const connectors = loadConnectors()
   const requestedId = params.connectorId?.trim()
@@ -1199,18 +1491,93 @@ export async function sendConnectorMessage(params: {
     return { connectorId, platform: connector.platform, channelId: params.channelId }
   }
 
-  const result = await instance.sendMessage(params.channelId, params.text, {
+  const hasMedia = !!(params.imageUrl || params.fileUrl || params.mediaPath)
+  const channelId = connector.platform === 'whatsapp'
+    ? normalizeWhatsappTarget(params.channelId)
+    : params.channelId
+
+  let outboundText = params.text || ''
+  let outboundOptions: Parameters<NonNullable<ConnectorInstance['sendMessage']>>[2] | undefined = {
     imageUrl: params.imageUrl,
     fileUrl: params.fileUrl,
     mediaPath: params.mediaPath,
     mimeType: params.mimeType,
     fileName: params.fileName,
     caption: params.caption,
-  })
+    ptt: params.ptt,
+  }
+
+  if (hasMedia && !connectorSupportsBinaryMedia(connector.platform)) {
+    const mediaLink = params.imageUrl
+      || params.fileUrl
+      || (params.mediaPath ? uploadApiUrlFromPath(params.mediaPath) : null)
+    const fallbackParts = [
+      (params.text || '').trim(),
+      (params.caption || '').trim(),
+      mediaLink ? `Attachment: ${mediaLink}` : '',
+      !mediaLink && params.mediaPath ? `Attachment: ${path.basename(params.mediaPath)}` : '',
+    ].filter(Boolean)
+    outboundText = fallbackParts.join('\n')
+    outboundOptions = undefined
+  }
+
+  const result = await instance.sendMessage(channelId, outboundText, outboundOptions)
   return {
     connectorId,
     platform: connector.platform,
-    channelId: params.channelId,
+    channelId,
     messageId: result?.messageId,
   }
+}
+
+export function scheduleConnectorFollowUp(params: {
+  connectorId?: string
+  platform?: string
+  channelId: string
+  text: string
+  delaySec?: number
+  imageUrl?: string
+  fileUrl?: string
+  mediaPath?: string
+  mimeType?: string
+  fileName?: string
+  caption?: string
+  ptt?: boolean
+}): { followUpId: string; sendAt: number } {
+  const delaySecRaw = Number.isFinite(params.delaySec) ? Number(params.delaySec) : 300
+  const delayMs = Math.max(1_000, Math.min(86_400_000, Math.round(delaySecRaw * 1000)))
+  const followUpId = genId()
+  const sendAt = Date.now() + delayMs
+
+  const timer = setTimeout(() => {
+    void sendConnectorMessage({
+      connectorId: params.connectorId,
+      platform: params.platform,
+      channelId: params.channelId,
+      text: params.text,
+      imageUrl: params.imageUrl,
+      fileUrl: params.fileUrl,
+      mediaPath: params.mediaPath,
+      mimeType: params.mimeType,
+      fileName: params.fileName,
+      caption: params.caption,
+      ptt: params.ptt,
+    }).catch((err: unknown) => {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[connector] Scheduled follow-up ${followUpId} failed: ${msg}`)
+    }).finally(() => {
+      scheduledFollowups.delete(followUpId)
+    })
+  }, delayMs)
+
+  scheduledFollowups.set(followUpId, {
+    id: followUpId,
+    connectorId: params.connectorId,
+    platform: params.platform,
+    channelId: params.channelId,
+    sendAt,
+    timer,
+  })
+
+  return { followUpId, sendAt }
 }

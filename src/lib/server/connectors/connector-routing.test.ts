@@ -1,9 +1,12 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
-import { getPlatform, isNoMessage, formatMediaLine, formatInboundUserText } from './manager.ts'
+import { getPlatform, isNoMessage, formatMediaLine, formatInboundUserText, extractEmbeddedMedia, selectOutboundMediaFiles } from './manager.ts'
 import { handleSignalEvent } from './signal.ts'
 import type { PlatformConnector } from './types.ts'
 import type { InboundMessage, InboundMedia } from './types.ts'
+import fs from 'node:fs'
+import path from 'node:path'
+import { UPLOAD_DIR } from '../storage'
 
 // ---------------------------------------------------------------------------
 // 1. Connector module resolution (getPlatform)
@@ -239,5 +242,119 @@ describe('formatInboundUserText', () => {
     }
     const result = formatInboundUserText(msg)
     assert.ok(result.includes('...and 2 more attachment(s)'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 6. extractEmbeddedMedia
+// ---------------------------------------------------------------------------
+describe('extractEmbeddedMedia', () => {
+  it('extracts markdown image and file links for uploaded assets', async () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const token = `test-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+    const imgName = `${token}-foo.png`
+    const pdfName = `${token}-report.pdf`
+    const img = path.join(UPLOAD_DIR, imgName)
+    const pdf = path.join(UPLOAD_DIR, pdfName)
+    fs.writeFileSync(img, 'img')
+    fs.writeFileSync(pdf, 'pdf')
+
+    try {
+      const input = [
+        'Here you go:',
+        `![chart](/api/uploads/${imgName})`,
+        `[Report](/api/uploads/${pdfName})`,
+      ].join('\n')
+
+      const out = extractEmbeddedMedia(input)
+      assert.equal(out.files.length, 2)
+      assert.equal(out.files[0].path, img)
+      assert.equal(out.files[0].alt, 'chart')
+      assert.equal(out.files[1].path, pdf)
+      assert.equal(out.files[1].alt, 'Report')
+      assert.equal(out.cleanText, 'Here you go:')
+    } finally {
+      fs.rmSync(img, { force: true })
+      fs.rmSync(pdf, { force: true })
+    }
+  })
+
+  it('extracts bare /api/uploads URLs and de-duplicates duplicate references', async () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const token = `test-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`
+    const pdfName = `${token}-duplicate.pdf`
+    const pdf = path.join(UPLOAD_DIR, pdfName)
+    fs.writeFileSync(pdf, 'pdf')
+    try {
+      const input = [
+        `File: /api/uploads/${pdfName}`,
+        `[Again](/api/uploads/${pdfName})`,
+      ].join('\n')
+      const out = extractEmbeddedMedia(input)
+      assert.equal(out.files.length, 1)
+      assert.equal(out.files[0].path, pdf)
+      assert.equal(out.cleanText, 'File:')
+    } finally {
+      fs.rmSync(pdf, { force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 7. selectOutboundMediaFiles
+// ---------------------------------------------------------------------------
+describe('selectOutboundMediaFiles', () => {
+  it('deduplicates browser/screenshot variants and selects one file by default', () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const ts = Date.now()
+    const browserPng = path.join(UPLOAD_DIR, `browser-${ts}.png`)
+    const screenshotPng = path.join(UPLOAD_DIR, `screenshot-${ts + 1}.png`)
+    const finalPng = path.join(UPLOAD_DIR, `${Date.now()}-wikipedia_screenshot.png`)
+    fs.writeFileSync(browserPng, 'browser')
+    fs.writeFileSync(screenshotPng, 'shot')
+    fs.writeFileSync(finalPng, 'final')
+    try {
+      const selected = selectOutboundMediaFiles(
+        [
+          { path: browserPng, alt: 'Screenshot' },
+          { path: screenshotPng, alt: 'Screenshot' },
+          { path: finalPng, alt: 'wikipedia_screenshot.png' },
+        ],
+        'Can you send me a screenshot of Wikipedia?',
+      )
+      assert.equal(selected.length, 1)
+      assert.equal(selected[0].path, finalPng)
+    } finally {
+      fs.rmSync(browserPng, { force: true })
+      fs.rmSync(screenshotPng, { force: true })
+      fs.rmSync(finalPng, { force: true })
+    }
+  })
+
+  it('allows multiple files only when the user explicitly asks for many', () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const ts = Date.now()
+    const browserPng = path.join(UPLOAD_DIR, `browser-${ts}.png`)
+    const screenshotPng = path.join(UPLOAD_DIR, `screenshot-${ts + 1}.png`)
+    const pdf = path.join(UPLOAD_DIR, `${Date.now()}-report.pdf`)
+    fs.writeFileSync(browserPng, 'browser')
+    fs.writeFileSync(screenshotPng, 'shot')
+    fs.writeFileSync(pdf, 'pdf')
+    try {
+      const selected = selectOutboundMediaFiles(
+        [
+          { path: browserPng, alt: 'Screenshot' },
+          { path: screenshotPng, alt: 'Screenshot' },
+          { path: pdf, alt: 'Report' },
+        ],
+        'Send both screenshots and the PDF',
+      )
+      assert.equal(selected.length, 2)
+      assert.deepEqual(selected.map((f) => path.basename(f.path)).sort(), [path.basename(browserPng), path.basename(pdf)].sort())
+    } finally {
+      fs.rmSync(browserPng, { force: true })
+      fs.rmSync(screenshotPng, { force: true })
+      fs.rmSync(pdf, { force: true })
+    }
   })
 })

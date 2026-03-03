@@ -127,6 +127,12 @@ function buildAgenticExecutionPolicy(opts: {
     opts.enabledTools.includes('manage_connectors')
       ? 'If the user wants proactive outreach (e.g., WhatsApp updates), configure connectors and pair with schedules/tasks to deliver status updates.'
       : '',
+    opts.enabledTools.includes('manage_connectors')
+      ? 'Autonomous outreach is allowed for significant events (completed/failed tasks, blockers, deadlines, meaningful reminders from memory). Avoid casual or repetitive check-ins.'
+      : '',
+    opts.enabledTools.includes('manage_connectors')
+      ? 'When you proactively message through connectors, keep it concise and purposeful, and avoid sending duplicate updates about the same event.'
+      : '',
     opts.enabledTools.includes('manage_sessions')
       ? 'When coordinating platform work, inspect existing sessions and avoid duplicating active efforts.'
       : '',
@@ -164,6 +170,7 @@ function buildAgenticExecutionPolicy(opts: {
     'The test: if you saw this message from a friend, would you feel compelled to type something back? If not, NO_MESSAGE.',
     'Ask for confirmation only for high-risk or irreversible actions. For normal low-risk research/build steps, proceed autonomously.',
     'Default behavior is execution, not interrogation: do not ask exploratory clarification questions when a safe next action exists.',
+    'Do not end every response with a question. Use declarative completion statements by default, and only ask a question when a concrete missing detail blocks the next action.',
     'Do not pause for a "continue" confirmation after the user has already asked you to execute a goal. Keep moving until blocked by permissions, missing credentials, or hard tool failures.',
     'Never repeat one-time side effects that are already complete (for example creating the same schedule/task again). Verify state first, then either continue execution or reply HEARTBEAT_OK.',
     'For main-loop tick messages that begin with "SWARM_MAIN_MISSION_TICK" or "SWARM_MAIN_AUTO_FOLLOWUP", follow that response contract exactly and include one valid [MAIN_LOOP_META] JSON line when you are not returning HEARTBEAT_OK.',
