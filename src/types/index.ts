@@ -634,6 +634,64 @@ export interface PluginProviderExtension {
   }) => Promise<string>
 }
 
+export type InboundMediaType = 'image' | 'video' | 'audio' | 'document' | 'file'
+
+export interface InboundThreadHistoryEntry {
+  role: 'user' | 'assistant'
+  senderName: string
+  text: string
+  messageId?: string
+}
+
+export interface InboundMedia {
+  type: InboundMediaType
+  fileName?: string
+  mimeType?: string
+  sizeBytes?: number
+  url?: string
+  localPath?: string
+}
+
+export interface InboundMessage {
+  platform: string
+  channelId: string
+  channelIdAlt?: string
+  channelName?: string
+  senderId: string
+  senderIdAlt?: string
+  senderName: string
+  senderAvatarUrl?: string
+  text: string
+  isGroup?: boolean
+  messageId?: string
+  imageUrl?: string
+  media?: InboundMedia[]
+  replyToMessageId?: string
+  threadId?: string
+  threadTitle?: string
+  threadStarterText?: string
+  threadStarterSenderName?: string
+  threadPersonaLabel?: string
+  threadParentChannelId?: string
+  threadParentChannelName?: string
+  threadHistory?: InboundThreadHistoryEntry[]
+  mentionsBot?: boolean
+  agentIdOverride?: string
+  isOwnerConversation?: boolean
+}
+
+export interface OutboundSendOptions {
+  imageUrl?: string
+  fileUrl?: string
+  mediaPath?: string
+  mimeType?: string
+  fileName?: string
+  caption?: string
+  ptt?: boolean
+  replyToMessageId?: string
+  threadId?: string
+}
+
 export interface PluginConnectorExtension {
   id: string
   name: string

@@ -17,12 +17,12 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
 
 ## Release Notes
 
-### v1.0.8 Highlights
+### v1.0.9 Highlights
 
-- **Learned skills and self-healing**: SwarmClaw now keeps agent-scoped learned skills and shadow revisions so repeated successes and repeated external integration failures can harden into reusable local behavior without silently mutating the shared skill library.
-- **Direct chat stability**: chat-origin runs now stop after the visible answer instead of enqueueing hidden follow-up loops, leaked control tokens such as `NO_MESSAGE` stay out of the user transcript, and repeated internal reruns no longer replace the reply the user already saw.
-- **OpenClaw and Ollama route hardening**: agent thread sessions now repair stale credential/endpoint resolution more aggressively, including Ollama Cloud vs local endpoint selection and OpenClaw gateway fallback behavior.
-- **Operator UX fixes**: new agents appear in the list immediately, gateway-disconnected chat CTAs now route to the current agent's settings instead of global settings, setup-wizard flicker after access-key login is gone, and screenshot-heavy tool runs no longer render duplicate previews in chat.
+- **Quieter chat and inbox replies**: chat-origin and connector turns now suppress more hidden control text, stop replaying connector-tool output as normal assistant prose, and avoid extra empty follow-up chatter after successful tool work.
+- **Sender-aware direct inbox replies**: direct connector sessions can honor stored sender display names and reply-medium preferences, including voice-note-first replies when the connector supports binary media and the agent has a configured voice.
+- **Cleaner connector delivery reconciliation**: connector delivery markers now track what was actually sent, response previews prefer the delivered transcript, and task/connector followups resolve local output files more reliably.
+- **Memory-write followthrough hardening**: successful memory store/update turns terminate more cleanly, which reduces unnecessary post-tool loops while still allowing a natural acknowledgement when the user needs one.
 
 ## What SwarmClaw Focuses On
 

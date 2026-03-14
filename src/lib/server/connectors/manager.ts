@@ -1685,24 +1685,24 @@ If media sending fails, report the exact error and retry with a corrected path/t
   let settledConnectorToolEvents: MessageToolEvent[] = []
   const connectorToolInputsByCallId = new Map<string, Record<string, unknown>>()
   const streamedConnectorToolEvents: MessageToolEvent[] = []
-  let currentChannelDelivery: CurrentChannelConnectorDelivery | null = null
+  const currentChannelDeliveryRef: { current: CurrentChannelConnectorDelivery | null } = { current: null }
   const noteCurrentChannelDelivery = (params: {
     mode: 'text' | 'voice_note'
     messageId?: string
     transcript?: string
   }) => {
-    if (!currentChannelDelivery) {
-      currentChannelDelivery = {
+    if (!currentChannelDeliveryRef.current) {
+      currentChannelDeliveryRef.current = {
         mode: params.mode,
         messageId: params.messageId,
         transcripts: [],
       }
     } else {
-      if (params.mode === 'voice_note') currentChannelDelivery.mode = 'voice_note'
-      if (params.messageId) currentChannelDelivery.messageId = params.messageId
+      if (params.mode === 'voice_note') currentChannelDeliveryRef.current.mode = 'voice_note'
+      if (params.messageId) currentChannelDeliveryRef.current.messageId = params.messageId
     }
     const transcript = typeof params.transcript === 'string' ? params.transcript.trim() : ''
-    if (transcript) currentChannelDelivery.transcripts.push(transcript)
+    if (transcript) currentChannelDeliveryRef.current?.transcripts.push(transcript)
   }
   const hasTools = getEnabledCapabilityIds(session).length > 0 && session.provider !== 'claude-cli'
   console.log(`[connector] Routing message to agent "${agent.name}" (${session.provider}/${session.model}), hasTools=${!!hasTools}`)
@@ -1832,7 +1832,7 @@ If media sending fails, report the exact error and retry with a corrected path/t
     mediaExtractionText = fullText
   }
 
-  if (!fullText.trim() && !currentChannelDelivery) {
+  if (!fullText.trim() && !currentChannelDeliveryRef.current) {
     fullText = connectorEmptyReplyFallback(streamErrorText)
   }
 
@@ -1843,12 +1843,12 @@ If media sending fails, report the exact error and retry with a corrected path/t
   // If the agent chose NO_MESSAGE, skip saving it to history — the user's message
   // is already recorded, and saving the sentinel would pollute the LLM's context
   if (suppressHiddenResponse || isNoMessage(fullText)) {
-    if (currentChannelDelivery) {
+    if (currentChannelDeliveryRef.current) {
       persistConnectorDeliveryMarker({
         session,
         connector,
         msg,
-        delivery: currentChannelDelivery,
+        delivery: currentChannelDeliveryRef.current,
       })
       await maybeSendStatusReaction(connector, msg, 'sent')
     } else {
@@ -1863,8 +1863,8 @@ If media sending fails, report the exact error and retry with a corrected path/t
   }
 
   // Log outbound message
-  const deliveryPreview = currentChannelDelivery
-    ? dedup(currentChannelDelivery.transcripts.map((entry) => entry.trim()).filter(Boolean)).join('\n\n') || fullText
+  const deliveryPreview = currentChannelDeliveryRef.current
+    ? dedup(currentChannelDeliveryRef.current.transcripts.map((entry) => entry.trim()).filter(Boolean)).join('\n\n') || fullText
     : fullText
   logExecution(session.id, 'outbound', `Reply sent via ${msg.platform}`, {
     agentId: agent.id,
@@ -1942,7 +1942,7 @@ If media sending fails, report the exact error and retry with a corrected path/t
   }
   let outboundText = (filesToSend.length > 0 ? extractedFromReply.cleanText : fullText).trim()
 
-  if (!currentChannelDelivery && senderPreferencePolicy.preferredReplyMedium === 'voice_note' && outboundText) {
+  if (!currentChannelDeliveryRef.current && senderPreferencePolicy.preferredReplyMedium === 'voice_note' && outboundText) {
     if (!connectorCanSendBinaryMedia(connector)) {
       fullText = `I couldn't send a voice note on this channel because the connector doesn't support audio attachments.`
       outboundText = fullText
@@ -1978,12 +1978,12 @@ If media sending fails, report the exact error and retry with a corrected path/t
     }
   }
 
-  if (currentChannelDelivery) {
+  if (currentChannelDeliveryRef.current) {
     persistConnectorDeliveryMarker({
       session,
       connector,
       msg,
-      delivery: currentChannelDelivery,
+      delivery: currentChannelDeliveryRef.current,
     })
     await maybeSendStatusReaction(connector, msg, 'sent')
     return NO_MESSAGE_SENTINEL

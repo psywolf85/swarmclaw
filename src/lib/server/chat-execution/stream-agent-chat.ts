@@ -566,6 +566,8 @@ export interface StreamAgentChatResult {
   /** Text from only the final LLM turn — after the last tool call completed.
    *  Use this for connector delivery so intermediate planning text isn't sent. */
   finalResponse: string
+  /** Tool events emitted during the streamed run. */
+  toolEvents: MessageToolEvent[]
 }
 
 type LangChainContentPart =
@@ -1559,22 +1561,19 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
                   text: JSON.stringify({ terminalToolResult: toolBoundary.kind }),
                 })}\n\n`)
                 break
+              } else {
+                terminalToolBoundary = toolBoundary.kind
+                terminalToolResponse = ''
+                logExecution(session.id, 'decision', `Terminal tool boundary reached: ${toolBoundary.kind}.`, {
+                  agentId: session.agentId,
+                  detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind },
+                })
+                write(`data: ${JSON.stringify({
+                  t: 'status',
+                  text: JSON.stringify({ terminalToolResult: toolBoundary.kind }),
+                })}\n\n`)
+                break
               }
-              terminalToolBoundary = toolBoundary.kind
-              terminalToolResponse = 'responseText' in toolBoundary ? (toolBoundary.responseText || '') : ''
-              if (terminalToolResponse) {
-                lastSegment = terminalToolResponse
-                lastSettledSegment = terminalToolResponse
-              }
-              logExecution(session.id, 'decision', `Terminal tool boundary reached: ${toolBoundary.kind}.`, {
-                agentId: session.agentId,
-                detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind },
-              })
-              write(`data: ${JSON.stringify({
-                t: 'status',
-                text: JSON.stringify({ terminalToolResult: toolBoundary.kind }),
-              })}\n\n`)
-              break
             }
             if (boundedExternalExecutionTask && getWalletApprovalBoundaryAction(outputStr || '')) {
               reachedExecutionBoundary = true
@@ -2127,7 +2126,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     }
     await emitLlmOutputHook(finalResponse)
     await cleanup()
-    return { fullText, finalResponse }
+    return { fullText, finalResponse, toolEvents: streamedToolEvents }
   }
 
   // Extract LLM-generated suggestions from the response and strip the tag
@@ -2221,5 +2220,5 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   // Clean up browser and other session resources
   await cleanup()
 
-  return { fullText, finalResponse }
+  return { fullText, finalResponse, toolEvents: streamedToolEvents }
 }

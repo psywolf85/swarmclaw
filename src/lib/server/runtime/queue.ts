@@ -553,7 +553,7 @@ function collectTaskResultDeliveryData(
   const execCwd = runSession?.cwd || ''
   const existingOutputPaths = outputFileRefs
     .map((fileRef: string) => resolveExistingOutputFilePath(fileRef, execCwd))
-    .filter((candidate: string | undefined): candidate is string => Boolean(candidate))
+    .filter((candidate: string | null): candidate is string => Boolean(candidate))
   const firstLocalOutputPath = existingOutputPaths.find((candidate: string) => isSendableAttachment(candidate))
   const followupMediaPath = firstArtifactMediaPath || firstLocalOutputPath || undefined
 
