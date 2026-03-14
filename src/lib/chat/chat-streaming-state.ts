@@ -6,6 +6,14 @@ interface StreamingArtifactWindow {
   minTime?: number
 }
 
+export interface StreamingAwareMessageListOptions {
+  localStreaming: boolean
+  hasLiveArtifacts: boolean
+  assistantRenderId?: string | null
+  displayText?: string
+  thinkingText?: string
+}
+
 function isStreamingAssistantMessage(
   message: Message,
   index: number,
@@ -29,6 +37,34 @@ export function shouldHidePersistedStreamingAssistantMessage(
     && message.streaming === true
     && opts.hasLiveArtifacts
   )
+}
+
+export function buildStreamingAwareMessageList(
+  messages: Message[],
+  opts: StreamingAwareMessageListOptions,
+): Message[] {
+  const nextMessages = opts.localStreaming && opts.hasLiveArtifacts
+    ? messages.filter((message) => !shouldHidePersistedStreamingAssistantMessage(message, opts))
+    : messages
+
+  if (!opts.localStreaming || !opts.hasLiveArtifacts || !opts.assistantRenderId) {
+    return nextMessages
+  }
+
+  const syntheticAssistantMessage: Message = {
+    role: 'assistant',
+    text: opts.displayText || '',
+    time: 0,
+    kind: 'chat',
+    streaming: true,
+    clientRenderId: opts.assistantRenderId,
+  }
+  if (opts.thinkingText?.trim()) syntheticAssistantMessage.thinking = opts.thinkingText
+
+  return [
+    ...nextMessages,
+    syntheticAssistantMessage,
+  ]
 }
 
 export function pruneStreamingAssistantArtifacts(
@@ -153,6 +189,27 @@ export function messageReconciliationKey(message: Message): string {
       event.error === true,
     ]),
   ])
+}
+
+export function reconcileClientMessageMetadata(nextMessages: Message[], currentMessages: Message[]): Message[] {
+  const clientRenderIdsByKey = new Map<string, string[]>()
+
+  for (const message of currentMessages) {
+    if (!message.clientRenderId) continue
+    const key = messageReconciliationKey(message)
+    const existing = clientRenderIdsByKey.get(key)
+    if (existing) existing.push(message.clientRenderId)
+    else clientRenderIdsByKey.set(key, [message.clientRenderId])
+  }
+
+  if (clientRenderIdsByKey.size === 0) return nextMessages
+
+  return nextMessages.map((message) => {
+    if (message.clientRenderId) return message
+    const queue = clientRenderIdsByKey.get(messageReconciliationKey(message))
+    const clientRenderId = queue?.shift()
+    return clientRenderId ? { ...message, clientRenderId } : message
+  })
 }
 
 export function messagesDiffer(nextMessages: Message[], currentMessages: Message[]): boolean {

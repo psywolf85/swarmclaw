@@ -132,6 +132,22 @@ function scopeAllowsAgentAccess(entry: MemoryEntry, agentId: string): boolean {
   return false
 }
 
+function metadataNumber(entry: MemoryEntry, key: string): number | null {
+  const value = entry.metadata && typeof entry.metadata === 'object'
+    ? entry.metadata[key]
+    : null
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function followUpSalienceMultiplier(entry: MemoryEntry, nowTs: number): number {
+  if (entry.category !== 'reflection/open_loop') return 1
+  const resolvedAt = metadataNumber(entry, 'resolvedAt')
+  if (resolvedAt != null) return 0.7
+  const followUpAt = metadataNumber(entry, 'followUpAt')
+  if (followUpAt == null) return 1.1
+  return followUpAt <= nowTs ? 1.6 : 0.95
+}
+
 export function normalizeMemoryScopeMode(raw: unknown): MemoryScopeMode {
   const value = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   if (value === 'shared') return 'global'
@@ -1090,12 +1106,13 @@ function initDb() {
             ? (lexical * 0.78 + ftsSignal * 0.22)
             : (semantic * 0.50 + lexical * 0.35 + ftsSignal * 0.15)
         const daysSinceAccess = (now - (entry.lastAccessedAt || entry.updatedAt)) / 86_400_000
-        const recencyDecay = isDecayExempt({ pinned: entry.pinned, category: entry.category })
+        const recencyDecay = isDecayExempt({ pinned: entry.pinned, category: entry.category, metadata: entry.metadata })
           ? 1.0
           : calculateTemporalDecayMultiplier(daysSinceAccess, halfLifeDays)
         const reinforcement = Math.log((entry.reinforcementCount || 0) + 1) + 1
         const pinnedBoost = entry.pinned ? 1.5 : 1.0
-        const salience = Math.max(0.0001, relevance) * recencyDecay * reinforcement * pinnedBoost
+        const followUpBoost = followUpSalienceMultiplier(entry, now)
+        const salience = Math.max(0.0001, relevance) * recencyDecay * reinforcement * pinnedBoost * followUpBoost
         return { entry, salience, embedding: rawEmbeddings.get(entry.id) }
       })
 
@@ -1189,6 +1206,8 @@ function initDb() {
       exactDuplicateCandidates: number
       canonicalDuplicateCandidates: number
       staleWorkingCandidates: number
+      lowConfidenceWorkingCandidates: number
+      dueFollowups: number
     } {
       const rows = (stmts.allRowsByUpdated.all() as any[]).map(rowToEntry)
       const seenExact = new Set<string>()
@@ -1196,6 +1215,8 @@ function initDb() {
       let exactDuplicateCandidates = 0
       let canonicalDuplicateCandidates = 0
       let staleWorkingCandidates = 0
+      let lowConfidenceWorkingCandidates = 0
+      let dueFollowups = 0
       const cutoff = Date.now() - Math.max(1, Math.min(24 * 365, Math.trunc(ttlHours))) * 3600_000
 
       for (const row of rows) {
@@ -1221,6 +1242,12 @@ function initDb() {
 
         const isWorkingLike = isWorkingMemoryCategory(row.category)
         if (isWorkingLike && (row.updatedAt || row.createdAt || 0) < cutoff) staleWorkingCandidates++
+        if (isWorkingLike && ((metadataNumber(row, 'confidence') ?? 1) < 0.35)) lowConfidenceWorkingCandidates++
+        if (row.category === 'reflection/open_loop') {
+          const followUpAt = metadataNumber(row, 'followUpAt')
+          const resolvedAt = metadataNumber(row, 'resolvedAt')
+          if (followUpAt != null && followUpAt <= Date.now() && resolvedAt == null) dueFollowups++
+        }
       }
 
       return {
@@ -1228,6 +1255,8 @@ function initDb() {
         exactDuplicateCandidates,
         canonicalDuplicateCandidates,
         staleWorkingCandidates,
+        lowConfidenceWorkingCandidates,
+        dueFollowups,
       }
     },
 
@@ -1246,6 +1275,8 @@ function initDb() {
         exactDuplicateCandidates: number
         canonicalDuplicateCandidates: number
         staleWorkingCandidates: number
+        lowConfidenceWorkingCandidates: number
+        dueFollowups: number
       }
     } {
       const options = opts || {}
@@ -1320,7 +1351,9 @@ function initDb() {
           if (toDelete.has(row.id)) continue
           const isWorkingLike = isWorkingMemoryCategory(row.category)
           const updatedAt = row.updatedAt || row.createdAt || 0
-          if (isWorkingLike && updatedAt < cutoff) toDelete.add(row.id)
+          const unresolvedFollowup = row.category === 'reflection/open_loop' && metadataNumber(row, 'resolvedAt') == null
+          const lowConfidence = (metadataNumber(row, 'confidence') ?? 1) < 0.35
+          if (isWorkingLike && !unresolvedFollowup && (updatedAt < cutoff || lowConfidence)) toDelete.add(row.id)
           if (toDelete.size >= deleteBudget) break
         }
       }

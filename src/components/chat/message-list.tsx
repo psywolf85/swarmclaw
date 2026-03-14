@@ -7,12 +7,11 @@ import { useChatStore } from '@/stores/use-chat-store'
 import { useAppStore } from '@/stores/use-app-store'
 import { selectActiveSessionId } from '@/stores/slices/session-slice'
 import { api } from '@/lib/app/api-client'
-import { shouldHidePersistedStreamingAssistantMessage } from '@/lib/chat/chat-streaming-state'
+import { buildStreamingAwareMessageList } from '@/lib/chat/chat-streaming-state'
 import { dedupeMessagesForDisplay } from '@/lib/chat/chat-display'
 import { errorMessage } from '@/lib/shared-utils'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { MessageBubble } from './message-bubble'
-import { StreamingBubble } from './streaming-bubble'
 import { ThinkingIndicator } from './thinking-indicator'
 import { SuggestionsBar } from './suggestions-bar'
 import { ExecApprovalCard } from './exec-approval-card'
@@ -71,43 +70,25 @@ interface Props {
   loading?: boolean
 }
 
-interface LiveStreamLaneProps {
-  streaming: boolean
-  hasVisiblePersistedStreamingMessage: boolean
+interface LiveThinkingLaneProps {
+  show: boolean
   assistantName?: string
   agentAvatarSeed?: string
   agentAvatarUrl?: string | null
   agentName?: string
 }
 
-const LiveStreamLane = memo(function LiveStreamLane({
-  streaming,
-  hasVisiblePersistedStreamingMessage,
+const LiveThinkingLane = memo(function LiveThinkingLane({
+  show,
   assistantName,
   agentAvatarSeed,
   agentAvatarUrl,
   agentName,
-}: LiveStreamLaneProps) {
-  const displayText = useChatStore((s) => s.displayText)
-  const hasToolEvents = useChatStore((s) => s.toolEvents.length > 0)
-
-  if (!streaming) return null
-
-  if (!displayText && !hasToolEvents) {
-    if (hasVisiblePersistedStreamingMessage) return null
-    return (
-      <ThinkingIndicator
-        assistantName={assistantName}
-        agentAvatarSeed={agentAvatarSeed}
-        agentAvatarUrl={agentAvatarUrl}
-        agentName={agentName}
-      />
-    )
-  }
+}: LiveThinkingLaneProps) {
+  if (!show) return null
 
   return (
-    <StreamingBubble
-      text={displayText}
+    <ThinkingIndicator
       assistantName={assistantName}
       agentAvatarSeed={agentAvatarSeed}
       agentAvatarUrl={agentAvatarUrl}
@@ -122,7 +103,12 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const settledCountRef = useRef(0)
   const snapUntilRef = useRef(0)
   const prevSessionIdRef = useRef<string | null>(null)
-  const hasLiveText = useChatStore((s) => s.displayText.trim().length > 0)
+  const displayText = useChatStore((s) => s.displayText)
+  const thinkingText = useChatStore((s) => s.thinkingText)
+  const liveToolEvents = useChatStore((s) => s.toolEvents)
+  const assistantRenderId = useChatStore((s) => s.assistantRenderId)
+  const streamPhase = useChatStore((s) => s.streamPhase)
+  const streamToolName = useChatStore((s) => s.streamToolName)
   const hasLiveArtifacts = useChatStore((s) => (
     s.displayText.trim().length > 0
     || s.toolEvents.length > 0
@@ -247,10 +233,9 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const isHeartbeatOk = (msg: Message) =>
     msg.suppressed === true || (msg.kind === 'heartbeat' && (/^\s*HEARTBEAT_OK\b/i.test(msg.text || '') || /^\s*NO_MESSAGE\b/i.test(msg.text || '')))
 
-  const dedupedDisplayedMessages = useMemo(() => {
+  const baseDisplayedMessages = useMemo(() => {
     const displayedMessages: Message[] = []
     for (const msg of messages) {
-      if (shouldHidePersistedStreamingAssistantMessage(msg, { localStreaming: streaming, hasLiveArtifacts })) continue
       const isHeartbeat = isHeartbeatMessage(msg)
 
       if (isHeartbeat) {
@@ -268,21 +253,31 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
     }
 
     return dedupeMessagesForDisplay(displayedMessages)
-  }, [hasLiveArtifacts, messages, showAlerts, showOk, streaming])
+  }, [messages, showAlerts, showOk])
+
+  const streamingAwareMessages = useMemo(() => (
+    buildStreamingAwareMessageList(baseDisplayedMessages, {
+      localStreaming: streaming,
+      hasLiveArtifacts,
+      assistantRenderId,
+      displayText,
+      thinkingText,
+    })
+  ), [assistantRenderId, baseDisplayedMessages, displayText, hasLiveArtifacts, streaming, thinkingText])
 
   const filteredMessages = useMemo(() => {
     let nextMessages = bookmarkFilter
-      ? dedupedDisplayedMessages.filter((msg) => msg.bookmarked)
-      : dedupedDisplayedMessages
+      ? streamingAwareMessages.filter((msg) => msg.bookmarked)
+      : streamingAwareMessages
     if (connectorFilter) {
       nextMessages = nextMessages.filter((msg) => msg.source?.connectorId === connectorFilter)
     }
     return nextMessages
-  }, [bookmarkFilter, connectorFilter, dedupedDisplayedMessages])
+  }, [bookmarkFilter, connectorFilter, streamingAwareMessages])
 
   const hasVisiblePersistedStreamingMessage = useMemo(
-    () => filteredMessages.some((msg) => msg.role === 'assistant' && msg.streaming === true),
-    [filteredMessages],
+    () => filteredMessages.some((msg) => msg.role === 'assistant' && msg.streaming === true && msg.clientRenderId !== assistantRenderId),
+    [assistantRenderId, filteredMessages],
   )
 
   // Search matches
@@ -362,6 +357,7 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
       }
 
       const originalIndex = originalIndexMap.get(msg) ?? -1
+      const isLiveStreamRow = streaming && !!assistantRenderId && msg.clientRenderId === assistantRenderId
       const isLastAssistant = i === lastAssistantIndex
       const isSearchMatch = !!searchQuery && searchMatchSet.has(i)
       const isCurrentMatch = currentSearchMatchIndex === i
@@ -396,7 +392,7 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
 
       return (
         <div
-          key={`${sessionId}-${msg.role}-${originalIndex >= 0 ? originalIndex : i}`}
+          key={msg.clientRenderId ? `${sessionId}-${msg.clientRenderId}` : `${sessionId}-${msg.role}-${originalIndex >= 0 ? originalIndex : i}`}
           data-message-index={i}
           style={animStyle}
         >
@@ -416,6 +412,14 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
               agentAvatarSeed={agent?.avatarSeed}
               agentAvatarUrl={agent?.avatarUrl}
               agentName={agent?.name}
+              liveStream={isLiveStreamRow ? {
+                active: true,
+                phase: streamPhase,
+                toolName: streamToolName,
+                text: displayText,
+                thinking: thinkingText,
+                toolEvents: liveToolEvents,
+              } : undefined}
               isLast={isLastAssistant}
               onRetry={isLastAssistant ? retryLastMessage : undefined}
               messageIndex={originalIndex >= 0 ? originalIndex : undefined}
@@ -432,17 +436,23 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
     agent?.avatarSeed,
     agent?.avatarUrl,
     agent?.name,
+    assistantRenderId,
     assistantName,
     currentMoment,
     currentSearchMatchIndex,
+    displayText,
     filteredMessages,
+    liveToolEvents,
     originalIndexMap,
     retryLastMessage,
     searchMatchSet,
     searchQuery,
     sessionId,
     settledSnapshot,
+    streamPhase,
+    streamToolName,
     streaming,
+    thinkingText,
   ])
 
   // Track whether user is at/near bottom so we know whether to auto-scroll on new content
@@ -507,14 +517,14 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
       el.scrollTop = el.scrollHeight
       wasAtBottomRef.current = true
     }
-  }, [hasLiveText, messages.length])
+  }, [hasLiveArtifacts, messages.length])
 
   // Update scroll-related UI state after render (separate from layoutEffect to avoid cascading)
   useEffect(() => {
     const el = scrollRef.current
     if (!el || messages.length === 0) return
     updateScrollState()
-  }, [hasLiveText, messages.length, updateScrollState])
+  }, [hasLiveArtifacts, messages.length, updateScrollState])
 
   // Re-snap when content resizes during snap window (lazy images increasing scrollHeight)
   useEffect(() => {
@@ -825,9 +835,8 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
           )}
           {transcriptNodes}
           <ApprovalCards agentId={agent?.id} />
-          <LiveStreamLane
-            streaming={streaming}
-            hasVisiblePersistedStreamingMessage={hasVisiblePersistedStreamingMessage}
+          <LiveThinkingLane
+            show={streaming && !hasLiveArtifacts && !hasVisiblePersistedStreamingMessage}
             assistantName={assistantName}
             agentAvatarSeed={agent?.avatarSeed}
             agentAvatarUrl={agent?.avatarUrl}

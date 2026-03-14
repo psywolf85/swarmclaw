@@ -142,7 +142,7 @@ export function ChatArea() {
     if (!preserveLocalStream) setMessages([])
     setMessagesLoading(true)
     if (!preserveLocalStream) {
-      useChatStore.setState({ streaming: false, streamingSessionId: null, streamText: '', toolEvents: [] })
+      useChatStore.setState({ streaming: false, streamingSessionId: null, streamText: '', assistantRenderId: null, toolEvents: [] })
     }
     fetchMessagesPaginated(requestedSessionId, 100).then((data) => {
       if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
@@ -235,13 +235,15 @@ export function ChatArea() {
   const refreshMessages = useCallback(async () => {
     if (!sessionId) return
     // Skip message refresh while we're locally streaming this session —
-    // the SSE stream already handles the live display via StreamingBubble.
+    // the SSE stream already drives the inline live transcript row.
     // Fetching messages here would replace the array with new objects on every
     // WS notification, causing the full MessageList to re-render and flash.
     const chatState = useChatStore.getState()
     if (chatState.streaming && chatState.streamingSessionId === sessionId) return
     try {
       const msgs = await fetchMessages(sessionId)
+      const currentChatState = useChatStore.getState()
+      if (currentChatState.streaming && currentChatState.streamingSessionId === sessionId) return
       const previous = messagesRef.current
       if (messagesDiffer(msgs, previous)) {
         const newMsgs = msgs.length > previous.length ? msgs.slice(previous.length) : []

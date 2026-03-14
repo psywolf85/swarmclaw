@@ -22,7 +22,9 @@ async function executeContextStatus(bctx: ContextToolContext) {
     const { getContextStatus } = await import('../context-manager')
     const session = bctx.resolveCurrentSession?.()
     if (!session) return 'Error: no current session context.'
-    const status = getContextStatus(session.messages || [], 2000, session.provider as string, session.model as string)
+    const status = getContextStatus(session.messages || [], 2000, session.provider as string, session.model as string, {
+      includeToolEvents: false,
+    })
     return JSON.stringify(status)
   } catch (err: unknown) { return `Error: ${errorMessage(err)}` }
 }

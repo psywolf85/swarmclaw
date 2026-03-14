@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { normalizeSkillPayload } from '@/lib/server/skills/skills-normalize'
+import { auditSkillContent } from '@/lib/server/skills/skill-audit'
 
 const MAX_SKILL_BYTES = 2 * 1024 * 1024
 
@@ -43,6 +44,18 @@ export async function POST(req: Request) {
       content,
       sourceUrl: url,
     })
+    const audit = auditSkillContent({
+      content,
+      requirements: normalized.skillRequirements,
+      installOptions: normalized.installOptions,
+      primaryEnv: normalized.primaryEnv,
+    })
+    if (audit.status === 'block') {
+      return NextResponse.json({
+        error: 'Skill blocked by static audit',
+        audit,
+      }, { status: 400 })
+    }
 
     return NextResponse.json({
       name: normalized.name,
@@ -62,6 +75,7 @@ export async function POST(req: Request) {
       skillRequirements: normalized.skillRequirements,
       detectedEnvVars: normalized.detectedEnvVars,
       security: normalized.security,
+      audit,
       frontmatter: normalized.frontmatter,
     })
   } catch (err: unknown) {

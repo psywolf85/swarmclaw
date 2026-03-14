@@ -27,7 +27,17 @@ export default function MemoryPage() {
   const [error, setError] = useState<string | null>(null)
   const [categoryFilter, setCategoryFilter] = useState<string>('')
   const [viewMode, setViewMode] = useState<'list' | 'graph'>('list')
+  const [dueOnly, setDueOnly] = useState(false)
   const searchRef = useRef(search)
+
+  const isDueFollowUp = useCallback((entry: MemoryEntry) => {
+    const metadata = entry.metadata && typeof entry.metadata === 'object'
+      ? entry.metadata as Record<string, unknown>
+      : null
+    const followUpAt = typeof metadata?.followUpAt === 'number' ? metadata.followUpAt : null
+    const resolvedAt = typeof metadata?.resolvedAt === 'number' ? metadata.resolvedAt : null
+    return entry.category === 'reflection/open_loop' && followUpAt !== null && followUpAt <= Date.now() && resolvedAt === null
+  }, [])
 
   const apiAgentId = useMemo(() => {
     if (!memoryAgentFilter) return undefined
@@ -98,9 +108,10 @@ export default function MemoryPage() {
       }
       if (memoryTierFilter !== 'all' && getMemoryTier(e) !== memoryTierFilter) return false
       if (categoryFilter && (e.category || 'note') !== categoryFilter) return false
+      if (dueOnly && !isDueFollowUp(e)) return false
       return true
-    })
-  }, [entries, memoryAgentFilter, memoryScopeFilter, memoryTierFilter, categoryFilter])
+    }).sort((left, right) => Number(isDueFollowUp(right)) - Number(isDueFollowUp(left)))
+  }, [entries, memoryAgentFilter, memoryScopeFilter, memoryTierFilter, categoryFilter, dueOnly, isDueFollowUp])
 
   const filterLabel = useMemo(() => {
     if (!memoryAgentFilter) return 'All Memories'
@@ -182,6 +193,17 @@ export default function MemoryPage() {
                 {tier}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setDueOnly((current) => !current)}
+              className={`px-2.5 py-1 rounded-[8px] text-[10px] font-700 uppercase tracking-[0.08em] border transition-all ${
+                dueOnly
+                  ? 'bg-amber-500/12 text-amber-300 border-amber-500/20'
+                  : 'bg-transparent text-text-3/70 border-white/[0.05] hover:text-text-2 hover:bg-white/[0.03]'
+              }`}
+            >
+              Due follow-ups
+            </button>
           </div>
           <p className="mt-2 text-[11px] text-text-3/55">
             Scope shows what kind of memory it is. Tier shows how long it should stay salient.

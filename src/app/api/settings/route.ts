@@ -45,7 +45,13 @@ function parseBoolSetting(value: unknown, fallback: boolean): boolean {
   return fallback
 }
 
-export async function GET(_req: Request) {
+function parseGuardMode(value: unknown): 'off' | 'warn' | 'block' {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  if (normalized === 'off' || normalized === 'block') return normalized
+  return 'warn'
+}
+
+export async function GET() {
   return NextResponse.json(loadPublicSettings())
 }
 
@@ -135,6 +141,8 @@ export async function PUT(req: Request) {
   settings.walletApprovalsEnabled = parseBoolSetting(settings.walletApprovalsEnabled, true)
   settings.integrityMonitorEnabled = parseBoolSetting(settings.integrityMonitorEnabled, true)
   settings.daemonAutostartEnabled = parseBoolSetting(settings.daemonAutostartEnabled, true)
+  settings.autonomyResumeApprovalsEnabled = parseBoolSetting(settings.autonomyResumeApprovalsEnabled, false)
+  settings.untrustedContentGuardMode = parseGuardMode(settings.untrustedContentGuardMode)
   settings.sessionResetMode = settings.sessionResetMode === 'daily' ? 'daily' : settings.sessionResetMode === 'idle' ? 'idle' : null
   settings.whatsappApprovedContacts = normalizeWhatsAppApprovedContacts(settings.whatsappApprovedContacts)
   settings.sessionIdleTimeoutSec = parseIntSetting(

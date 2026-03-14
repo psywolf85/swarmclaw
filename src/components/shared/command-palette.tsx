@@ -80,6 +80,7 @@ export function CommandPalette() {
       { id: 'knowledge', label: 'Knowledge', description: 'Shared knowledge base', keywords: ['docs', 'entries', 'facts'] },
       { id: 'providers', label: 'Providers', description: 'Model providers and endpoints', keywords: ['openai', 'anthropic', 'ollama', 'endpoint'] },
       { id: 'secrets', label: 'Secrets', description: 'Credentials and encrypted secrets', keywords: ['api key', 'token', 'credential'] },
+      { id: 'autonomy', label: 'Autonomy', description: 'Estops, incidents, and runtime controls', keywords: ['estop', 'incident', 'runtime', 'safety'] },
       { id: 'settings', label: 'Settings', description: 'General app configuration', keywords: ['preferences', 'theme', 'heartbeat'] },
     ] as const
     for (const view of views) {

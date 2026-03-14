@@ -46,6 +46,8 @@ import {
   shouldSuppressSessionHeartbeatHealthAlert,
   shouldSuppressSyntheticAgentHealthAlert,
 } from '@/lib/server/runtime/daemon-policy'
+import { loadEstopState } from '@/lib/server/runtime/estop'
+import { classifyRuntimeFailure, recordSupervisorIncident } from '@/lib/server/autonomy/supervisor-reflection'
 
 const QUEUE_CHECK_INTERVAL = 30_000 // 30 seconds
 const BROWSER_SWEEP_INTERVAL = 60_000 // 60 seconds
@@ -130,6 +132,7 @@ export function ensureDaemonStarted(source = 'unknown'): boolean {
   if (ds.running) return false
   if (!daemonAutostartEnvEnabled()) return false
   if (ds.manualStopRequested) return false
+  if (loadEstopState().level !== 'none') return false
   startDaemon({ source, manualStart: false })
   return true
 }
@@ -138,6 +141,12 @@ export function startDaemon(options?: { source?: string; manualStart?: boolean }
   const source = options?.source || 'unknown'
   const manualStart = options?.manualStart === true
   if (manualStart) ds.manualStopRequested = false
+  const estop = loadEstopState()
+  if (estop.level !== 'none') {
+    notify('daemon')
+    console.warn(`[daemon] Start blocked by estop (level=${estop.level}, source=${source})`)
+    return
+  }
 
   if (ds.running) {
     // In dev/HMR, daemon can already be flagged running while new interval types
@@ -485,6 +494,24 @@ async function processWebhookRetries() {
         entry.deadLettered = true
         upsertWebhookRetry(entry.id, entry)
         console.warn(`[webhook-retry] Dead-lettered ${entry.id} after ${entry.attempts} attempts: ${errorMsg}`)
+        const failure = classifyRuntimeFailure({ source: 'webhook', message: errorMsg })
+        if (session?.id) {
+          recordSupervisorIncident({
+            runId: entry.id,
+            sessionId: session.id as string,
+            taskId: null,
+            agentId: agentId || null,
+            source: 'webhook',
+            kind: 'runtime_failure',
+            severity: failure.severity,
+            summary: `Webhook delivery dead-lettered: ${errorMsg}`.slice(0, 320),
+            details: errorMsg,
+            failureFamily: failure.family,
+            remediation: failure.remediation,
+            repairPrompt: failure.repairPrompt,
+            autoAction: null,
+          })
+        }
 
         appendWebhookLog(genId(8), {
           id: genId(8),
@@ -1036,6 +1063,7 @@ export async function runConnectorHealthCheckNowForTest(now = Date.now()) {
 }
 
 export function getDaemonStatus() {
+  const estop = loadEstopState()
   const queue = loadQueue()
   const schedules = loadSchedules()
   const reconnectStates = Object.values(getAllReconnectStates())
@@ -1063,6 +1091,7 @@ export function getDaemonStatus() {
     backgroundServicesEnabled: isDaemonBackgroundServicesEnabled(),
     reducedMode: !isDaemonBackgroundServicesEnabled(),
     manualStopRequested: ds.manualStopRequested,
+    estop,
     queueLength: queue.length,
     lastProcessed: ds.lastProcessedAt,
     nextScheduled,

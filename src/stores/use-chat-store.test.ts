@@ -69,6 +69,7 @@ afterEach(() => {
     streaming: originalChatState.streaming,
     streamingSessionId: originalChatState.streamingSessionId,
     streamText: originalChatState.streamText,
+    assistantRenderId: originalChatState.assistantRenderId,
     streamPhase: originalChatState.streamPhase,
     streamToolName: originalChatState.streamToolName,
     displayText: originalChatState.displayText,
@@ -109,6 +110,7 @@ describe('useChatStore control-token hygiene', () => {
       displayText: '',
       streaming: false,
       streamingSessionId: null,
+      assistantRenderId: null,
       streamPhase: 'thinking',
       streamToolName: '',
       thinkingText: '',
@@ -121,7 +123,7 @@ describe('useChatStore control-token hygiene', () => {
       totalMessages: 0,
     })
 
-    global.fetch = async (input: RequestInfo | URL) => {
+    global.fetch = (async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url === '/api/chats/session-1/chat') {
         return sseResponse([
@@ -136,7 +138,7 @@ describe('useChatStore control-token hygiene', () => {
         })
       }
       throw new Error(`Unexpected fetch: ${url}`)
-    }
+    }) as unknown as typeof fetch
 
     await useChatStore.getState().sendMessage('Hello', { sessionId: 'session-1' })
     await new Promise((resolve) => setTimeout(resolve, 0))
@@ -147,5 +149,150 @@ describe('useChatStore control-token hygiene', () => {
     assert.equal(messages[0]?.text, 'Hello')
     assert.equal(useChatStore.getState().streamText, '')
     assert.equal(useChatStore.getState().displayText, '')
+  })
+
+  it('keeps a stable client render id on the completed assistant message', async () => {
+    const session = makeSession()
+    useAppStore.setState({
+      agents: { 'agent-1': makeAgent() },
+      sessions: { [session.id]: session },
+      currentAgentId: 'agent-1',
+    })
+    useChatStore.setState({
+      messages: [],
+      pendingFiles: [],
+      replyingTo: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      assistantRenderId: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 0,
+    })
+
+    global.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/chats/session-1/chat') {
+        return sseResponse([
+          { t: 'r', text: 'Stable final answer' },
+          { t: 'done' },
+        ])
+      }
+      if (url === '/api/chats/session-1') {
+        return new Response(JSON.stringify(session), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    await useChatStore.getState().sendMessage('Hello', { sessionId: 'session-1' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const state = useChatStore.getState()
+    const assistantMessage = state.messages.find((message) => message.role === 'assistant')
+    assert.equal(state.streaming, false)
+    assert.equal(typeof state.assistantRenderId, 'string')
+    assert.equal(assistantMessage?.clientRenderId, state.assistantRenderId)
+  })
+
+  it('atomically swaps a queued chip into the live transcript when dequeuing', () => {
+    const session = makeSession()
+    useAppStore.setState({
+      agents: { 'agent-1': makeAgent() },
+      sessions: { [session.id]: session },
+      currentAgentId: 'agent-1',
+    })
+    useChatStore.setState({
+      messages: [
+        { role: 'user', text: 'First', time: 1 },
+        { role: 'assistant', text: 'Replying', time: 2 },
+      ],
+      pendingFiles: [],
+      replyingTo: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      assistantRenderId: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [
+        { id: 'queued-1', sessionId: 'session-1', text: 'Queued hello' },
+      ],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 2,
+    })
+
+    global.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/chats/session-1/chat') {
+        return new Promise<Response>(() => {})
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    void useChatStore.getState().sendMessage('Queued hello', {
+      sessionId: 'session-1',
+      fromQueue: true,
+      queuedMessageId: 'queued-1',
+    })
+
+    const state = useChatStore.getState()
+    assert.equal(state.streaming, true)
+    assert.equal(state.queuedMessages.length, 0)
+    assert.equal(state.messages.at(-1)?.role, 'user')
+    assert.equal(state.messages.at(-1)?.text, 'Queued hello')
+  })
+
+  it('preserves the assistant render id across a reconciled message refresh', () => {
+    useChatStore.setState({
+      messages: [
+        { role: 'user', text: 'Hello', time: 1 },
+        { role: 'assistant', text: 'Stable final answer', time: 2, clientRenderId: 'render-1' },
+      ],
+      assistantRenderId: 'render-1',
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 2,
+    })
+
+    useChatStore.getState().setMessages([
+      { role: 'user', text: 'Hello', time: 10 },
+      { role: 'assistant', text: 'Stable final answer', time: 20 },
+    ])
+
+    const state = useChatStore.getState()
+    assert.equal(state.assistantRenderId, 'render-1')
+    assert.equal(state.messages[1]?.clientRenderId, 'render-1')
   })
 })

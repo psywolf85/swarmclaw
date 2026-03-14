@@ -41,7 +41,9 @@ export function ChatInput({ streaming, onSend, onStop, pluginChatActions = [] }:
   const queuedMessages = useChatStore((s) => s.queuedMessages)
   const addQueuedMessage = useChatStore((s) => s.addQueuedMessage)
   const removeQueuedMessage = useChatStore((s) => s.removeQueuedMessage)
+  const clearQueuedMessagesForSession = useChatStore((s) => s.clearQueuedMessagesForSession)
   const visibleQueuedMessages = listQueuedMessagesForSession(queuedMessages, sessionId)
+  const nextQueuedMessage = visibleQueuedMessages[0]
 
   useEffect(() => {
     if (!extrasOpen) return
@@ -178,23 +180,77 @@ export function ChatInput({ streaming, onSend, onStop, pluginChatActions = [] }:
         )}
 
         {visibleQueuedMessages.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 mb-2">
-            <span className="label-mono text-amber-400/70">Sending next</span>
-            {visibleQueuedMessages.map((item) => (
-              <span key={item.id} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-[8px] bg-amber-500/10 border border-amber-500/15 text-[12px] text-amber-300 font-mono max-w-[200px]">
-                <span className="truncate">{item.text}</span>
+          <div className="mb-2 overflow-hidden rounded-[16px] border border-amber-500/18 bg-[linear-gradient(180deg,rgba(245,158,11,0.10)_0%,rgba(245,158,11,0.04)_100%)] shadow-[0_10px_40px_rgba(245,158,11,0.08)]">
+            <div className="flex items-start justify-between gap-3 border-b border-amber-500/12 px-3.5 py-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="relative flex h-2.5 w-2.5 shrink-0">
+                    <span className="absolute inline-flex h-2.5 w-2.5 rounded-full bg-amber-400/30 animate-ping" />
+                    <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-300" />
+                  </span>
+                  <span className="label-mono text-amber-300/80">Message queue</span>
+                  <span className="rounded-pill border border-amber-400/15 bg-amber-400/10 px-2 py-0.5 text-[10px] font-600 text-amber-200">
+                    {visibleQueuedMessages.length}
+                  </span>
+                </div>
+                <div className="mt-1 text-[12px] text-amber-100/80">
+                  {nextQueuedMessage
+                    ? `Next up: ${nextQueuedMessage.text}`
+                    : 'Queued messages send automatically when the current reply finishes.'}
+                </div>
+              </div>
+              {sessionId && visibleQueuedMessages.length > 1 && (
                 <button
                   type="button"
-                  onClick={() => removeQueuedMessage(item.id)}
-                  className="shrink-0 text-amber-400/60 hover:text-amber-300 border-none bg-transparent cursor-pointer p-0"
+                  onClick={() => clearQueuedMessagesForSession(sessionId)}
+                  className="shrink-0 rounded-pill border border-amber-400/15 bg-transparent px-3 py-1.5 text-[11px] font-600 text-amber-200/80 transition-all hover:border-amber-300/30 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
                 >
-                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                    <line x1="18" y1="6" x2="6" y2="18" />
-                    <line x1="6" y1="6" x2="18" y2="18" />
-                  </svg>
+                  Clear queue
                 </button>
-              </span>
-            ))}
+              )}
+            </div>
+            <div className="max-h-[196px] space-y-2 overflow-y-auto px-2.5 py-2.5">
+              {visibleQueuedMessages.map((item, index) => (
+                <div
+                  key={item.id}
+                  className={`group flex items-start gap-3 rounded-[12px] border px-3 py-2.5 transition-all ${
+                    index === 0
+                      ? 'border-amber-300/20 bg-amber-300/[0.08]'
+                      : 'border-white/[0.05] bg-white/[0.03]'
+                  }`}
+                >
+                  <div className={`flex h-7 min-w-7 items-center justify-center rounded-[9px] px-2 text-[10px] font-700 uppercase tracking-[0.12em] ${
+                    index === 0
+                      ? 'bg-amber-300/15 text-amber-100'
+                      : 'bg-white/[0.06] text-text-3'
+                  }`}>
+                    {index === 0 ? 'Next' : index + 1}
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-[11px] font-600 ${index === 0 ? 'text-amber-100' : 'text-text-2'}`}>
+                        {index === 0 ? 'Auto-sends next' : 'Queued after that'}
+                      </span>
+                    </div>
+                    <p className="mt-1 break-words text-[12px] leading-5 text-text/90 m-0">
+                      {item.text}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeQueuedMessage(item.id)}
+                    className="shrink-0 rounded-[8px] border border-transparent bg-transparent p-1.5 text-amber-300/60 transition-all hover:border-amber-300/20 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
+                    aria-label={`Remove queued message ${index + 1}`}
+                    title="Remove from queue"
+                  >
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                      <line x1="18" y1="6" x2="6" y2="18" />
+                      <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

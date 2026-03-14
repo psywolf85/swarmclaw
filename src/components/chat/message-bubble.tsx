@@ -8,6 +8,7 @@ import type { Message } from '@/types'
 import { useMediaQuery } from '@/hooks/use-media-query'
 import { useAppStore } from '@/stores/use-app-store'
 import { useChatStore } from '@/stores/use-chat-store'
+import type { ToolEvent } from '@/stores/use-chat-store'
 import { AiAvatar } from '@/components/shared/avatar'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { CodeBlock } from './code-block'
@@ -90,6 +91,16 @@ const STATUS_COLORS: Record<string, string> = {
 }
 
 const emptyToolEvents: NonNullable<Message['toolEvents']> = []
+const emptyLiveToolEvents: ToolEvent[] = []
+
+interface LiveStreamState {
+  active: boolean
+  phase: 'thinking' | 'tool' | 'responding' | 'connecting'
+  toolName: string
+  text: string
+  thinking: string
+  toolEvents: ToolEvent[]
+}
 
 // AttachmentChip, parseAttachmentUrl, regex constants, and FILE_TYPE_COLORS
 // are now imported from @/components/shared/attachment-chip
@@ -144,6 +155,7 @@ interface Props {
   agentAvatarSeed?: string
   agentAvatarUrl?: string | null
   agentName?: string
+  liveStream?: LiveStreamState
   isLast?: boolean
   onRetry?: () => void
   messageIndex?: number
@@ -153,7 +165,7 @@ interface Props {
   momentOverlay?: React.ReactNode
 }
 
-export const MessageBubble = memo(function MessageBubble({ message, assistantName, agentAvatarSeed, agentAvatarUrl, agentName, isLast, onRetry, messageIndex, onToggleBookmark, onEditResend, onTransferToAgent, momentOverlay }: Props) {
+export const MessageBubble = memo(function MessageBubble({ message, assistantName, agentAvatarSeed, agentAvatarUrl, agentName, liveStream, isLast, onRetry, messageIndex, onToggleBookmark, onEditResend, onTransferToAgent, momentOverlay }: Props) {
   const isUser = message.role === 'user'
   const isHeartbeat = !isUser && (message.kind === 'heartbeat' || /^\s*HEARTBEAT_OK\b/i.test(message.text || ''))
   const isPluginUI = !isUser && message.kind === 'plugin-ui'
@@ -200,19 +212,44 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
   const [editing, setEditing] = useState(false)
   const [editText, setEditText] = useState('')
   const [transferPickerOpen, setTransferPickerOpen] = useState(false)
+  const liveStreamActive = !isUser && liveStream?.active === true
+  const liveToolEvents = liveStream?.toolEvents ?? emptyLiveToolEvents
   const toolEvents = message.toolEvents ?? emptyToolEvents
+  const toolEventsForMedia = useMemo(
+    () => (liveStreamActive
+      ? liveToolEvents.map((event) => ({
+          name: event.name,
+          input: event.input,
+          output: event.output,
+          error: event.status === 'error' || undefined,
+        }))
+      : toolEvents),
+    [liveStreamActive, liveToolEvents, toolEvents],
+  )
   // Separate send_file events — they render as inline attachments, not in the tool accordion
-  const nonSendFileEvents = useMemo(() => toolEvents.filter((ev) => ev.name !== 'send_file' || ev.error), [toolEvents])
-  const hasToolEvents = !isUser && nonSendFileEvents.length > 0
+  const persistedToolEvents = useMemo(
+    () => toolEvents.filter((ev) => ev.name !== 'send_file' || ev.error),
+    [toolEvents],
+  )
+  const displayToolEvents = useMemo(
+    () => (liveStreamActive
+      ? liveToolEvents.filter((ev) => ev.name !== 'send_file' || ev.status === 'error')
+      : persistedToolEvents.map((ev, i) => ({
+          id: ev.toolCallId || `${message.time}-${ev.name}-${i}`,
+          name: ev.name,
+          input: ev.input,
+          output: ev.output,
+          status: ev.error ? 'error' as const : 'done' as const,
+        }))),
+    [liveStreamActive, liveToolEvents, message.time, persistedToolEvents],
+  )
+  const hasToolEvents = !isUser && displayToolEvents.length > 0
 
-  // Map persisted MessageToolEvent[] → ToolEvent[] for the unified ToolEventsSection
-  const mappedToolEvents = useMemo(() => nonSendFileEvents.map((ev, i) => ({
-    id: ev.toolCallId || `${message.time}-${ev.name}-${i}`,
-    name: ev.name,
-    input: ev.input,
-    output: ev.output,
-    status: ev.error ? 'error' as const : 'done' as const,
-  })), [nonSendFileEvents, message.time])
+  const effectiveThinking = !isUser
+    ? (liveStreamActive ? (liveStream?.thinking?.trim() ? liveStream.thinking : undefined) : message.thinking)
+    : undefined
+  const sourceText = liveStreamActive ? (liveStream?.text || '') : message.text
+  const copySourceText = liveStreamActive ? (liveStream?.text || '') : message.text
 
   // Extract ALL media from ALL tool events for inline display after the message text.
   // Covers send_file, browser screenshots, file tool outputs — everything.
@@ -223,7 +260,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     const files: { name: string; url: string }[] = []
     const seen = new Set<string>()
 
-    for (const ev of toolEvents) {
+    for (const ev of toolEventsForMedia) {
       if (ev.error || !ev.output) continue
       if (!isExplicitScreenshot(ev.name, ev.input)) continue
       const m = extractMedia(ev.output)
@@ -248,29 +285,27 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
 
     if (!images.length && !videos.length && !pdfs.length && !files.length) return null
     return { images, videos, pdfs, files }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [message.toolEvents])
-  const isStructured = !isUser && !isHeartbeat && isStructuredMarkdown(message.text)
+  }, [toolEventsForMedia])
+  const isStructured = !isUser && !isHeartbeat && isStructuredMarkdown(sourceText)
 
   // Collect all media URLs already rendered via tool events to avoid duplicates in markdown
   const toolEventMediaUrls = useMemo(() => {
-    if (!toolEvents.length) return null
+    if (!toolEventsForMedia.length) return null
     const urls = new Set<string>()
-    for (const ev of toolEvents) {
+    for (const ev of toolEventsForMedia) {
       if (!ev.output) continue
       const m = extractMedia(ev.output)
       for (const url of m.images) urls.add(url)
       for (const url of m.videos) urls.add(url)
     }
     return urls.size > 0 ? urls : null
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [message.toolEvents])
+  }, [toolEventsForMedia])
 
   // Detect delegation-source system messages
   const delegationSource = !isUser && message.kind === 'system' ? parseDelegationSource(message.text || '') : null
   // Detect task completion system messages (delegated or direct)
   const taskCompletion = !isUser && message.kind === 'system' ? parseTaskCompletion(message.text || '') : null
-  const rawDisplayText = delegationSource ? delegationSource.rest : message.text
+  const rawDisplayText = delegationSource ? delegationSource.rest : sourceText
   const displayText = rawDisplayText
     ? rawDisplayText.split('\n').filter((l) => !/\[(MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]/.test(l)).join('\n').trim()
     : ''
@@ -280,14 +315,29 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
   }, [setPreviewContent])
 
   const handleCopy = useCallback(() => {
-    void copyTextToClipboard(message.text).then((copiedText) => {
+    void copyTextToClipboard(copySourceText).then((copiedText) => {
       if (!copiedText) return
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
-  }, [message.text])
+  }, [copySourceText])
 
   const connectorMeta = connectorThreadMeta(message, isUser)
+  const hasPrimaryAttachments = Boolean(message.imagePath || message.imageUrl || message.attachedFiles?.length)
+  const shouldRenderBubbleShell = hasPrimaryAttachments
+    || Boolean(walletRequest)
+    || Boolean(walletActionRequest)
+    || Boolean(installRequest)
+    || Boolean(scaffoldRequest)
+    || isPluginUI
+    || isHeartbeat
+    || Boolean(displayText)
+  const canCopy = copySourceText.trim().length > 0
+  const showActions = canCopy
+    || (typeof messageIndex === 'number' && Boolean(onToggleBookmark))
+    || (isUser && typeof messageIndex === 'number' && Boolean(onEditResend))
+    || (!isUser && isLast && Boolean(onRetry))
+    || (!isUser && typeof messageIndex === 'number' && Boolean(onTransferToAgent))
 
   return (
     <div
@@ -302,7 +352,9 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
       {!isUser && (
         <div className="absolute left-[4px] top-0">
           <div style={momentOverlay ? { animation: 'avatar-moment-pulse 0.6s ease' } : undefined}>
-            {agentName ? <AgentAvatar seed={agentAvatarSeed || null} avatarUrl={agentAvatarUrl} name={agentName} size={28} /> : <AiAvatar size="sm" />}
+            {agentName
+              ? <AgentAvatar seed={agentAvatarSeed || null} avatarUrl={agentAvatarUrl} name={agentName} size={28} />
+              : <AiAvatar size="sm" mood={liveStream?.phase === 'tool' ? 'tool' : liveStreamActive ? 'thinking' : undefined} />}
           </div>
           {momentOverlay}
         </div>
@@ -322,6 +374,12 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                   ? `${assistantName || 'Claude'} via ${getConnectorPlatformLabel(message.source.platform)}`
                   : (assistantName || 'Claude'))}
           </span>
+          {!isUser && liveStreamActive && (
+            <span className="w-2 h-2 rounded-full bg-accent-bright" style={{ animation: 'pulse 1.5s ease infinite' }} />
+          )}
+          {!isUser && liveStream?.phase === 'tool' && liveStream.toolName && (
+            <span className="text-[10px] text-text-3/50 font-mono">Using {liveStream.toolName}...</span>
+          )}
           <span className="text-[11px] text-text-3/70 font-mono" title={message.time ? new Date(message.time).toLocaleString() : ''}>
             {message.time ? formatMessageTimestamp(message) : ''}
           </span>
@@ -335,11 +393,11 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
 
       {/* Tool call events (assistant messages only) — unified grouped card matching streaming layout */}
       {hasToolEvents && (
-        <ToolEventsSection toolEvents={mappedToolEvents} />
+        <ToolEventsSection toolEvents={displayToolEvents} />
       )}
 
       {/* Thinking block (collapsible, shown for assistant messages with persisted thinking) */}
-      {!isUser && message.thinking && (
+      {!isUser && effectiveThinking && (
         <div className="max-w-[85%] md:max-w-[72%] mb-2">
           <details className="group rounded-[12px] border border-purple-500/15 bg-purple-500/[0.04]">
             <summary className="flex items-center gap-2 px-3.5 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden">
@@ -347,11 +405,13 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                 <polyline points="9 18 15 12 9 6" />
               </svg>
               <span className="text-[11px] font-600 text-purple-400/70 uppercase tracking-[0.05em]">Thinking</span>
-              <span className="text-[10px] text-text-3/40 font-mono">{Math.ceil(message.thinking.length / 4)} tokens</span>
+              {!liveStreamActive && (
+                <span className="text-[10px] text-text-3/40 font-mono">{Math.ceil(effectiveThinking.length / 4)} tokens</span>
+              )}
             </summary>
             <div className="px-3.5 pb-3 pt-1 max-h-[300px] overflow-y-auto">
               <div className="text-[13px] leading-[1.6] text-text-3/70 whitespace-pre-wrap break-words">
-                {message.thinking}
+                {effectiveThinking}
               </div>
             </div>
           </details>
@@ -383,13 +443,13 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
         <div className="max-w-[85%] md:max-w-[72%]">
           <TaskCompletionCard info={{ ...taskCompletion, imageUrl: message.imageUrl }} />
         </div>
-      ) : (
-      /* Message bubble */
-      <div className={`${isStructured ? 'max-w-[92%] md:max-w-[85%]' : 'max-w-[85%] md:max-w-[72%]'} ${isUser ? 'bubble-user px-5 py-3.5' : isHeartbeat ? 'bubble-ai px-4 py-3' : 'bubble-ai px-5 py-3.5'}`}>
-        {renderAttachments(message, isDesktop ? handleOpenAttachmentImage : undefined)}
+      ) : shouldRenderBubbleShell ? (
+        /* Message bubble */
+        <div className={`${isStructured ? 'max-w-[92%] md:max-w-[85%]' : 'max-w-[85%] md:max-w-[72%]'} ${isUser ? 'bubble-user px-5 py-3.5' : isHeartbeat ? 'bubble-ai px-4 py-3' : 'bubble-ai px-5 py-3.5'}`}>
+          {renderAttachments(message, isDesktop ? handleOpenAttachmentImage : undefined)}
 
-        {walletRequest ? (
-          <div className="flex flex-col gap-3 p-4 rounded-[18px] bg-sky-500/[0.03] border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.05)]">
+          {walletRequest ? (
+            <div className="flex flex-col gap-3 p-4 rounded-[18px] bg-sky-500/[0.03] border border-sky-500/20 shadow-[0_0_20px_rgba(14,165,233,0.05)]">
             <div className="flex items-center gap-2 mb-1">
               <div className="w-5 h-5 rounded-full bg-sky-500/20 flex items-center justify-center text-sky-400">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
@@ -610,7 +670,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
             )}
           </div>
         ) : (
-          <div className={`msg-content text-[15px] md:text-[14px] break-words ${isUser ? 'leading-[1.6] text-white/95' : 'leading-[1.7] text-text'}`}>
+          <div className={`msg-content text-[15px] md:text-[14px] break-words ${liveStreamActive ? 'streaming-cursor' : ''} ${isUser ? 'leading-[1.6] text-white/95' : 'leading-[1.7] text-text'}`}>
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
@@ -642,6 +702,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                   }
                   return (
                     <a href={src} download target="_blank" rel="noopener noreferrer" className="block my-2">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img src={src} alt={alt || 'File'} loading="lazy" className="max-w-full rounded-[10px] border border-white/10 hover:border-white/25 transition-colors cursor-pointer" onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }} />
                     </a>
                   )
@@ -733,9 +794,9 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
               {displayText}
             </ReactMarkdown>
           </div>
-        )}
-      </div>
-      )}
+          )}
+        </div>
+      ) : null}
 
       {/* Inline media from all tool outputs — images, videos, PDFs, files */}
       {allToolMedia && (
@@ -825,90 +886,94 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
       )}
 
       {/* Action buttons */}
-      <div className={`flex items-center gap-1 mt-1.5 px-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all duration-200 translate-y-2 md:group-hover:translate-y-0 ${isUser ? 'justify-end' : ''}`}>
-        <button
-          onClick={handleCopy}
-          aria-label="Copy message"
-          className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
-            text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
-          style={{ fontFamily: 'inherit' }}
-        >
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-            <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-            <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-          </svg>
-          {copied ? 'Copied' : 'Copy'}
-        </button>
-        {typeof messageIndex === 'number' && onToggleBookmark && (
-          <button
-            onClick={() => onToggleBookmark(messageIndex)}
-            aria-label={message.bookmarked ? 'Remove bookmark' : 'Bookmark message'}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
-              text-[11px] font-500 cursor-pointer hover:bg-white/[0.04] transition-all justify-center md:justify-start ${message.bookmarked ? 'text-amber-400' : ''}`}
-            style={{ fontFamily: 'inherit' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill={message.bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
-            </svg>
-            {message.bookmarked ? 'Unbookmark' : 'Bookmark'}
-          </button>
-        )}
-        {isUser && typeof messageIndex === 'number' && onEditResend && (
-          <button
-            onClick={() => { setEditText(message.text); setEditing(true) }}
-            aria-label="Edit and resend"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
-              text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
-            style={{ fontFamily: 'inherit' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-              <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-            </svg>
-            Edit
-          </button>
-        )}
-        {!isUser && isLast && onRetry && (
-          <button
-            onClick={onRetry}
-            aria-label="Retry message"
-            className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
-              text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
-            style={{ fontFamily: 'inherit' }}
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-              <polyline points="23 4 23 10 17 10" />
-              <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-            </svg>
-            Retry
-          </button>
-        )}
-        {!isUser && typeof messageIndex === 'number' && onTransferToAgent && (
-          <div className="relative">
+      {showActions && (
+        <div className={`flex items-center gap-1 mt-1.5 px-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-all duration-200 translate-y-2 md:group-hover:translate-y-0 ${isUser ? 'justify-end' : ''}`}>
+          {canCopy && (
             <button
-              onClick={() => setTransferPickerOpen(!transferPickerOpen)}
-              aria-label="Transfer to another agent"
+              onClick={handleCopy}
+              aria-label="Copy message"
               className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
                 text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
               style={{ fontFamily: 'inherit' }}
             >
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M8 3L4 7l4 4" />
-                <path d="M4 7h16" />
-                <path d="M16 21l4-4-4-4" />
-                <path d="M20 17H4" />
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
               </svg>
-              Transfer
+              {copied ? 'Copied' : 'Copy'}
             </button>
-            {transferPickerOpen && (
-              <TransferAgentPicker
-                onSelect={(agentId) => { onTransferToAgent(messageIndex, agentId); setTransferPickerOpen(false) }}
-                onClose={() => setTransferPickerOpen(false)}
-              />
-            )}
-          </div>
-        )}
-      </div>
+          )}
+          {typeof messageIndex === 'number' && onToggleBookmark && (
+            <button
+              onClick={() => onToggleBookmark(messageIndex)}
+              aria-label={message.bookmarked ? 'Remove bookmark' : 'Bookmark message'}
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
+                text-[11px] font-500 cursor-pointer hover:bg-white/[0.04] transition-all justify-center md:justify-start ${message.bookmarked ? 'text-amber-400' : ''}`}
+              style={{ fontFamily: 'inherit' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill={message.bookmarked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+              </svg>
+              {message.bookmarked ? 'Unbookmark' : 'Bookmark'}
+            </button>
+          )}
+          {isUser && typeof messageIndex === 'number' && onEditResend && (
+            <button
+              onClick={() => { setEditText(message.text); setEditing(true) }}
+              aria-label="Edit and resend"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
+                text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
+              style={{ fontFamily: 'inherit' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+                <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+              </svg>
+              Edit
+            </button>
+          )}
+          {!isUser && isLast && onRetry && (
+            <button
+              onClick={onRetry}
+              aria-label="Retry message"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
+                text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
+              style={{ fontFamily: 'inherit' }}
+            >
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                <polyline points="23 4 23 10 17 10" />
+                <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+              </svg>
+              Retry
+            </button>
+          )}
+          {!isUser && typeof messageIndex === 'number' && onTransferToAgent && (
+            <div className="relative">
+              <button
+                onClick={() => setTransferPickerOpen(!transferPickerOpen)}
+                aria-label="Transfer to another agent"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 min-h-[44px] min-w-[44px] md:min-h-0 md:min-w-0 rounded-[8px] border-none bg-transparent
+                  text-[11px] font-500 text-text-3 cursor-pointer hover:text-text-2 hover:bg-white/[0.04] transition-all justify-center md:justify-start"
+                style={{ fontFamily: 'inherit' }}
+              >
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M8 3L4 7l4 4" />
+                  <path d="M4 7h16" />
+                  <path d="M16 21l4-4-4-4" />
+                  <path d="M20 17H4" />
+                </svg>
+                Transfer
+              </button>
+              {transferPickerOpen && (
+                <TransferAgentPicker
+                  onSelect={(agentId) => { onTransferToAgent(messageIndex, agentId); setTransferPickerOpen(false) }}
+                  onClose={() => setTransferPickerOpen(false)}
+                />
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Inline edit mode */}
       {editing && (

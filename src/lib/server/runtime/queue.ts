@@ -11,7 +11,12 @@ import { formatValidationFailure } from '@/lib/server/tasks/task-validation'
 import { pushMainLoopEventToMainSessions } from '@/lib/server/agents/main-agent-loop'
 import { executeSessionChatTurn, type ExecuteChatTurnResult } from '@/lib/server/chat-execution/chat-execution'
 import { extractTaskResult, formatResultBody } from '@/lib/server/tasks/task-result'
-import { assessAutonomyRun, observeAutonomyRunOutcome } from '@/lib/server/autonomy/supervisor-reflection'
+import {
+  assessAutonomyRun,
+  classifyRuntimeFailure,
+  observeAutonomyRunOutcome,
+  recordSupervisorIncident,
+} from '@/lib/server/autonomy/supervisor-reflection'
 import {
   collectTaskConnectorFollowupTargets as collectTaskConnectorFollowupTargetsImpl,
   extractLikelyOutputFiles,
@@ -25,7 +30,7 @@ import {
 } from '@/lib/server/tasks/task-followups'
 import { getCheckpointSaver } from '@/lib/server/langgraph-checkpoint'
 import { cascadeUnblock } from '@/lib/server/dag-validation'
-import { performGuardianRollback } from '@/lib/server/agents/guardian'
+import { captureGuardianCheckpoint, prepareGuardianRecovery } from '@/lib/server/agents/guardian'
 import type { Agent, BoardTask, Message, Session } from '@/types'
 import { buildAgentDisabledMessage, isAgentDisabled } from '@/lib/server/agents/agent-availability'
 import {
@@ -647,6 +652,12 @@ async function executeTaskRun(
   agent: Agent,
   sessionId: string,
 ): Promise<ExecuteChatTurnResult> {
+  if (agent.autoRecovery) {
+    const cwd = task.projectId
+      ? path.join(WORKSPACE_DIR, 'projects', task.projectId)
+      : WORKSPACE_DIR
+    captureGuardianCheckpoint(cwd, `task:${task.id}`)
+  }
   const settings = loadSettings()
   const basePrompt = task.description || task.title
   const prompt = [
@@ -1061,27 +1072,50 @@ function scheduleRetryOrDeadLetter(task: BoardTask, reason: string): 'retry' | '
     text: `Task moved to dead-letter after ${task.attempts}/${task.maxAttempts} attempts.\n\nReason: ${reason}`,
     createdAt: now,
   })
+  if (task.sessionId) {
+    const failure = classifyRuntimeFailure({ source: 'task', message: reason })
+    recordSupervisorIncident({
+      runId: task.id,
+      sessionId: task.sessionId,
+      taskId: task.id,
+      agentId: task.agentId || null,
+      source: 'task',
+      kind: 'runtime_failure',
+      severity: failure.severity,
+      summary: `Task dead-lettered: ${reason}`.slice(0, 320),
+      details: reason,
+      failureFamily: failure.family,
+      remediation: failure.remediation,
+      repairPrompt: failure.repairPrompt,
+      autoAction: null,
+    })
+  }
 
-  // Guardian Auto-Rollback
+  // Guardian recovery is approval-backed. Dead-lettering prepares a restore
+  // request instead of mutating the workspace automatically.
   const agents = loadAgents()
   const agent = task.agentId ? agents[task.agentId] : null
   if (agent?.autoRecovery) {
     const cwd = task.projectId 
       ? path.join(WORKSPACE_DIR, 'projects', task.projectId) 
       : WORKSPACE_DIR
-    const rollback = performGuardianRollback(cwd)
-    if (rollback.ok) {
+    const recovery = prepareGuardianRecovery({
+      cwd,
+      reason,
+      requester: `task:${task.id}`,
+    })
+    if (recovery.ok && recovery.approval) {
       task.comments.push({
         id: genId(),
         author: 'Guardian',
-        text: `Auto-recovery triggered: Workspace successfully rolled back to last clean state.`,
+        text: `Recovery prepared for checkpoint ${recovery.checkpoint?.head.slice(0, 12) || 'unknown'}.\n\nApprove restore request ${recovery.approval.id} to roll the workspace back safely.`,
         createdAt: now + 1,
       })
     } else {
       task.comments.push({
         id: genId(),
         author: 'Guardian',
-        text: `Auto-recovery failed: ${rollback.reason}`,
+        text: `Recovery advisory: ${recovery.reason || 'Unable to prepare a restore request.'}`,
         createdAt: now + 1,
       })
     }

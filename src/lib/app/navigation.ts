@@ -24,6 +24,7 @@ const VIEW_TO_PATH: Record<AppView, string> = {
   usage: '/usage',
   wallets: '/wallets',
   runs: '/runs',
+  autonomy: '/autonomy',
   settings: '/settings',
   projects: '/projects',
   activity: '/activity',

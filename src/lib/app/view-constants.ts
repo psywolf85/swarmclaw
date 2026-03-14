@@ -20,6 +20,7 @@ export const VIEW_LABELS: Record<AppView, string> = {
   usage: 'Usage',
   wallets: 'Wallets',
   runs: 'Runs',
+  autonomy: 'Autonomy',
   settings: 'Settings',
   projects: 'Projects',
   activity: 'Activity',
@@ -60,6 +61,7 @@ export const VIEW_DESCRIPTIONS: Record<AppView, string> = {
   usage: 'Usage metrics, cost tracking & agent performance',
   wallets: 'Agent crypto wallets — hold funds, send SOL, manage spending',
   runs: 'Live run monitoring & history',
+  autonomy: 'Estops, incidents, and runtime autonomy controls',
   settings: 'Manage defaults, providers, secrets, and automation settings',
   projects: 'Group agents, tasks & schedules into projects',
   activity: 'Audit trail of all entity mutations',
@@ -162,6 +164,12 @@ export const VIEW_EMPTY_STATES: Record<Exclude<AppView, 'agents' | 'home'>, { ic
     description: 'View the run queue and execution history.',
     features: ['Monitor queued and running tasks', 'View run results and errors', 'Cancel pending runs', 'Automatic retry tracking'],
   },
+  autonomy: {
+    icon: 'shield',
+    title: 'Autonomy',
+    description: 'Control runtime autonomy, estops, and recent incident history.',
+    features: ['Engage autonomy-only or full estops', 'Review incident families and remediation guidance', 'Request approval-backed resume flows', 'Inspect the current runtime safety state'],
+  },
   settings: {
     icon: 'settings',
     title: 'Settings',
@@ -191,5 +199,5 @@ export const VIEW_EMPTY_STATES: Record<Exclude<AppView, 'agents' | 'home'>, { ic
 export const FULL_WIDTH_VIEWS = new Set<AppView>([
   'home', 'inbox', 'chatrooms', 'schedules', 'secrets', 'providers', 'skills',
   'connectors', 'webhooks', 'mcp_servers', 'knowledge', 'extensions',
-  'usage', 'wallets', 'runs', 'logs', 'settings', 'activity', 'projects',
+  'usage', 'wallets', 'runs', 'autonomy', 'logs', 'settings', 'activity', 'projects',
 ])

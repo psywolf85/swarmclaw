@@ -306,16 +306,6 @@ function buildSessionTranscript(session: Session, maxMessages = DEFAULT_TRANSCRI
   return lines.join('\n\n')
 }
 
-function latestAssistantToolEvents(session: Session | null): MessageToolEvent[] {
-  if (!session || !Array.isArray(session.messages)) return []
-  for (let index = session.messages.length - 1; index >= 0; index -= 1) {
-    const message = session.messages[index]
-    if (message?.role !== 'assistant') continue
-    if (Array.isArray(message.toolEvents) && message.toolEvents.length > 0) return message.toolEvents
-  }
-  return []
-}
-
 function buildReflectionPrompt(params: {
   session: Session
   source: string
@@ -574,6 +564,23 @@ function memoryCategoryForKind(kind: ReflectionMemoryKind): string {
   return 'reflection/open_loop'
 }
 
+function resolveReflectionMemoryConfidence(kind: ReflectionMemoryKind): number {
+  const configured = Number(loadSettings().memoryDefaultConfidence)
+  const fallback = Number.isFinite(configured) && configured > 0 ? configured : 0.72
+  if (kind === 'profile' || kind === 'boundary' || kind === 'significant_event') return Math.max(fallback, 0.82)
+  if (kind === 'communication' || kind === 'relationship' || kind === 'open_loop') return Math.max(fallback, 0.76)
+  return fallback
+}
+
+function inferFollowUpAt(note: string, createdAt: number): number {
+  const explicitDate = Date.parse(note)
+  if (Number.isFinite(explicitDate) && explicitDate > createdAt) return explicitDate
+  if (/\btomorrow\b/i.test(note)) return createdAt + 24 * 3600_000
+  if (/\bnext week\b|\bin a week\b/i.test(note)) return createdAt + 7 * 24 * 3600_000
+  if (/\bnext month\b|\bin a month\b/i.test(note)) return createdAt + 30 * 24 * 3600_000
+  return createdAt + 7 * 24 * 3600_000
+}
+
 function writeReflectionMemories(params: {
   reflectionId: string
   runId: string
@@ -595,6 +602,7 @@ function writeReflectionMemories(params: {
   const memoryDb = getMemoryDb()
   const memoryIds: string[] = []
   const incidentIds = params.incidents.map((incident) => incident.id)
+  const createdAt = now()
   const groups: Array<{ kind: ReflectionMemoryKind; notes: string[] }> = [
     { kind: 'invariant', notes: params.invariants },
     { kind: 'derived', notes: params.derived },
@@ -618,6 +626,8 @@ function writeReflectionMemories(params: {
         incidentIds,
         autoWritten: true,
         tier: 'durable',
+        confidence: resolveReflectionMemoryConfidence(group.kind),
+        sourceRunId: params.runId,
       }
       if (group.kind === 'communication' || group.kind === 'relationship' || group.kind === 'profile' || group.kind === 'boundary') {
         metadata.memoryFacet = 'human'
@@ -626,7 +636,11 @@ function writeReflectionMemories(params: {
         metadata.memoryFacet = 'event'
         metadata.eventSalience = SIGNIFICANT_EVENT_RE.test(note) ? 'high' : 'medium'
       }
-      if (group.kind === 'open_loop') metadata.memoryFacet = 'followup'
+      if (group.kind === 'open_loop') {
+        metadata.memoryFacet = 'followup'
+        metadata.followUpAt = inferFollowUpAt(note, createdAt)
+        metadata.resolvedAt = null
+      }
       const entry = memoryDb.add({
         agentId: params.agentId || null,
         sessionId: params.sessionId,
@@ -660,6 +674,86 @@ export function listRunReflections(filters?: { sessionId?: string; taskId?: stri
     .filter((reflection) => (!sessionId || reflection.sessionId === sessionId) && (!taskId || reflection.taskId === taskId))
     .sort((left, right) => right.updatedAt - left.updatedAt)
     .slice(0, limit)
+}
+
+export function classifyRuntimeFailure(params: {
+  source: string
+  message: string
+}): {
+  family: NonNullable<SupervisorIncident['failureFamily']>
+  severity: SupervisorIncidentSeverity
+  remediation: string
+  repairPrompt: string
+} {
+  const normalized = `${params.source} ${params.message}`.toLowerCase()
+  if (/unauthorized|forbidden|invalid api key|authentication|401\b|403\b/.test(normalized)) {
+    return {
+      family: 'provider_auth',
+      severity: 'high',
+      remediation: 'Check credential selection, key validity, and provider account access before retrying.',
+      repairPrompt: 'Verify the configured credential and retry only after the provider auth issue is fixed.',
+    }
+  }
+  if (/rate limit|too many requests|429\b/.test(normalized)) {
+    return {
+      family: 'rate_limit',
+      severity: 'medium',
+      remediation: 'Back off, reduce concurrency, or switch providers before retrying.',
+      repairPrompt: 'Pause retries and retry later with lower concurrency or an alternate provider.',
+    }
+  }
+  if (/gateway|socket|disconnected|not connected|connection closed/.test(normalized)) {
+    return {
+      family: 'gateway_disconnected',
+      severity: 'high',
+      remediation: 'Reconnect the gateway/runtime bridge and confirm health before resuming queued work.',
+      repairPrompt: 'Re-establish the gateway connection, then replay the blocked work once connectivity is healthy.',
+    }
+  }
+  if (/browser.*failed|playwright|chromium|launch/.test(normalized)) {
+    return {
+      family: 'browser_boot',
+      severity: 'medium',
+      remediation: 'Check browser dependencies, profile locks, and local sandbox constraints.',
+      repairPrompt: 'Repair the browser runtime and rerun the step only after the browser can launch cleanly.',
+    }
+  }
+  if (/enoent|command not found|not installed|missing binary/.test(normalized)) {
+    return {
+      family: 'cli_missing',
+      severity: 'medium',
+      remediation: 'Install or configure the missing CLI/binary before retrying.',
+      repairPrompt: 'Install the missing tool or update PATH before retrying the task.',
+    }
+  }
+  if (/webhook/.test(normalized)) {
+    return {
+      family: 'webhook_delivery',
+      severity: 'medium',
+      remediation: 'Inspect webhook target health, retry policy, and payload expectations before retrying.',
+      repairPrompt: 'Validate the webhook target and payload contract, then retry delivery once fixed.',
+    }
+  }
+  if (/connector|outbox|delivery/.test(normalized)) {
+    return {
+      family: 'connector_delivery',
+      severity: 'medium',
+      remediation: 'Check connector credentials, destination addressing, and platform health before retrying.',
+      repairPrompt: 'Repair connector delivery state and resend the message once the platform is healthy.',
+    }
+  }
+  return {
+    family: 'provider_transport',
+    severity: 'medium',
+    remediation: 'Inspect upstream connectivity and transient provider errors before retrying.',
+    repairPrompt: 'Retry only after verifying the upstream transport path is healthy.',
+  }
+}
+
+export function recordSupervisorIncident(
+  incident: Omit<SupervisorIncident, 'id' | 'createdAt'>,
+): SupervisorIncident {
+  return persistIncidents([incident])[0]
 }
 
 function persistIncidents(incidents: Array<Omit<SupervisorIncident, 'id' | 'createdAt'>>): SupervisorIncident[] {
@@ -707,9 +801,7 @@ export async function observeAutonomyRunOutcome(
 
   const sessions = loadSessions()
   const session = sessions[input.sessionId] as unknown as Session | undefined
-  const toolEvents = Array.isArray(input.toolEvents) && input.toolEvents.length > 0
-    ? input.toolEvents
-    : latestAssistantToolEvents(session || null)
+  const toolEvents = Array.isArray(input.toolEvents) ? input.toolEvents : []
   const resultText = String(input.resultText || input.error || '')
   const assessment = assessAutonomyRun({
     ...input,

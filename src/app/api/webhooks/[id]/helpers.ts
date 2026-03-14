@@ -1,6 +1,6 @@
 import { genId } from '@/lib/id'
 import { NextResponse } from 'next/server'
-import { loadAgents, loadSessions, saveSessions, loadWebhooks, appendWebhookLog, upsertWebhookRetry } from '@/lib/server/storage'
+import { loadAgents, loadSessions, saveSessions, loadSettings, loadWebhooks, appendWebhookLog, upsertWebhookRetry } from '@/lib/server/storage'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
 import { enqueueSessionRun } from '@/lib/server/runtime/session-run-manager'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
@@ -9,6 +9,7 @@ import { notFound } from '@/lib/server/collection-helpers'
 import type { Session, WebhookRetryEntry } from '@/types'
 import { triggerWebhookWatchJobs } from '@/lib/server/runtime/watch-jobs'
 import { errorMessage } from '@/lib/shared-utils'
+import { guardUntrustedText, getUntrustedContentGuardMode } from '@/lib/server/untrusted-content'
 
 export type WebhookPostDeps = {
   enqueueRun: typeof enqueueSessionRun
@@ -166,7 +167,13 @@ export async function handleWebhookPost(
   }
 
   const sid = session.id
-  const payloadPreview = (rawBody || '').slice(0, 12_000)
+  const guardedPayload = guardUntrustedText({
+    text: rawBody || '',
+    source: 'webhook payload',
+    mode: getUntrustedContentGuardMode(loadSettings()),
+    trusted: false,
+  }).text
+  const payloadPreview = guardedPayload.slice(0, 12_000)
   const prompt = [
     'Webhook event received.',
     `Webhook ID: ${id}`,

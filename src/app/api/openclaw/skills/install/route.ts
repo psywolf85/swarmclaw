@@ -25,7 +25,18 @@ export async function POST(req: Request) {
       installId,
       timeoutMs: timeoutMs ?? 120_000,
     }, (timeoutMs ?? 120_000) + 5_000)
-    return NextResponse.json({ ok: true, result })
+    return NextResponse.json({
+      ok: true,
+      result,
+      audit: {
+        status: 'warn',
+        findings: [{
+          severity: 'warning',
+          code: 'gateway_managed_install',
+          message: 'Install was delegated to the gateway. Local static audit is not available for this package.',
+        }],
+      },
+    })
   } catch (err: unknown) {
     const message = errorMessage(err)
     return NextResponse.json({ error: message }, { status: 502 })

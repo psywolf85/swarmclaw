@@ -988,6 +988,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       shouldAutoCompact,
       llmCompact,
       estimateTokens,
+      estimateMessagesTokens,
       resolveCompactionReserveTokens,
     } = await import('@/lib/server/context-manager')
     const systemPromptTokens = estimateTokens(prompt)
@@ -998,9 +999,11 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       ...(attachedFiles || []),
     ].filter(Boolean).join('\n'))
     const reserveTokens = resolveCompactionReserveTokens(session.provider, session.model)
+    const promptHistoryTokens = estimateMessagesTokens(recentHistory, { includeToolEvents: false })
     if (shouldAutoCompact(recentHistory, systemPromptTokens, session.provider, session.model, 80, {
       extraTokens: pendingInputTokens + CONTEXT_WARNING_OVERHEAD_TOKENS,
       reserveTokens,
+      includeToolEvents: false,
     })) {
       const summarize = async (prompt: string): Promise<string> => {
         const response = await llm.invoke([new HumanMessage(prompt)])
@@ -1023,6 +1026,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       effectiveHistory = result.messages
       console.log(
         `[stream-agent-chat] Auto-compacted ${session.id}: ${recentHistory.length} → ${effectiveHistory.length} msgs` +
+        ` (prompt history ${promptHistoryTokens} tokens)` +
         (result.summaryAdded ? ' (LLM summary)' : ' (sliding window fallback)'),
       )
     }
@@ -1088,6 +1092,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       {
         extraTokens: pendingInputTokens + CONTEXT_WARNING_OVERHEAD_TOKENS,
         reserveTokens: resolveCompactionReserveTokens(session.provider, session.model),
+        includeToolEvents: false,
       },
     )
     if (warning) {

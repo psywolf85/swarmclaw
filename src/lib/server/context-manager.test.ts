@@ -83,6 +83,14 @@ describe('context-manager', () => {
       // Should be > just the text tokens
       assert.ok(tokens > 5, `Expected more than 5 tokens with tool events, got ${tokens}`)
     })
+
+    it('can ignore tool event tokens for prompt-only accounting', () => {
+      const msgs = [makeMsg('assistant', 'ok', [
+        { name: 'web_search', input: '{"q":"test query string here"}', output: 'result data here' },
+      ])]
+      const tokens = cm.estimateMessagesTokens(msgs, { includeToolEvents: false })
+      assert.equal(tokens, 5)
+    })
   })
 
   // --- getContextWindowSize ---
@@ -201,6 +209,17 @@ describe('context-manager', () => {
         extraTokens: 30_000,
         reserveTokens: 20_000,
       }), true)
+    })
+
+    it('can ignore tool event payloads when the prompt path does not include them', () => {
+      const msgs = [makeMsg('assistant', 'ok', [
+        { name: 'web_search', input: '{}', output: 'x'.repeat(700_000) },
+      ])]
+      assert.equal(cm.shouldAutoCompact(msgs, 0, 'anthropic', 'claude-opus-4-6', 80), true)
+      assert.equal(cm.shouldAutoCompact(msgs, 0, 'anthropic', 'claude-opus-4-6', 80, {
+        includeToolEvents: false,
+        reserveTokens: 0,
+      }), false)
     })
   })
 

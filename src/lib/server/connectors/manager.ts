@@ -115,6 +115,7 @@ import {
 import { prepareConnectorVoiceNotePayload } from './voice-note'
 import { reconcileConnectorDeliveryText } from '@/lib/server/chat-execution/chat-execution-connector-delivery'
 import { pruneIncompleteToolEvents, updateStreamedToolEvents } from '@/lib/server/chat-execution/chat-streaming-utils'
+import { guardUntrustedText, getUntrustedContentGuardMode } from '@/lib/server/untrusted-content'
 
 export {
   advanceConnectorReconnectState,
@@ -1227,7 +1228,21 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
     replyToMessageId: msg.replyToMessageId,
     threadId: msg.threadId,
   }
-  const inboundText = formatInboundUserText(msg)
+  const guardMode = getUntrustedContentGuardMode(loadSettings())
+  const trustedInbound = msg.isOwnerConversation === true
+  const guardedRawText = guardUntrustedText({
+    text: msg.text || '',
+    source: `${connector.platform} connector message`,
+    mode: guardMode,
+    trusted: trustedInbound,
+  }).text
+  const guardedInboundText = guardUntrustedText({
+    text: formatInboundUserText(msg),
+    source: `${connector.platform} connector message`,
+    mode: guardMode,
+    trusted: trustedInbound,
+  }).text
+  const inboundText = guardedInboundText
   const inboundAttachmentPaths = buildInboundAttachmentPaths(msg)
   const firstImagePath = msg.media?.find((m) => m.type === 'image')?.localPath
   const threadContextBlock = buildConnectorThreadContextBlock(msg)
@@ -1252,7 +1267,7 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
     senderId: 'user',
     senderName: msg.senderName || 'User',
     role: 'user',
-    text: msg.text || '',
+    text: guardedRawText,
     mentions,
     reactions: [],
     time: Date.now(),
@@ -1437,8 +1452,20 @@ async function routeMessage(connector: Connector, msg: InboundMessage): Promise<
     session,
     msg,
   })
-  const rawText = (msg.text || '').trim()
-  const inboundText = formatInboundUserText(msg)
+  const guardMode = getUntrustedContentGuardMode(loadSettings())
+  const trustedInbound = msg.isOwnerConversation === true
+  const rawText = guardUntrustedText({
+    text: (msg.text || '').trim(),
+    source: `${connector.platform} connector message`,
+    mode: guardMode,
+    trusted: trustedInbound,
+  }).text
+  const inboundText = guardUntrustedText({
+    text: formatInboundUserText(msg),
+    source: `${connector.platform} connector message`,
+    mode: guardMode,
+    trusted: trustedInbound,
+  }).text
   const messageSource: MessageSource = {
     platform: connector.platform,
     connectorId: connector.id,

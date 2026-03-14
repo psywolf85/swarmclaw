@@ -89,6 +89,8 @@ import {
   getEnabledCapabilitySelection,
   splitCapabilityIds,
 } from '@/lib/capability-selection'
+import { guardUntrustedText, guardUntrustedToolEvents, getUntrustedContentGuardMode } from '@/lib/server/untrusted-content'
+import { loadEstopState } from '@/lib/server/runtime/estop'
 
 export {
   shouldApplySessionFreshnessReset,
@@ -159,6 +161,16 @@ async function applyMessageLifecycleHooks(params: {
   isSynthetic?: boolean
 }): Promise<Message | null> {
   let currentMessage = params.message
+  const guardMode = getUntrustedContentGuardMode(loadSettings())
+  if (Array.isArray(currentMessage.toolEvents) && currentMessage.toolEvents.length > 0) {
+    currentMessage = {
+      ...currentMessage,
+      toolEvents: guardUntrustedToolEvents({
+        toolEvents: currentMessage.toolEvents,
+        mode: guardMode,
+      }),
+    }
+  }
   const toolEvents = Array.isArray(currentMessage.toolEvents)
     ? currentMessage.toolEvents.filter((event) => typeof event.output === 'string' || event.error === true)
     : []
@@ -625,6 +637,12 @@ function resolveApiKeyForSession(session: SessionWithCredentials, provider: Prov
 
 
 export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promise<ExecuteChatTurnResult> {
+  const estop = loadEstopState()
+  if (estop.level === 'all') {
+    throw new Error(estop.reason
+      ? `Execution is blocked because all estop is engaged: ${estop.reason}`
+      : 'Execution is blocked because all estop is engaged.')
+  }
   const { message } = input
   const {
     sessionId,
@@ -927,11 +945,17 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   const shouldPersistUserMessage = shouldPersistInboundUserMessage(internal, source)
   if (shouldPersistUserMessage) {
     const linkAnalysis = !internal ? await runLinkUnderstanding(message) : []
+    const guardedUserText = guardUntrustedText({
+      text: message,
+      source,
+      mode: getUntrustedContentGuardMode(appSettings),
+      trusted: (source === 'chat' && !internal) || internal,
+    }).text
     const nextUserMessage = await applyMessageLifecycleHooks({
       session,
       message: {
         role: 'user',
-        text: message,
+        text: guardedUserText,
         time: Date.now(),
         imagePath: imagePath || undefined,
         imageUrl: imageUrl || undefined,

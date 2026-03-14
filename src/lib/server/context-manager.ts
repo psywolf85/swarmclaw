@@ -102,13 +102,17 @@ export function estimateTokens(text: string): number {
 }
 
 /** Estimate total tokens for a message array */
-export function estimateMessagesTokens(messages: Message[]): number {
+export function estimateMessagesTokens(
+  messages: Message[],
+  options: { includeToolEvents?: boolean } = {},
+): number {
+  const includeToolEvents = options.includeToolEvents !== false
   let total = 0
   for (const m of messages) {
     // Role + overhead per message (~4 tokens)
     total += 4
     total += estimateTokens(m.text)
-    if (m.toolEvents) {
+    if (includeToolEvents && m.toolEvents) {
       for (const te of m.toolEvents) {
         total += estimateTokens(te.name) + estimateTokens(te.input)
         if (te.output) total += estimateTokens(te.output)
@@ -171,6 +175,7 @@ export interface ContextStatus {
 export interface ContextStatusOptions {
   extraTokens?: number
   reserveTokens?: number
+  includeToolEvents?: boolean
 }
 
 export function resolveCompactionReserveTokens(provider: string, model: string): number {
@@ -190,7 +195,9 @@ export function getContextStatus(
   options: ContextStatusOptions = {},
 ): ContextStatus {
   const contextWindow = getContextWindowSize(provider, model)
-  const messageTokens = estimateMessagesTokens(messages)
+  const messageTokens = estimateMessagesTokens(messages, {
+    includeToolEvents: options.includeToolEvents,
+  })
   const extraTokens = Math.max(0, Math.trunc(options.extraTokens || 0))
   const reserveTokens = Math.max(0, Math.trunc(options.reserveTokens || 0))
   const estimatedTokens = messageTokens + systemPromptTokens + extraTokens

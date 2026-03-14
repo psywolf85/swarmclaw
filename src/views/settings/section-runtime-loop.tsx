@@ -41,6 +41,20 @@ export function RuntimeLoopSection({ appSettings, patchSettings, inputClass }: S
           </div>
         </div>
 
+        <label className="block font-display text-[11px] font-600 text-text-3 uppercase tracking-[0.08em] mb-3">Estop Resume Approval</label>
+        <div className="flex items-center gap-3 mb-6">
+          <button
+            onClick={() => patchSettings({ autonomyResumeApprovalsEnabled: !(appSettings.autonomyResumeApprovalsEnabled ?? false) })}
+            className={`relative w-10 h-[22px] rounded-full transition-colors duration-200 cursor-pointer ${(appSettings.autonomyResumeApprovalsEnabled ?? false) ? 'bg-accent' : 'bg-white/[0.12]'}`}
+          >
+            <span className={`absolute top-[3px] left-[3px] w-4 h-4 rounded-full bg-white transition-transform duration-200 ${(appSettings.autonomyResumeApprovalsEnabled ?? false) ? 'translate-x-[18px]' : ''}`} />
+          </button>
+          <div>
+            <div className="text-[12px] text-text-2">Require human approval before clearing an autonomy or full estop</div>
+            <div className="text-[11px] text-text-3/60 mt-1">Disabled by default while the autonomy safety desk is still being validated. Turn it on if you want an approval gate before resumes.</div>
+          </div>
+        </div>
+
         <label className="flex items-center gap-1.5 font-display text-[11px] font-600 text-text-3 uppercase tracking-[0.08em] mb-3">Loop Mode <HintTip text="Bounded = fixed max steps. Ongoing = runs until the task completes (with a safety cap)" /></label>
         <div className="grid grid-cols-2 gap-2 mb-5">
           {([

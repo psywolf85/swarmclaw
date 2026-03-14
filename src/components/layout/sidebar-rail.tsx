@@ -343,6 +343,13 @@ export function SidebarRail({
                 <path d="M12 8v4l3 3" /><circle cx="12" cy="12" r="10" />
               </svg>
             </NavItem>
+            <NavItem view="autonomy" label="Autonomy" expanded={railExpanded} isActive={isNavActive('autonomy')} onClick={() => handleNavClick('autonomy')}>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 3l7 3v6c0 4.4-2.92 8.46-7 9-4.08-.54-7-4.6-7-9V6l7-3z" />
+                <path d="M12 8v5" />
+                <path d="M12 16h.01" />
+              </svg>
+            </NavItem>
             {isViewEnabled('wallets') && (
               <NavItem view="wallets" label="Wallets" expanded={railExpanded} isActive={isNavActive('wallets')} onClick={() => handleNavClick('wallets')}>
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

@@ -3,7 +3,7 @@
 import { create } from 'zustand'
 import type { Message, DevServerStatus, SSEEvent, ChatTraceBlock } from '../types'
 import { streamChat } from '@/lib/chat/chat'
-import { mergeCompletedAssistantMessage } from '@/lib/chat/chat-streaming-state'
+import { mergeCompletedAssistantMessage, reconcileClientMessageMetadata } from '@/lib/chat/chat-streaming-state'
 import {
   clearQueuedMessagesForSession,
   nextQueuedMessageId,
@@ -42,6 +42,7 @@ interface ChatState {
   streaming: boolean
   streamingSessionId: string | null
   streamText: string
+  assistantRenderId: string | null
 
   // Task 1: Rich status indicator
   streamPhase: 'thinking' | 'tool' | 'responding' | 'connecting'
@@ -90,7 +91,7 @@ interface ChatState {
   debugOpen: boolean
   setDebugOpen: (open: boolean) => void
 
-  sendMessage: (text: string, options?: { sessionId?: string; fromQueue?: boolean }) => Promise<void>
+  sendMessage: (text: string, options?: { sessionId?: string; fromQueue?: boolean; queuedMessageId?: string }) => Promise<void>
   editAndResend: (messageIndex: number, newText: string) => Promise<void>
   retryLastMessage: () => Promise<void>
   sendHeartbeat: (sessionId: string) => Promise<void>
@@ -156,16 +157,42 @@ function stripHiddenControlTokens(text: string): string {
   return cleaned.replace(/\n{3,}/g, '\n\n').trim()
 }
 
+function nextAssistantRenderId(): string {
+  return `assistant-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+}
+
+function reconcileMessagesForState(
+  nextMessages: Message[],
+  currentMessages: Message[],
+  assistantRenderId: string | null,
+): { messages: Message[]; assistantRenderId: string | null } {
+  const messages = reconcileClientMessageMetadata(nextMessages, currentMessages)
+  const nextAssistantRenderId = assistantRenderId && messages.some((message) => message.clientRenderId === assistantRenderId)
+    ? assistantRenderId
+    : null
+  return { messages, assistantRenderId: nextAssistantRenderId }
+}
+
 export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   streamingSessionId: null,
   streamText: '',
+  assistantRenderId: null,
   streamPhase: 'thinking',
   streamToolName: '',
   displayText: '',
   agentStatus: null,
   messages: [],
-  setMessages: (msgs) => set({ messages: msgs, toolEvents: [], hasMoreMessages: false, totalMessages: msgs.length }),
+  setMessages: (msgs) => set((s) => {
+    const next = reconcileMessagesForState(msgs, s.messages, s.assistantRenderId)
+    return {
+      messages: next.messages,
+      assistantRenderId: next.assistantRenderId,
+      toolEvents: [],
+      hasMoreMessages: false,
+      totalMessages: next.messages.length,
+    }
+  }),
   toolEvents: [],
   clearToolEvents: () => set({ toolEvents: [] }),
   lastUsage: null,
@@ -223,6 +250,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   sendMessage: async (text: string, options) => {
     const fromQueue = options?.fromQueue === true
+    const queuedMessageId = options?.queuedMessageId
     const targetSessionId = options?.sessionId || selectActiveSessionId(useAppStore.getState())
     const { pendingFiles, replyingTo } = get()
     const filesForSend = fromQueue ? [] : pendingFiles
@@ -250,10 +278,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
       ...(replyToId ? { replyToId } : {}),
     }
     clearCadence()
+    const assistantRenderId = nextAssistantRenderId()
     set((s) => ({
       streaming: true,
       streamingSessionId: sessionId,
       streamText: '',
+      assistantRenderId,
       streamPhase: 'thinking' as const,
       streamToolName: '',
       displayText: '',
@@ -261,6 +291,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       thinkingText: '',
       thinkingStartTime: Date.now(),
       messages: [...s.messages, userMsg],
+      queuedMessages: queuedMessageId ? removeQueuedMessageById(s.queuedMessages, queuedMessageId) : s.queuedMessages,
       pendingFiles: fromQueue ? s.pendingFiles : [],
       replyingTo: fromQueue ? s.replyingTo : null,
       toolEvents: [],
@@ -443,10 +474,12 @@ export const useChatStore = create<ChatState>((set, get) => ({
     if (visibleFinalText.trim()) {
       const currentToolEvents = get().toolEvents
       const thinkingSnapshot = get().thinkingText || undefined
+      const activeAssistantRenderId = get().assistantRenderId || undefined
       const assistantMsg: Message = {
         role: 'assistant',
         text: visibleFinalText.trim(),
         time: Date.now(),
+        clientRenderId: activeAssistantRenderId,
         kind: 'chat',
         thinking: thinkingSnapshot,
         toolEvents: currentToolEvents.length ? currentToolEvents.map(e => ({
@@ -470,27 +503,50 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }))
       if (get().ttsEnabled && !get().voiceConversationActive) speak(visibleFinalText)
     } else {
-      set({ streaming: false, streamingSessionId: null, streamText: '', displayText: '', streamPhase: 'thinking' as const, streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
+      set({
+        streaming: false,
+        streamingSessionId: null,
+        streamText: '',
+        assistantRenderId: null,
+        displayText: '',
+        streamPhase: 'thinking' as const,
+        streamToolName: '',
+        thinkingText: '',
+        thinkingStartTime: 0,
+      })
     }
 
     void useAppStore.getState().refreshSession(sessionId)
 
     streamCompleted = true
 
-    // Auto-dequeue only within the originating session to avoid cross-session leakage.
+    // Start the next queued turn immediately so the queued chip and transcript handoff
+    // happen in one local state transition.
     if (selectActiveSessionId(useAppStore.getState()) === sessionId) {
-      const nextQueued = get().shiftQueuedMessageForSession(sessionId)
+      const nextQueued = get().queuedMessages.find((item) => item.sessionId === sessionId)
       if (nextQueued) {
-        setTimeout(() => {
-          void get().sendMessage(nextQueued.text, { sessionId, fromQueue: true })
-        }, 100)
+        void get().sendMessage(nextQueued.text, {
+          sessionId,
+          fromQueue: true,
+          queuedMessageId: nextQueued.id,
+        })
       }
     }
     } finally {
       // Guarantee cadence interval is cleared even if streamChat throws
       clearCadence()
       if (get().streaming) {
-        set({ streaming: false, streamingSessionId: null, streamText: '', displayText: '', streamPhase: 'thinking' as const, streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
+        set({
+          streaming: false,
+          streamingSessionId: null,
+          streamText: '',
+          assistantRenderId: null,
+          displayText: '',
+          streamPhase: 'thinking' as const,
+          streamToolName: '',
+          thinkingText: '',
+          thinkingStartTime: 0,
+        })
       }
       if (!streamCompleted) {
         get().clearQueuedMessagesForSession(sessionId)
@@ -519,7 +575,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       if (msgsRes.ok) {
         const msgs = await msgsRes.json()
-        set({ messages: msgs })
+        get().setMessages(msgs)
       }
       // Re-send with the new text
       await get().sendMessage(newText)
@@ -547,7 +603,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       if (msgsRes.ok) {
         const msgs = await msgsRes.json()
-        set({ messages: msgs })
+        get().setMessages(msgs)
       }
       // Re-send the last user message through the normal SSE flow
       if (imagePath) {
@@ -675,12 +731,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       if (res.ok) {
         const data = await res.json() as { messages: Message[]; total: number; hasMore: boolean; startIndex: number }
-        set((s) => ({
-          messages: [...data.messages, ...s.messages],
-          hasMoreMessages: data.hasMore,
-          totalMessages: data.total,
-          loadingMore: false,
-        }))
+        set((s) => {
+          const next = reconcileMessagesForState(
+            [...data.messages, ...s.messages],
+            s.messages,
+            s.assistantRenderId,
+          )
+          return {
+            messages: next.messages,
+            assistantRenderId: next.assistantRenderId,
+            hasMoreMessages: data.hasMore,
+            totalMessages: data.total,
+            loadingMore: false,
+          }
+        })
       } else {
         set({ loadingMore: false })
       }
@@ -703,6 +767,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
       }
     }
     clearCadence()
-    set({ streaming: false, streamingSessionId: null, streamText: '', displayText: '', streamPhase: 'thinking' as const, streamToolName: '' })
+    set({
+      streaming: false,
+      streamingSessionId: null,
+      streamText: '',
+      assistantRenderId: null,
+      displayText: '',
+      streamPhase: 'thinking' as const,
+      streamToolName: '',
+    })
   },
 }))

@@ -32,6 +32,7 @@ export function ChatroomInput({ agents, onSend, disabled }: Props) {
   const streaming = useChatroomStore((s) => s.streaming)
   const queuedMessages = useChatroomStore((s) => s.queuedMessages)
   const removeQueuedMessage = useChatroomStore((s) => s.removeQueuedMessage)
+  const clearQueuedMessages = useChatroomStore((s) => s.clearQueuedMessages)
 
   const resizeTextarea = useCallback(() => {
     const node = inputRef.current
@@ -158,6 +159,7 @@ export function ChatroomInput({ agents, onSend, disabled }: Props) {
     ? ['all', ...filteredAgents.map((a) => a.name)]
     : []
   const visibleQueuedMessages = queuedMessages.filter((item) => item.chatroomId === chatroomId)
+  const nextQueuedMessage = visibleQueuedMessages[0]
 
   const handleSendCurrent = useCallback(() => {
     if ((!text.trim() && !pendingFiles.length) || disabled) return
@@ -237,30 +239,87 @@ export function ChatroomInput({ agents, onSend, disabled }: Props) {
       )}
 
       {visibleQueuedMessages.length > 0 && (
-        <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="label-mono text-amber-400/70">Queued</span>
-          {visibleQueuedMessages.map((item) => (
-            <span key={item.id} className="inline-flex items-center gap-1.5 rounded-[8px] border border-amber-500/15 bg-amber-500/10 px-2.5 py-1 text-[11px] text-amber-300">
-              <span className="truncate max-w-[180px]">
-                {item.text.trim() || `Attachment${item.pendingFiles.length > 1 ? 's' : ''}`}
-              </span>
-              {item.pendingFiles.length > 0 && (
-                <span className="rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px]">
-                  +{item.pendingFiles.length} file{item.pendingFiles.length === 1 ? '' : 's'}
+        <div className="mb-2 overflow-hidden rounded-[14px] border border-amber-500/18 bg-[linear-gradient(180deg,rgba(245,158,11,0.10)_0%,rgba(245,158,11,0.04)_100%)] shadow-[0_10px_32px_rgba(245,158,11,0.06)]">
+          <div className="flex items-start justify-between gap-3 border-b border-amber-500/12 px-3.5 py-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="relative flex h-2.5 w-2.5 shrink-0">
+                  <span className="absolute inline-flex h-2.5 w-2.5 rounded-full bg-amber-400/30 animate-ping" />
+                  <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-300" />
                 </span>
-              )}
+                <span className="label-mono text-amber-300/80">Round queue</span>
+                <span className="rounded-pill border border-amber-400/15 bg-amber-400/10 px-2 py-0.5 text-[10px] font-600 text-amber-200">
+                  {visibleQueuedMessages.length}
+                </span>
+              </div>
+              <div className="mt-1 text-[12px] text-amber-100/80">
+                {nextQueuedMessage
+                  ? `Next speaker prompt is ready${nextQueuedMessage.pendingFiles.length ? ` with ${nextQueuedMessage.pendingFiles.length} attachment${nextQueuedMessage.pendingFiles.length === 1 ? '' : 's'}` : ''}.`
+                  : 'Queued prompts send automatically when the current round finishes.'}
+              </div>
+            </div>
+            {chatroomId && visibleQueuedMessages.length > 1 && (
               <button
                 type="button"
-                onClick={() => removeQueuedMessage(item.id)}
-                className="border-none bg-transparent p-0 text-amber-300/70 hover:text-amber-200 cursor-pointer"
+                onClick={() => clearQueuedMessages(chatroomId)}
+                className="shrink-0 rounded-pill border border-amber-400/15 bg-transparent px-3 py-1.5 text-[11px] font-600 text-amber-200/80 transition-all hover:border-amber-300/30 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
               >
-                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="18" y1="6" x2="6" y2="18" />
-                  <line x1="6" y1="6" x2="18" y2="18" />
-                </svg>
+                Clear queue
               </button>
-            </span>
-          ))}
+            )}
+          </div>
+          <div className="max-h-[188px] space-y-2 overflow-y-auto px-2.5 py-2.5">
+            {visibleQueuedMessages.map((item, index) => (
+              <div
+                key={item.id}
+                className={`flex items-start gap-3 rounded-[12px] border px-3 py-2.5 ${
+                  index === 0
+                    ? 'border-amber-300/20 bg-amber-300/[0.08]'
+                    : 'border-white/[0.05] bg-white/[0.03]'
+                }`}
+              >
+                <div className={`flex h-7 min-w-7 items-center justify-center rounded-[9px] px-2 text-[10px] font-700 uppercase tracking-[0.12em] ${
+                  index === 0
+                    ? 'bg-amber-300/15 text-amber-100'
+                    : 'bg-white/[0.06] text-text-3'
+                }`}>
+                  {index === 0 ? 'Next' : index + 1}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className={`text-[11px] font-600 ${index === 0 ? 'text-amber-100' : 'text-text-2'}`}>
+                      {index === 0 ? 'Next round prompt' : 'Queued after that'}
+                    </span>
+                    {item.pendingFiles.length > 0 && (
+                      <span className="rounded-pill border border-amber-400/15 bg-amber-400/10 px-2 py-0.5 text-[10px] text-amber-200">
+                        +{item.pendingFiles.length} file{item.pendingFiles.length === 1 ? '' : 's'}
+                      </span>
+                    )}
+                    {item.replyingTo && (
+                      <span className="rounded-pill border border-white/[0.08] bg-white/[0.04] px-2 py-0.5 text-[10px] text-text-3">
+                        Reply queued
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-1 break-words text-[12px] leading-5 text-text/90 m-0">
+                    {item.text.trim() || `Attachment${item.pendingFiles.length === 1 ? '' : 's'} only`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeQueuedMessage(item.id)}
+                  className="shrink-0 rounded-[8px] border border-transparent bg-transparent p-1.5 text-amber-300/60 transition-all hover:border-amber-300/20 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
+                  aria-label={`Remove queued chatroom message ${index + 1}`}
+                  title="Remove from queue"
+                >
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <line x1="18" y1="6" x2="6" y2="18" />
+                    <line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 

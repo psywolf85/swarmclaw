@@ -6,6 +6,7 @@ import { loadSkills, saveSkills } from '@/lib/server/storage'
 import type { ClawHubSkillBundle } from '@/lib/server/skills/clawhub-client'
 import { fetchClawHubSkillBundle, fetchSkillContent } from '@/lib/server/skills/clawhub-client'
 import { clearDiscoveredSkillsCache, resolveWorkspaceSkillsDir } from '@/lib/server/skills/skill-discovery'
+import { auditSkillBundleFiles, auditSkillContent, mergeSkillAuditResults } from '@/lib/server/skills/skill-audit'
 import { normalizeSkillPayload } from '@/lib/server/skills/skills-normalize'
 
 function sanitizeSkillDirName(value: string): string {
@@ -33,11 +34,8 @@ function stripSharedTopLevelDir(paths: string[]): string[] {
     : paths
 }
 
-async function materializeClawHubBundle(url: string): Promise<string | null> {
-  const bundle = await fetchClawHubSkillBundle(url)
-  if (!bundle) return null
-  await writeClawHubBundleToWorkspace(bundle)
-  return bundle.content
+async function materializeClawHubBundle(url: string): Promise<ClawHubSkillBundle | null> {
+  return fetchClawHubSkillBundle(url)
 }
 
 async function writeClawHubBundleToWorkspace(bundle: ClawHubSkillBundle): Promise<void> {
@@ -73,10 +71,12 @@ export async function POST(req: Request) {
   const body = await req.json()
   const { name, description, url, author, tags } = body
   let { content } = body
+  let bundle: ClawHubSkillBundle | null = null
 
   if (!content) {
     try {
-      content = await materializeClawHubBundle(url) || await fetchSkillContent(url)
+      bundle = await materializeClawHubBundle(url)
+      content = bundle?.content || await fetchSkillContent(url)
     } catch (err: unknown) {
       return NextResponse.json(
         { error: err instanceof Error ? err.message : 'Failed to fetch skill content' },
@@ -93,6 +93,21 @@ export async function POST(req: Request) {
     author,
     tags,
   })
+  const audit = mergeSkillAuditResults(
+    bundle ? auditSkillBundleFiles(bundle.files) : { status: 'pass', findings: [] },
+    auditSkillContent({
+      content,
+      requirements: normalized.skillRequirements,
+      installOptions: normalized.installOptions,
+      primaryEnv: normalized.primaryEnv,
+    }),
+  )
+  if (audit.status === 'block') {
+    return NextResponse.json({ error: 'Skill blocked by static audit', audit }, { status: 400 })
+  }
+  if (bundle) {
+    await writeClawHubBundleToWorkspace(bundle)
+  }
 
   const skills = loadSkills()
   const duplicate = Object.values(skills).find((skill) => {
@@ -131,5 +146,5 @@ export async function POST(req: Request) {
   }
   saveSkills(skills)
   clearDiscoveredSkillsCache()
-  return NextResponse.json(skills[id])
+  return NextResponse.json({ ...skills[id], audit })
 }

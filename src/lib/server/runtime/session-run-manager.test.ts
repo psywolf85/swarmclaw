@@ -240,6 +240,19 @@ describe('session-run-manager', () => {
       assert.ok(run.queuedAt > 0)
     })
 
+    it('persists run records and replay events in storage', () => {
+      const result = enqueue({
+        sessionId: 'sess-persisted',
+        message: 'Persist me',
+        source: 'chat',
+      })
+
+      const persisted = storage.loadRuntimeRuns()[result.runId]
+      assert.ok(persisted)
+      assert.equal(persisted.messagePreview, 'Persist me')
+      assert.equal(mgr.listRunEvents(result.runId).length > 0, true)
+    })
+
     it('truncates message preview to 140 chars', () => {
       const longMessage = 'A'.repeat(200)
       const result = enqueue({
@@ -846,6 +859,93 @@ describe('session-run-manager', () => {
       const userRunRecord = mgr.getRunById(userRun.runId)
       assert.ok(userRunRecord)
       assert.notEqual(userRunRecord.status, 'cancelled', 'non-heartbeat run should not be cancelled')
+    })
+  })
+
+  describe('restart recovery', () => {
+    it('marks stale persisted runs interrupted and only requeues background sources once', () => {
+      const output = runWithTempDataDir<{
+        interruptedChat: boolean
+        recoveredRunCount: number
+        recoveredFromOriginal: boolean
+      }>(`
+        const storageMod = await import('./src/lib/server/storage.ts')
+        const storage = storageMod.default || storageMod
+        const now = Date.now()
+        const agents = storage.loadAgents()
+        agents.agent_test = {
+          id: 'agent_test',
+          name: 'Recovery Agent',
+          provider: 'anthropic',
+          model: 'claude-sonnet-4-20250514',
+          systemPrompt: 'Test agent',
+        }
+        storage.saveAgents(agents)
+        const sessions = storage.loadSessions()
+        sessions.sess_bg = {
+          id: 'sess_bg',
+          agentId: 'agent_test',
+          messages: [],
+          createdAt: now,
+          lastActiveAt: now,
+        }
+        sessions.sess_chat = {
+          id: 'sess_chat',
+          agentId: 'agent_test',
+          messages: [],
+          createdAt: now,
+          lastActiveAt: now,
+        }
+        storage.saveSessions(sessions)
+        storage.upsertRuntimeRun('run_bg', {
+          id: 'run_bg',
+          sessionId: 'sess_bg',
+          source: 'heartbeat',
+          internal: true,
+          mode: 'collect',
+          status: 'queued',
+          messagePreview: 'heartbeat',
+          queuedAt: now - 1000,
+          recoveryPayload: {
+            message: 'resume heartbeat',
+            internal: true,
+            source: 'heartbeat',
+            mode: 'collect',
+          },
+        })
+        storage.upsertRuntimeRun('run_chat', {
+          id: 'run_chat',
+          sessionId: 'sess_chat',
+          source: 'chat',
+          internal: false,
+          mode: 'followup',
+          status: 'running',
+          messagePreview: 'chat',
+          queuedAt: now - 1000,
+          recoveryPayload: {
+            message: 'user chat',
+            internal: false,
+            source: 'chat',
+            mode: 'followup',
+          },
+        })
+        const mgrMod = await import('./src/lib/server/runtime/session-run-manager.ts')
+        const mgr = mgrMod.default || mgrMod
+        mgr.listRuns()
+        await new Promise((resolve) => setTimeout(resolve, 25))
+        const runs = Object.values(storage.loadRuntimeRuns())
+        const originalChat = runs.find((run) => run.id === 'run_chat')
+        const recovered = runs.filter((run) => run.recoveredFromRestart === true)
+        console.log(JSON.stringify({
+          interruptedChat: !!originalChat?.interruptedAt && originalChat?.status === 'cancelled',
+          recoveredRunCount: recovered.length,
+          recoveredFromOriginal: recovered[0]?.recoveredFromRunId === 'run_bg',
+        }))
+      `, { prefix: 'swarmclaw-session-run-recovery-' })
+
+      assert.equal(output.interruptedChat, true)
+      assert.equal(output.recoveredRunCount, 1)
+      assert.equal(output.recoveredFromOriginal, true)
     })
   })
 

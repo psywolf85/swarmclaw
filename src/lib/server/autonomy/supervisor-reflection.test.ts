@@ -278,4 +278,81 @@ describe('supervisor-reflection', () => {
     assert.deepEqual(output.significantEventNotes, ['Moving to Lisbon next month.'])
     assert.deepEqual(output.openLoopNotes, ['Check in again once the move is complete.'])
   })
+
+  it('does not reuse stale assistant tool events when the current chat turn used none', () => {
+    const output = runWithTempDataDir(`
+      const storageMod = await import('@/lib/server/storage')
+      const storage = storageMod.default || storageMod['module.exports'] || storageMod
+      const reflectionMod = await import('@/lib/server/autonomy/supervisor-reflection')
+      const mod = reflectionMod.default || reflectionMod['module.exports'] || reflectionMod
+
+      storage.saveAgents({
+        'agent-a': {
+          id: 'agent-a',
+          name: 'Agent A',
+          provider: 'openai',
+          model: 'gpt-test',
+        },
+      })
+
+      storage.saveSessions({
+        s3: {
+          id: 's3',
+          name: 'Noise Check',
+          cwd: process.cwd(),
+          user: 'tester',
+          provider: 'openai',
+          model: 'gpt-test',
+          claudeSessionId: null,
+          messages: [
+            {
+              role: 'assistant',
+              text: 'Old heartbeat reply with browser-heavy history.',
+              time: 1,
+              toolEvents: [
+                { name: 'browser', input: '{"action":"open"}' },
+                { name: 'browser', input: '{"action":"click"}' },
+                { name: 'browser', input: '{"action":"click"}' },
+                { name: 'browser', input: '{"action":"type"}' },
+                { name: 'browser', input: '{"action":"wait"}' },
+              ],
+            },
+            { role: 'user', text: 'Hello?', time: 2 },
+            { role: 'assistant', text: 'Hello! I am here and ready to help.', time: 3 },
+          ],
+          createdAt: 1,
+          lastActiveAt: 3,
+          sessionType: 'human',
+          agentId: 'agent-a',
+        },
+      })
+
+      storage.saveSettings({
+        supervisorEnabled: true,
+        supervisorRuntimeScope: 'both',
+        supervisorNoProgressLimit: 2,
+        supervisorRepeatedToolLimit: 3,
+        reflectionEnabled: false,
+        reflectionAutoWriteMemory: false,
+      })
+
+      const result = await mod.observeAutonomyRunOutcome({
+        runId: 'run-no-tools',
+        sessionId: 's3',
+        agentId: 'agent-a',
+        source: 'chat',
+        status: 'completed',
+        resultText: 'Hello! I am here and ready to help.',
+        sourceMessage: 'Hello?',
+      })
+
+      console.log(JSON.stringify({
+        incidentKinds: result.incidents.map((incident) => incident.kind),
+        repeatedSummaries: result.incidents.filter((incident) => incident.kind === 'repeated_tool').map((incident) => incident.summary),
+      }))
+    `)
+
+    assert.deepEqual(output.incidentKinds, [])
+    assert.deepEqual(output.repeatedSummaries, [])
+  })
 })

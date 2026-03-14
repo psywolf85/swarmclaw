@@ -5,7 +5,7 @@ import { api } from '@/lib/app/api-client'
 import { useNow } from '@/hooks/use-now'
 import { useWs } from '@/hooks/use-ws'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
-import type { SessionRunRecord, SessionRunStatus } from '@/types'
+import type { RunEventRecord, SessionRunRecord, SessionRunStatus } from '@/types'
 import { PageLoader } from '@/components/ui/page-loader'
 import { formatElapsed } from '@/lib/format-display'
 
@@ -37,6 +37,8 @@ export function RunList() {
   const [autoRefresh, setAutoRefresh] = useState(false)
   const [statusFilter, setStatusFilter] = useState<SessionRunStatus | null>(null)
   const [selected, setSelected] = useState<SessionRunRecord | null>(null)
+  const [selectedEvents, setSelectedEvents] = useState<RunEventRecord[]>([])
+  const [eventsLoading, setEventsLoading] = useState(false)
 
   const fetchRuns = useCallback(async () => {
     try {
@@ -52,6 +54,34 @@ export function RunList() {
   }, [fetchRuns])
 
   useWs('runs', fetchRuns, autoRefresh ? 3000 : undefined)
+
+  useEffect(() => {
+    if (!selected) return
+    let cancelled = false
+    api<RunEventRecord[]>('GET', `/runs/${selected.id}/events?limit=200`)
+      .then((events) => {
+        if (cancelled) return
+        setSelectedEvents(Array.isArray(events) ? events : [])
+      })
+      .catch(() => {
+        if (!cancelled) setSelectedEvents([])
+      })
+      .finally(() => {
+        if (!cancelled) setEventsLoading(false)
+      })
+    return () => { cancelled = true }
+  }, [selected])
+
+  const closeSelected = useCallback(() => {
+    setSelected(null)
+    setSelectedEvents([])
+    setEventsLoading(false)
+  }, [])
+
+  const openSelected = useCallback((run: SessionRunRecord) => {
+    setSelected(run)
+    setEventsLoading(true)
+  }, [])
 
   const filtered = statusFilter ? runs.filter((r) => r.status === statusFilter) : runs
 
@@ -113,7 +143,7 @@ export function RunList() {
             {filtered.map((run, idx) => (
               <button
                 key={run.id}
-                onClick={() => setSelected(run)}
+                onClick={() => openSelected(run)}
                 className="w-full text-left p-3 rounded-[10px] border border-white/[0.06] bg-surface hover:bg-surface-2 transition-all cursor-pointer block hover:scale-[1.01] active:scale-[0.99]"
                 style={{
                   animation: 'fade-up 0.4s var(--ease-spring) both',
@@ -140,7 +170,7 @@ export function RunList() {
       </div>
 
       {/* Detail Sheet */}
-      <BottomSheet open={!!selected} onClose={() => setSelected(null)}>
+      <BottomSheet open={!!selected} onClose={closeSelected}>
         {selected && (
           <div style={{ animation: 'fade-in 0.3s ease' }}>
             <div className="mb-6">
@@ -212,6 +242,32 @@ export function RunList() {
                 </pre>
               </div>
             )}
+
+            <div className="mb-2">
+              <label className="block font-display text-[12px] font-600 text-text-2 uppercase tracking-[0.08em] mb-2">Replay</label>
+              <div className="rounded-[12px] border border-white/[0.04] bg-white/[0.02] max-h-[260px] overflow-auto">
+                {eventsLoading ? (
+                  <div className="p-4 text-[11px] text-text-3/60">Loading events...</div>
+                ) : selectedEvents.length === 0 ? (
+                  <div className="p-4 text-[11px] text-text-3/60">No persisted replay events for this run.</div>
+                ) : (
+                  <div className="divide-y divide-white/[0.04]">
+                    {selectedEvents.map((event) => (
+                      <div key={event.id} className="px-4 py-3">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="text-[10px] text-text-3/50 font-mono">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                          <span className="text-[10px] uppercase tracking-[0.08em] text-text-3/60">{event.phase}</span>
+                          {event.status && <span className="text-[10px] text-text-3/60">{event.status}</span>}
+                        </div>
+                        <div className="text-[11px] text-text-2 whitespace-pre-wrap break-words">
+                          {event.summary || event.event.text || event.event.toolOutput || event.event.toolName || event.event.t}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </BottomSheet>

@@ -47,8 +47,14 @@ const DECAY_EXEMPT_CATEGORIES = new Set([
  * Determine whether a memory entry is exempt from temporal decay.
  * Pinned memories and core/reference categories are evergreen.
  */
-export function isDecayExempt(entry: { pinned?: boolean; category?: string }): boolean {
+export function isDecayExempt(entry: { pinned?: boolean; category?: string; metadata?: Record<string, unknown> }): boolean {
   if (entry.pinned) return true
   if (entry.category && DECAY_EXEMPT_CATEGORIES.has(entry.category)) return true
+  if (
+    entry.category === 'reflection/open_loop'
+    && (!entry.metadata || typeof entry.metadata.resolvedAt !== 'number' || !Number.isFinite(entry.metadata.resolvedAt))
+  ) {
+    return true
+  }
   return false
 }

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
-import { listRuns, type SessionRunStatus } from '@/lib/server/runtime/session-run-manager'
+import { listRuns } from '@/lib/server/runtime/session-run-manager'
+import type { SessionRunStatus } from '@/types'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)

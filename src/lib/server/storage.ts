@@ -17,12 +17,16 @@ import type {
   Agent,
   AppNotification,
   BoardTask,
+  EstopState,
   ExternalAgentRuntime,
   GatewayProfile,
+  GuardianCheckpoint,
   LearnedSkill,
   Message,
+  RunEventRecord,
   RunReflection,
   Session,
+  SessionRunRecord,
   SkillSuggestion,
   SupervisorIncident,
 } from '@/types'
@@ -201,6 +205,9 @@ const COLLECTIONS = [
   'skill_suggestions',
   'supervisor_incidents',
   'run_reflections',
+  'runtime_runs',
+  'runtime_run_events',
+  'runtime_estop',
   'connectors',
   'documents',
   'webhooks',
@@ -222,6 +229,7 @@ const COLLECTIONS = [
   'souls',
   'benchmarks',
   'approvals',
+  'guardian_checkpoints',
   'browser_sessions',
   'watch_jobs',
   'delegation_jobs',
@@ -1597,6 +1605,38 @@ export const loadRunReflections = runReflectionsStore.load as () => Record<strin
 export const saveRunReflections = runReflectionsStore.save as (items: Record<string, RunReflection>) => void
 export const loadRunReflection = runReflectionsStore.loadItem as (id: string) => RunReflection | null
 export const upsertRunReflection = runReflectionsStore.upsert as (id: string, value: RunReflection) => void
+
+// --- Runtime Run Ledger ---
+const runtimeRunsStore = createCollectionStore('runtime_runs')
+export const loadRuntimeRuns = runtimeRunsStore.load as () => Record<string, SessionRunRecord>
+export const saveRuntimeRuns = runtimeRunsStore.save as (items: Record<string, SessionRunRecord>) => void
+export const loadRuntimeRun = runtimeRunsStore.loadItem as (id: string) => SessionRunRecord | null
+export const upsertRuntimeRun = runtimeRunsStore.upsert as (id: string, value: SessionRunRecord) => void
+export const patchRuntimeRun = runtimeRunsStore.patch as (
+  id: string,
+  updater: (current: SessionRunRecord | null) => SessionRunRecord | null,
+) => SessionRunRecord | null
+
+const runtimeRunEventsStore = createCollectionStore('runtime_run_events')
+export const loadRuntimeRunEvents = runtimeRunEventsStore.load as () => Record<string, RunEventRecord>
+export const saveRuntimeRunEvents = runtimeRunEventsStore.save as (items: Record<string, RunEventRecord>) => void
+export const upsertRuntimeRunEvent = runtimeRunEventsStore.upsert as (id: string, value: RunEventRecord) => void
+
+const runtimeEstopStore = createCollectionStore('runtime_estop')
+const ESTOP_STATE_ID = 'global'
+export const loadPersistedEstopState = () => runtimeEstopStore.loadItem(ESTOP_STATE_ID) as EstopState | null
+export const savePersistedEstopState = (value: EstopState) => runtimeEstopStore.upsert(ESTOP_STATE_ID, value)
+
+// --- Guardian Checkpoints ---
+const guardianCheckpointsStore = createCollectionStore('guardian_checkpoints')
+export const loadGuardianCheckpoints = guardianCheckpointsStore.load as () => Record<string, GuardianCheckpoint>
+export const saveGuardianCheckpoints = guardianCheckpointsStore.save as (items: Record<string, GuardianCheckpoint>) => void
+export const loadGuardianCheckpoint = guardianCheckpointsStore.loadItem as (id: string) => GuardianCheckpoint | null
+export const upsertGuardianCheckpoint = guardianCheckpointsStore.upsert as (id: string, value: GuardianCheckpoint) => void
+export const patchGuardianCheckpoint = guardianCheckpointsStore.patch as (
+  id: string,
+  updater: (current: GuardianCheckpoint | null) => GuardianCheckpoint | null,
+) => GuardianCheckpoint | null
 
 // --- External Agent Runtimes ---
 const externalAgentsStore = createCollectionStore('external_agents')

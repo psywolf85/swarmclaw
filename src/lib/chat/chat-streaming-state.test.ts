@@ -2,10 +2,12 @@ import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import type { Message } from '@/types'
 import {
+  buildStreamingAwareMessageList,
   materializeStreamingAssistantArtifacts,
   mergeCompletedAssistantMessage,
   messagesDiffer,
   pruneStreamingAssistantArtifacts,
+  reconcileClientMessageMetadata,
   shouldHidePersistedStreamingAssistantMessage,
   upsertStreamingAssistantArtifact,
 } from './chat-streaming-state'
@@ -26,6 +28,62 @@ describe('chat-streaming-state', () => {
     assert.equal(
       shouldHidePersistedStreamingAssistantMessage(message, { localStreaming: true, hasLiveArtifacts: false }),
       false,
+    )
+  })
+
+  it('replaces hidden streaming artifacts with a synthetic inline live assistant row', () => {
+    const messages: Message[] = [
+      { role: 'user', text: 'hello', time: 1 },
+      { role: 'assistant', text: 'partial', time: 2, streaming: true },
+    ]
+
+    assert.deepEqual(
+      buildStreamingAwareMessageList(messages, {
+        localStreaming: true,
+        hasLiveArtifacts: true,
+        assistantRenderId: 'render-1',
+        displayText: 'final answer',
+        thinkingText: 'working...',
+      }),
+      [
+        { role: 'user', text: 'hello', time: 1 },
+        {
+          role: 'assistant',
+          text: 'final answer',
+          time: 0,
+          kind: 'chat',
+          streaming: true,
+          thinking: 'working...',
+          clientRenderId: 'render-1',
+        },
+      ],
+    )
+  })
+
+  it('adds a synthetic inline live row for tool-only turns', () => {
+    const messages: Message[] = [
+      { role: 'user', text: 'hello', time: 1 },
+    ]
+
+    assert.deepEqual(
+      buildStreamingAwareMessageList(messages, {
+        localStreaming: true,
+        hasLiveArtifacts: true,
+        assistantRenderId: 'render-2',
+        displayText: '',
+        thinkingText: '',
+      }),
+      [
+        { role: 'user', text: 'hello', time: 1 },
+        {
+          role: 'assistant',
+          text: '',
+          time: 0,
+          kind: 'chat',
+          streaming: true,
+          clientRenderId: 'render-2',
+        },
+      ],
     )
   })
 
@@ -197,5 +255,21 @@ describe('chat-streaming-state', () => {
 
     assert.equal(messagesDiffer(next, previous), true)
     assert.equal(messagesDiffer(next, next), false)
+  })
+
+  it('preserves client render ids when refreshed messages reconcile to the same content', () => {
+    const previous: Message[] = [
+      { role: 'user', text: 'hello', time: 1 },
+      { role: 'assistant', text: 'final', time: 2, clientRenderId: 'render-3' },
+    ]
+    const next: Message[] = [
+      { role: 'user', text: 'hello', time: 10 },
+      { role: 'assistant', text: 'final', time: 20 },
+    ]
+
+    assert.deepEqual(reconcileClientMessageMetadata(next, previous), [
+      { role: 'user', text: 'hello', time: 10 },
+      { role: 'assistant', text: 'final', time: 20, clientRenderId: 'render-3' },
+    ])
   })
 })

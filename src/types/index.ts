@@ -11,6 +11,8 @@ export interface Message {
   role: 'user' | 'assistant'
   text: string
   time: number
+  /** Client-only render identity used to keep in-progress transcript rows stable. */
+  clientRenderId?: string
   imagePath?: string
   imageUrl?: string
   attachedFiles?: string[]
@@ -1318,7 +1320,7 @@ export interface MemoryEntry {
 }
 
 export type SessionType = 'human'
-export type AppView = 'home' | 'agents' | 'inbox' | 'chatrooms' | 'schedules' | 'memory' | 'tasks' | 'secrets' | 'providers' | 'skills' | 'connectors' | 'webhooks' | 'mcp_servers' | 'knowledge' | 'extensions' | 'usage' | 'wallets' | 'runs' | 'logs' | 'settings' | 'projects' | 'activity'
+export type AppView = 'home' | 'agents' | 'inbox' | 'chatrooms' | 'schedules' | 'memory' | 'tasks' | 'secrets' | 'providers' | 'skills' | 'connectors' | 'webhooks' | 'mcp_servers' | 'knowledge' | 'extensions' | 'usage' | 'wallets' | 'runs' | 'autonomy' | 'logs' | 'settings' | 'projects' | 'activity'
 
 // --- Chatrooms ---
 
@@ -1442,6 +1444,30 @@ export interface AppNotification {
 
 export type SessionRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
 
+export interface SessionRunHeartbeatConfig {
+  ackMaxChars: number
+  showOk: boolean
+  showAlerts: boolean
+  target: string | null
+  deliveryMode?: 'default' | 'tool_only' | 'silent'
+  lightContext?: boolean
+}
+
+export interface SessionRunRecoveryPayload {
+  message: string
+  imagePath?: string
+  imageUrl?: string
+  attachedFiles?: string[]
+  internal: boolean
+  source: string
+  mode: string
+  maxRuntimeMs?: number
+  modelOverride?: string
+  heartbeatConfig?: SessionRunHeartbeatConfig
+  replyToId?: string
+  executionGroupKey?: string
+}
+
 export interface SessionRunRecord {
   id: string
   sessionId: string
@@ -1454,9 +1480,36 @@ export interface SessionRunRecord {
   queuedAt: number
   startedAt?: number
   endedAt?: number
+  interruptedAt?: number
+  interruptedReason?: string
   error?: string
   resultPreview?: string
+  recoveredFromRestart?: boolean
+  recoveredFromRunId?: string
+  recoveryPayload?: SessionRunRecoveryPayload
 }
+
+export interface RunEventRecord {
+  id: string
+  runId: string
+  sessionId: string
+  timestamp: number
+  phase: 'status' | 'event'
+  status?: SessionRunStatus
+  summary?: string
+  event: SSEEvent
+}
+
+export type RuntimeFailureFamily =
+  | 'provider_auth'
+  | 'provider_transport'
+  | 'gateway_disconnected'
+  | 'browser_boot'
+  | 'cli_missing'
+  | 'rate_limit'
+  | 'webhook_delivery'
+  | 'connector_delivery'
+  | 'workspace_recovery'
 
 export type SupervisorIncidentKind =
   | 'run_error'
@@ -1464,6 +1517,7 @@ export type SupervisorIncidentKind =
   | 'no_progress'
   | 'budget_pressure'
   | 'context_pressure'
+  | 'runtime_failure'
 
 export type SupervisorIncidentSeverity = 'low' | 'medium' | 'high'
 
@@ -1479,6 +1533,9 @@ export interface SupervisorIncident {
   summary: string
   details?: string | null
   toolName?: string | null
+  failureFamily?: RuntimeFailureFamily | null
+  remediation?: string | null
+  repairPrompt?: string | null
   autoAction?: 'replan' | 'compact' | 'block' | 'budget_trim' | null
   createdAt: number
 }
@@ -1527,6 +1584,7 @@ export interface WebhookLogEntry {
 
 // --- App Settings ---
 export type LoopMode = 'bounded' | 'ongoing'
+export type AutonomyEstopLevel = 'none' | 'autonomy' | 'all'
 
 export interface GoalContract {
   objective: string
@@ -1582,6 +1640,7 @@ export interface AppSettings {
   sessionMaxAgeSec?: number | null
   sessionDailyResetAt?: string | null
   sessionResetTimezone?: string | null
+  untrustedContentGuardMode?: 'off' | 'warn' | 'block'
   // Task resiliency and supervision
   defaultTaskMaxAttempts?: number
   taskRetryBackoffSec?: number
@@ -1612,6 +1671,7 @@ export interface AppSettings {
   supervisorRuntimeScope?: 'chat' | 'task' | 'both'
   supervisorNoProgressLimit?: number
   supervisorRepeatedToolLimit?: number
+  autonomyResumeApprovalsEnabled?: boolean
   reflectionEnabled?: boolean
   reflectionAutoWriteMemory?: boolean
   memoryReferenceDepth?: number
@@ -2061,12 +2121,46 @@ export interface SkillCommandDispatch {
   argMode?: 'raw'
 }
 
+export interface SkillAuditFinding {
+  severity: 'warning' | 'error'
+  code: string
+  message: string
+  path?: string
+}
+
+export interface SkillAuditResult {
+  status: 'pass' | 'warn' | 'block'
+  findings: SkillAuditFinding[]
+}
+
 export interface SkillSecuritySummary {
   level: 'low' | 'medium' | 'high'
   notes: string[]
   detectedEnvVars?: string[]
   missingDeclarations?: string[]
   installCommands?: string[]
+}
+
+export interface EstopState {
+  level: AutonomyEstopLevel
+  reason?: string | null
+  engagedAt?: number | null
+  engagedBy?: string | null
+  resumeApprovalId?: string | null
+  updatedAt: number
+}
+
+export interface GuardianCheckpoint {
+  id: string
+  cwd: string
+  head: string
+  branch?: string | null
+  status: string
+  createdAt: number
+  createdBy: string
+  approvalId?: string | null
+  restorePreparedAt?: number | null
+  restoredAt?: number | null
 }
 
 // --- Connector Health Events ---

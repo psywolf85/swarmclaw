@@ -50,6 +50,7 @@ interface ChatroomState {
 
   queuedMessages: QueuedChatroomMessage[]
   removeQueuedMessage: (id: string) => void
+  clearQueuedMessages: (chatroomId: string) => void
   shiftQueuedMessage: () => QueuedChatroomMessage | undefined
 
   loadChatrooms: () => Promise<void>
@@ -91,6 +92,9 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
   setReplyingTo: (msg) => set({ replyingTo: msg }),
   queuedMessages: [],
   removeQueuedMessage: (id) => set((s) => ({ queuedMessages: s.queuedMessages.filter((item) => item.id !== id) })),
+  clearQueuedMessages: (chatroomId) => set((s) => ({
+    queuedMessages: s.queuedMessages.filter((item) => item.chatroomId !== chatroomId),
+  })),
   shiftQueuedMessage: () => {
     const queue = get().queuedMessages
     if (!queue.length) return undefined
