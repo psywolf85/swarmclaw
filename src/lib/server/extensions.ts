@@ -361,7 +361,7 @@ export function normalizeMarketplaceExtensionUrl(url: string): string {
   const trimmed = typeof url === 'string' ? url.trim() : ''
   if (!trimmed) return trimmed
 
-  let normalized = toRawExtensionUrl(trimmed)
+  const normalized = toRawExtensionUrl(trimmed)
 
   return normalized
     .replace('/swarmclawai/swarmforge/master/', '/swarmclawai/swarmforge/main/')

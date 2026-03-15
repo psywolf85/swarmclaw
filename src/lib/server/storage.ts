@@ -768,6 +768,19 @@ function saveCollection(table: string, data: Record<string, unknown>) {
     if (!next.has(id)) toDelete.push(id)
   }
 
+  // Safety guard: refuse to bulk-delete when the caller is likely passing a
+  // partial collection instead of a full load-modify-save.  This prevents
+  // accidental data wipes (e.g. tests calling saveCredentials with 1 item).
+  if (toDelete.length > 0 && next.size > 0 && toDelete.length > next.size) {
+    console.error(
+      `[storage] BLOCKED destructive saveCollection("${table}"): ` +
+      `would delete ${toDelete.length} rows but only upsert ${next.size}. ` +
+      `Use deleteCollectionItem() for explicit deletes or load-modify-save to update.`,
+    )
+    // Still apply the upserts — only skip the deletes
+    toDelete.length = 0
+  }
+
   if (!toUpsert.length && !toDelete.length) {
     endPerf({ upserts: 0, deletes: 0 })
     return
@@ -1405,7 +1418,17 @@ export function disableAllSessionHeartbeats(): number {
 // --- Credentials ---
 const credentialsStore = createCollectionStore('credentials', { ttlMs: 90_000 })
 export const loadCredentials = credentialsStore.load
-export const saveCredentials = credentialsStore.save
+export function saveCredentials(data: Record<string, unknown>): void {
+  // Upsert-only — never delete credentials that aren't in the map.
+  // Explicit deletion goes through deleteCredential(id).
+  const entries: Array<[string, unknown]> = Object.entries(data)
+  if (entries.length > 0) {
+    upsertCollectionItems('credentials', entries)
+    factoryTtlCaches.get('credentials')?.invalidate()
+  }
+}
+
+export const deleteCredential = credentialsStore.deleteItem
 
 function requireCredentialSecret(): Buffer {
   const secret = process.env.CREDENTIAL_SECRET
@@ -1481,13 +1504,15 @@ export function loadTrashedAgents(): Record<string, StoredAgentRecord> {
 }
 
 export function saveAgents(p: Record<string, Agent | StoredObject>) {
-  const normalized = Object.fromEntries(
-    Object.entries(p).map(([id, agent]) => [
-      id,
-      normalizeStoredRecord('agents', structuredClone(agent)),
-    ]),
-  )
-  saveCollection('agents', normalized)
+  // Upsert-only — never delete agents that aren't in the map.
+  // Explicit deletion goes through deleteAgent(id) or patchAgent(id, ...).
+  // This prevents accidental purge of trashed agents when callers load
+  // without includeTrashed and then save back.
+  const entries: Array<[string, unknown]> = Object.entries(p).map(([id, agent]) => [
+    id,
+    normalizeStoredRecord('agents', structuredClone(agent)),
+  ])
+  if (entries.length > 0) upsertCollectionItems('agents', entries)
   getAgentsCache().invalidate()
 }
 

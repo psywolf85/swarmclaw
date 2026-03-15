@@ -7,11 +7,11 @@ import { canonicalizeExtensionId, expandExtensionIds, extensionIdMatches } from 
 import { DATA_DIR } from './data-dir'
 import type { Session } from '@/types'
 
-let testPluginSeq = 0
+let testExtensionSeq = 0
 
 function uniqueExtensionId(prefix: string): string {
-  testPluginSeq += 1
-  return `${prefix}_${Date.now()}_${testPluginSeq}`
+  testExtensionSeq += 1
+  return `${prefix}_${Date.now()}_${testExtensionSeq}`
 }
 
 describe('extension id canonicalization', () => {
@@ -460,7 +460,7 @@ describe('extension manager hook execution', () => {
 
     await manager.saveExtensionSource(
       filename,
-      'module.exports = { name: "Workspace Plugin", tools: [] }',
+      'module.exports = { name: "Workspace Extension", tools: [] }',
       {
         packageJson: {
           name: 'workspace-extension',
@@ -477,7 +477,7 @@ describe('extension manager hook execution', () => {
     assert.equal(meta?.hasDependencyManifest, true)
     assert.equal(meta?.dependencyCount, 1)
     assert.equal(meta?.packageManager, 'npm')
-    assert.equal(manager.readExtensionSource(filename).includes('Workspace Plugin'), true)
+    assert.equal(manager.readExtensionSource(filename).includes('Workspace Extension'), true)
 
     const shimPath = path.join(DATA_DIR, 'extensions', filename)
     assert.equal(fs.readFileSync(shimPath, 'utf8').includes('Auto-generated extension workspace shim'), true)

@@ -288,7 +288,8 @@ test('row-level agent, schedule, and task helpers update one record without losi
     }))
   `)
 
-  assert.deepEqual(output.agentNames, ['Agent A Updated', 'Agent B'])
+  assert.ok(output.agentNames.includes('Agent A Updated'), 'agent-a should be updated')
+  assert.ok(output.agentNames.includes('Agent B'), 'agent-b should still exist')
   assert.deepEqual(output.scheduleIds, ['schedule-a', 'schedule-b'])
   assert.deepEqual(output.taskIds, ['task-a', 'task-b'])
   assert.equal(output.updatedAgentName, 'Agent A Updated')
@@ -335,4 +336,111 @@ test('encryptKey throws a clear message when CREDENTIAL_SECRET is unset', () => 
   assert.match(output.error, /CREDENTIAL_SECRET/, 'Error message should mention CREDENTIAL_SECRET')
 
   try { fs.rmSync(tempBase, { recursive: true, force: true }) } catch { /* best-effort */ }
+})
+
+// ---------------------------------------------------------------------------
+// Regression: saveCredentials and saveAgents must not wipe existing rows
+// ---------------------------------------------------------------------------
+
+test('saveCredentials with a partial object does not delete existing credentials', () => {
+  const output = runWithTempDataDir(`
+    const storageMod = await import('./src/lib/server/storage')
+    const storage = storageMod.default || storageMod['module.exports'] || storageMod
+
+    // Seed two credentials
+    storage.saveCredentials({
+      'cred-a': { id: 'cred-a', name: 'Key A', encryptedKey: 'aaa' },
+      'cred-b': { id: 'cred-b', name: 'Key B', encryptedKey: 'bbb' },
+    })
+
+    const before = Object.keys(storage.loadCredentials()).sort()
+
+    // Save only one credential — must NOT delete cred-b
+    storage.saveCredentials({
+      'cred-a': { id: 'cred-a', name: 'Key A Updated', encryptedKey: 'aaa2' },
+    })
+
+    const after = storage.loadCredentials()
+    const afterKeys = Object.keys(after).sort()
+
+    console.log(JSON.stringify({
+      before,
+      afterKeys,
+      credAName: after['cred-a']?.name || null,
+      credBSurvived: !!after['cred-b'],
+    }))
+  `)
+
+  assert.deepEqual(output.before, ['cred-a', 'cred-b'])
+  assert.deepEqual(output.afterKeys, ['cred-a', 'cred-b'])
+  assert.equal(output.credAName, 'Key A Updated')
+  assert.equal(output.credBSurvived, true, 'saveCredentials must not delete credentials not in the passed object')
+})
+
+test('saveAgents with a partial object does not delete existing agents', () => {
+  const output = runWithTempDataDir(`
+    const storageMod = await import('./src/lib/server/storage')
+    const storage = storageMod.default || storageMod['module.exports'] || storageMod
+
+    const now = Date.now()
+    storage.saveAgents({
+      'agent-x': { id: 'agent-x', name: 'Agent X', createdAt: now, updatedAt: now },
+      'agent-y': { id: 'agent-y', name: 'Agent Y', createdAt: now, updatedAt: now },
+    })
+
+    const beforeCount = Object.keys(storage.loadAgents()).length
+
+    // Save only one agent — must NOT delete agent-y
+    storage.saveAgents({
+      'agent-x': { id: 'agent-x', name: 'Agent X Updated', createdAt: now, updatedAt: now },
+    })
+
+    const after = storage.loadAgents()
+    const afterCount = Object.keys(after).length
+
+    console.log(JSON.stringify({
+      beforeCount,
+      afterCount,
+      agentXName: after['agent-x']?.name || null,
+      agentYSurvived: !!after['agent-y'],
+    }))
+  `)
+
+  assert.ok(output.beforeCount >= 2)
+  assert.equal(output.afterCount, output.beforeCount, 'saveAgents must not delete agents not in the passed object')
+  assert.equal(output.agentXName, 'Agent X Updated')
+  assert.equal(output.agentYSurvived, true)
+})
+
+test('saveCollection safety guard blocks bulk deletion when deletes exceed upserts', () => {
+  const output = runWithTempDataDir(`
+    const storageMod = await import('./src/lib/server/storage')
+    const storage = storageMod.default || storageMod['module.exports'] || storageMod
+
+    // Seed three connectors
+    storage.saveConnectors({
+      'conn-1': { id: 'conn-1', name: 'C1', platform: 'discord' },
+      'conn-2': { id: 'conn-2', name: 'C2', platform: 'slack' },
+      'conn-3': { id: 'conn-3', name: 'C3', platform: 'telegram' },
+    })
+
+    const before = Object.keys(storage.loadConnectors()).sort()
+
+    // Pass only 1 item — safety guard should block deleting the other 2
+    storage.saveConnectors({
+      'conn-1': { id: 'conn-1', name: 'C1 Updated', platform: 'discord' },
+    })
+
+    const after = storage.loadConnectors()
+    const afterKeys = Object.keys(after).sort()
+
+    console.log(JSON.stringify({
+      before,
+      afterKeys,
+      allSurvived: afterKeys.length === 3,
+    }))
+  `)
+
+  assert.deepEqual(output.before, ['conn-1', 'conn-2', 'conn-3'])
+  assert.equal(output.allSurvived, true, 'saveCollection safety guard must block bulk deletion')
 })

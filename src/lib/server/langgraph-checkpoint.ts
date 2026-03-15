@@ -60,7 +60,12 @@ function ensureSchema(db: Database.Database): void {
     )
   `)
   if (!hasColumn(db, 'langgraph_checkpoints', 'metadata_type')) {
-    db.exec(`ALTER TABLE langgraph_checkpoints ADD COLUMN metadata_type TEXT NOT NULL DEFAULT 'json'`)
+    try {
+      db.exec(`ALTER TABLE langgraph_checkpoints ADD COLUMN metadata_type TEXT NOT NULL DEFAULT 'json'`)
+    } catch (err: unknown) {
+      // Tolerate "duplicate column" from concurrent build workers
+      if (!(err instanceof Error) || !err.message.includes('duplicate column')) throw err
+    }
   }
 }
 

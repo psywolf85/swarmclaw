@@ -144,7 +144,9 @@ test('applyResolvedRoute copies gateway, endpoint, and fallback credentials onto
 test('resolveAgentRouteCandidatesWithProfiles keeps explicit Ollama cloud routes on the cloud path', async () => {
   const storage = await import('@/lib/server/storage')
   const now = Date.now()
+  const existing = storage.loadCredentials()
   storage.saveCredentials({
+    ...existing,
     'cred-ollama-cloud': {
       id: 'cred-ollama-cloud',
       provider: 'ollama',
@@ -173,7 +175,9 @@ test('resolveAgentRouteCandidatesWithProfiles keeps explicit Ollama cloud routes
 test('resolveAgentRouteCandidatesWithProfiles keeps explicit Ollama local routes local even with a credential and :cloud model', async () => {
   const storage = await import('@/lib/server/storage')
   const now = Date.now()
+  const existing = storage.loadCredentials()
   storage.saveCredentials({
+    ...existing,
     'cred-ollama-cloud': {
       id: 'cred-ollama-cloud',
       provider: 'ollama',
