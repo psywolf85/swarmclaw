@@ -117,9 +117,13 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
 
   loadChatroomById: async (id) => {
     if (!id) return null
-    const chatroom = await api<Chatroom>('GET', `/chatrooms/${id}`)
-    set((state) => ({ chatrooms: { ...state.chatrooms, [id]: chatroom } }))
-    return chatroom
+    try {
+      const chatroom = await api<Chatroom>('GET', `/chatrooms/${id}`)
+      set((state) => ({ chatrooms: { ...state.chatrooms, [id]: chatroom } }))
+      return chatroom
+    } catch {
+      return null
+    }
   },
 
   createChatroom: async (data) => {

@@ -26,48 +26,58 @@ function parseIntBounded(value: unknown, fallback: number, min: number, max: num
 }
 
 export async function GET(req: Request) {
-  const db = getMemoryDb()
-  const settings = loadSettings()
-  const { searchParams } = new URL(req.url)
-  const ttlHours = parseIntBounded(
-    searchParams.get('ttlHours') ?? settings.memoryWorkingTtlHours,
-    24,
-    1,
-    24 * 365,
-  )
-  const analyzed = db.analyzeMaintenance(ttlHours)
-  const archiveSync = syncAllSessionArchiveMemories()
-  return NextResponse.json({
-    ok: true,
-    ttlHours,
-    analyzed,
-    archiveSync,
-    archiveExportDir: path.join(DATA_DIR, 'session-archives'),
-  })
+  try {
+    const db = getMemoryDb()
+    const settings = loadSettings()
+    const { searchParams } = new URL(req.url)
+    const ttlHours = parseIntBounded(
+      searchParams.get('ttlHours') ?? settings.memoryWorkingTtlHours,
+      24,
+      1,
+      24 * 365,
+    )
+    const analyzed = db.analyzeMaintenance(ttlHours)
+    const archiveSync = syncAllSessionArchiveMemories()
+    return NextResponse.json({
+      ok: true,
+      ttlHours,
+      analyzed,
+      archiveSync,
+      archiveExportDir: path.join(DATA_DIR, 'session-archives'),
+    })
+  } catch (err: unknown) {
+    console.error('[memory/maintenance] GET failed:', err)
+    return NextResponse.json({ ok: false, error: String((err as Error)?.message || err) }, { status: 500 })
+  }
 }
 
 export async function POST(req: Request) {
-  const body = await req.json().catch(() => ({}))
-  const settings = loadSettings()
-  const db = getMemoryDb()
-  const ttlHours = parseIntBounded(body?.ttlHours ?? settings.memoryWorkingTtlHours, 24, 1, 24 * 365)
-  const maxDeletes = parseIntBounded(body?.maxDeletes, 500, 1, 20_000)
-  const archiveSync = body?.syncArchives === false
-    ? { synced: 0, skipped: 0, sessionIds: [] }
-    : syncAllSessionArchiveMemories()
-  const result = db.maintain({
-    ttlHours,
-    maxDeletes,
-    dedupe: parseBool(body?.dedupe, true),
-    canonicalDedupe: parseBool(body?.canonicalDedupe, false),
-    pruneWorking: parseBool(body?.pruneWorking, true),
-  })
-  return NextResponse.json({
-    ok: true,
-    ttlHours,
-    maxDeletes,
-    archiveSync,
-    archiveExportDir: path.join(DATA_DIR, 'session-archives'),
-    ...result,
-  })
+  try {
+    const body = await req.json().catch(() => ({}))
+    const settings = loadSettings()
+    const db = getMemoryDb()
+    const ttlHours = parseIntBounded(body?.ttlHours ?? settings.memoryWorkingTtlHours, 24, 1, 24 * 365)
+    const maxDeletes = parseIntBounded(body?.maxDeletes, 500, 1, 20_000)
+    const archiveSync = body?.syncArchives === false
+      ? { synced: 0, skipped: 0, sessionIds: [] }
+      : syncAllSessionArchiveMemories()
+    const result = db.maintain({
+      ttlHours,
+      maxDeletes,
+      dedupe: parseBool(body?.dedupe, true),
+      canonicalDedupe: parseBool(body?.canonicalDedupe, false),
+      pruneWorking: parseBool(body?.pruneWorking, true),
+    })
+    return NextResponse.json({
+      ok: true,
+      ttlHours,
+      maxDeletes,
+      archiveSync,
+      archiveExportDir: path.join(DATA_DIR, 'session-archives'),
+      ...result,
+    })
+  } catch (err: unknown) {
+    console.error('[memory/maintenance] POST failed:', err)
+    return NextResponse.json({ ok: false, error: String((err as Error)?.message || err) }, { status: 500 })
+  }
 }

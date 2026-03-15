@@ -1,44 +1,44 @@
 import { NextResponse } from 'next/server'
-import { getPluginManager, sanitizePluginFilename } from '@/lib/server/plugins'
+import { getExtensionManager, sanitizeExtensionFilename } from '@/lib/server/extensions'
 import { errorMessage } from '@/lib/shared-utils'
 import {
-  inferPluginInstallSourceFromUrl,
-  inferPluginPublisherSourceFromUrl,
-  normalizePluginInstallSource,
-  normalizePluginPublisherSource,
-} from '@/lib/plugin-sources'
+  inferExtensionInstallSourceFromUrl,
+  inferExtensionPublisherSourceFromUrl,
+  normalizeExtensionInstallSource,
+  normalizeExtensionPublisherSource,
+} from '@/lib/extension-sources'
 import {
-  buildPluginInstallCorsHeaders,
-  resolvePluginInstallCorsOrigin,
-} from '@/lib/plugin-install-cors'
+  buildExtensionInstallCorsHeaders,
+  resolveExtensionInstallCorsOrigin,
+} from '@/lib/extension-install-cors'
 
 function json(body: Record<string, unknown>, status: number, origin: string | null) {
   return NextResponse.json(body, {
     status,
-    headers: buildPluginInstallCorsHeaders(origin),
+    headers: buildExtensionInstallCorsHeaders(origin),
   })
 }
 
 export async function OPTIONS(req: Request) {
-  const origin = resolvePluginInstallCorsOrigin(req.headers.get('origin'))
+  const origin = resolveExtensionInstallCorsOrigin(req.headers.get('origin'))
   if (!origin) return NextResponse.json({ error: 'Origin not allowed' }, { status: 403 })
   return new NextResponse(null, {
     status: 204,
-    headers: buildPluginInstallCorsHeaders(origin),
+    headers: buildExtensionInstallCorsHeaders(origin),
   })
 }
 
 export async function POST(req: Request) {
-  const origin = resolvePluginInstallCorsOrigin(req.headers.get('origin'))
+  const origin = resolveExtensionInstallCorsOrigin(req.headers.get('origin'))
   const body = await req.json()
   const url = typeof body?.url === 'string' ? body.url : ''
   const filename = typeof body?.filename === 'string' ? body.filename : ''
   const installMethod = body?.installMethod === 'marketplace' ? 'marketplace' : 'manual'
-  const sourceLabel = normalizePluginPublisherSource(body?.sourceLabel)
-    || inferPluginPublisherSourceFromUrl(url)
+  const sourceLabel = normalizeExtensionPublisherSource(body?.sourceLabel)
+    || inferExtensionPublisherSourceFromUrl(url)
     || 'manual'
-  const installSource = normalizePluginInstallSource(body?.installSource)
-    || inferPluginInstallSourceFromUrl(url)
+  const installSource = normalizeExtensionInstallSource(body?.installSource)
+    || inferExtensionInstallSourceFromUrl(url)
     || 'manual'
 
   if (!url || !url.startsWith('https://')) {
@@ -46,8 +46,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const sanitizedFilename = sanitizePluginFilename(filename)
-    const installed = await getPluginManager().installPluginFromUrl(url, sanitizedFilename, {
+    const sanitizedFilename = sanitizeExtensionFilename(filename)
+    const installed = await getExtensionManager().installExtensionFromUrl(url, sanitizedFilename, {
       source: installMethod,
       sourceLabel,
       installSource,

@@ -37,7 +37,7 @@ export async function POST(req: Request) {
         reason: typeof body.reason === 'string' ? body.reason : null,
         engagedBy: typeof body.engagedBy === 'string' ? body.engagedBy : 'user',
       })
-      stopDaemon({ source: `api/autonomy/estop:${level}` })
+      await stopDaemon({ source: `api/autonomy/estop:${level}` })
       const cancelled = level === 'all'
         ? cancelAllRuns('Cancelled because all estop is engaged.')
         : { cancelledQueued: 0, abortedRunning: 0 }

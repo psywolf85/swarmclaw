@@ -209,13 +209,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   messages: [],
   setMessages: (msgs) => set((s) => {
     const next = reconcileMessagesForState(msgs, s.messages, s.assistantRenderId)
-    return {
+    // Clear "sending" queue items whose text now appears in the message list
+    const queuedMessages = s.queuedMessages.filter((item) => {
+      if (!item.sending) return true
+      return !next.messages.some((m) => m.role === 'user' && m.text === item.text)
+    })
+    const patch: Partial<ChatState> = {
       messages: next.messages,
       assistantRenderId: next.assistantRenderId,
-      toolEvents: [],
-      hasMoreMessages: false,
-      totalMessages: next.messages.length,
+      queuedMessages,
     }
+    if (s.toolEvents.length > 0) patch.toolEvents = []
+    if (s.hasMoreMessages) patch.hasMoreMessages = false
+    if (s.totalMessages !== next.messages.length) patch.totalMessages = next.messages.length
+    return patch
   }),
   toolEvents: [],
   clearToolEvents: () => set({ toolEvents: [] }),
@@ -237,13 +244,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadQueuedMessages: async (sessionId) => {
     if (!sessionId) return
     const snapshot = await fetchSessionQueue(sessionId)
-    set((s) => ({
-      queuedMessages: replaceQueuedMessagesForSession(
+    set((s) => {
+      const next = replaceQueuedMessagesForSession(
         s.queuedMessages,
         sessionId,
         snapshotToQueuedMessages(snapshot),
-      ),
-    }))
+      )
+      // Clear "sending" items whose text has already appeared in chat messages
+      const messages = s.messages
+      const cleaned = next.filter((item) => {
+        if (!item.sending || item.sessionId !== sessionId) return true
+        return !messages.some((m) => m.role === 'user' && m.text === item.text)
+      })
+      return { queuedMessages: cleaned }
+    })
     syncSessionQueueState(sessionId, {
       queuedCount: snapshot.queueLength,
       currentRunId: snapshot.activeRunId,

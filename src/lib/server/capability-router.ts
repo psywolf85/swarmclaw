@@ -57,8 +57,8 @@ function isMonitoringOrCurrentEventsRequest(text: string): boolean {
   ])
 }
 
-function preferredToolsForCapabilities(enabledPlugins: string[], capabilities: string[], fallback: string[] = []): string[] {
-  const preferred = capabilities.flatMap((capability) => getToolsForCapability(enabledPlugins, capability))
+function preferredToolsForCapabilities(enabledExtensions: string[], capabilities: string[], fallback: string[] = []): string[] {
+  const preferred = capabilities.flatMap((capability) => getToolsForCapability(enabledExtensions, capability))
   return dedupe(preferred.length > 0 ? preferred : fallback)
 }
 
@@ -88,13 +88,13 @@ function normalizeDelegateOrder(value: unknown): DelegateTool[] {
 
 export function routeTaskIntent(
   message: string,
-  enabledPlugins: string[],
+  enabledExtensions: string[],
   settings?: AppSettings | null,
 ): CapabilityRoutingDecision {
   const text = (message || '').toLowerCase()
   const url = findFirstUrl(message || '')
   const delegateOrder = normalizeDelegateOrder(settings?.autonomyPreferredDelegates)
-  const matchedCapabilities = matchToolCapabilitiesForMessage(enabledPlugins, message)
+  const matchedCapabilities = matchToolCapabilitiesForMessage(enabledExtensions, message)
   const wantsVoiceNote = matchedCapabilities.has(TOOL_CAPABILITY.deliveryVoiceNote)
   const wantsScreenshots = matchedCapabilities.has(TOOL_CAPABILITY.browserCapture)
   const wantsMediaDelivery = matchedCapabilities.has(TOOL_CAPABILITY.deliveryMedia)
@@ -148,7 +148,7 @@ export function routeTaskIntent(
       intent: 'outreach',
       confidence: 0.8,
       preferredTools: preferredToolsForCapabilities(
-        enabledPlugins,
+        enabledExtensions,
         [
           TOOL_CAPABILITY.deliveryVoiceNote,
           TOOL_CAPABILITY.deliveryMedia,
@@ -183,15 +183,15 @@ export function routeTaskIntent(
   const browsing = !!url && (
     matchedCapabilities.has(TOOL_CAPABILITY.browserNavigate)
     || matchedCapabilities.has(TOOL_CAPABILITY.browserCapture)
-    || getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.browserNavigate).length > 0
-    || getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.browserCapture).length > 0
+    || getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserNavigate).length > 0
+    || getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserCapture).length > 0
   )
   if (browsing) {
     return {
       intent: 'browsing',
       confidence: 0.7,
       preferredTools: preferredToolsForCapabilities(
-        enabledPlugins,
+        enabledExtensions,
         [
           TOOL_CAPABILITY.browserCapture,
           TOOL_CAPABILITY.browserNavigate,
@@ -207,7 +207,7 @@ export function routeTaskIntent(
   const research = researchLike
   if (research) {
     const preferred = preferredToolsForCapabilities(
-      enabledPlugins,
+      enabledExtensions,
       [
         TOOL_CAPABILITY.researchSearch,
         TOOL_CAPABILITY.researchFetch,

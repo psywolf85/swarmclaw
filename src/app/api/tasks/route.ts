@@ -9,13 +9,13 @@ import { pushMainLoopEventToMainSessions } from '@/lib/server/agents/main-agent-
 import { notify } from '@/lib/server/ws-hub'
 import { resolveTaskAgentFromDescription } from '@/lib/server/tasks/task-mention'
 import { validateDag } from '@/lib/server/dag-validation'
-import { getPluginManager } from '@/lib/server/plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import {
   prepareTaskCreation,
 } from '@/lib/server/tasks/task-service'
 import { ensureMissionForTask, enrichTaskWithMissionSummary } from '@/lib/server/missions/mission-service'
-import '@/lib/server/builtin-plugins'
+import '@/lib/server/builtin-extensions'
 
 export async function GET(req: Request) {
   const endPerf = perf.start('api', 'GET /api/tasks')
@@ -167,11 +167,11 @@ export async function POST(req: Request) {
 
   const task = prepared.task
   if (task.status === 'completed') {
-    const agentPlugins = resolvedAgentId ? getEnabledCapabilityIds(loadAgents()[resolvedAgentId]) : []
-    getPluginManager().runHook(
+    const agentExtensions = resolvedAgentId ? getEnabledCapabilityIds(loadAgents()[resolvedAgentId]) : []
+    getExtensionManager().runHook(
       'onTaskComplete',
       { taskId: id, result: task.result },
-      { enabledIds: agentPlugins },
+      { enabledIds: agentExtensions },
     )
   }
 

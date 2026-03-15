@@ -7,14 +7,14 @@ describe('connector lifecycle for daemon recovery', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('@/lib/server/storage')
       const managerMod = await import('@/lib/server/connectors/manager')
-      const pluginsMod = await import('@/lib/server/plugins')
+      const extMod = await import('@/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       let startCount = 0
-      plugins.getPluginManager().registerBuiltin('test-daemon-autostart-plugin', {
-        name: 'Test Daemon Autostart Plugin',
+      ext.getExtensionManager().registerBuiltin('test-daemon-autostart-extension', {
+        name: 'Test Daemon Autostart Extension',
         connectors: [{
           id: 'test-daemon-autostart',
           name: 'Test Daemon Autostart',
@@ -66,7 +66,7 @@ describe('connector lifecycle for daemon recovery', () => {
         afterStop,
         secondStart,
       }))
-    `, { prefix: 'swarmclaw-daemon-test-' })
+    `, { prefix: 'swarmclaw-daemon-test-' }) as any
 
     assert.equal(output.startCount, 2)
     assert.equal(output.firstStart.running.some((entry: { id: string }) => entry.id === 'conn_auto'), true)
@@ -81,15 +81,15 @@ describe('connector lifecycle for daemon recovery', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('@/lib/server/storage')
       const managerMod = await import('@/lib/server/connectors/manager')
-      const pluginsMod = await import('@/lib/server/plugins')
+      const extMod = await import('@/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       let startCount = 0
       let stopCount = 0
-      plugins.getPluginManager().registerBuiltin('test-daemon-restart-plugin', {
-        name: 'Test Daemon Restart Plugin',
+      ext.getExtensionManager().registerBuiltin('test-daemon-restart-extension', {
+        name: 'Test Daemon Restart Extension',
         connectors: [{
           id: 'test-daemon-restart',
           name: 'Test Daemon Restart',
@@ -152,7 +152,7 @@ describe('connector lifecycle for daemon recovery', () => {
       }))
 
       await manager.stopAllConnectors()
-    `, { prefix: 'swarmclaw-daemon-test-' })
+    `, { prefix: 'swarmclaw-daemon-test-' }) as any
 
     assert.equal(output.startCount, 1)
     assert.equal(output.stopCount, 1)

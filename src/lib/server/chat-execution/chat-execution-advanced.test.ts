@@ -450,7 +450,7 @@ describe('isLikelyToolErrorOutput advanced', () => {
 // hasDirectLocalCodingTools
 // ---------------------------------------------------------------------------
 describe('hasDirectLocalCodingTools', () => {
-  it('returns true when shell is in plugins', () => {
+  it('returns true when shell is in extensions', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['shell', 'memory'] }), true)
   })
 
@@ -458,19 +458,19 @@ describe('hasDirectLocalCodingTools', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['delegate', 'web'] }), false)
   })
 
-  it('returns true when edit_file is in plugins', () => {
+  it('returns true when edit_file is in extensions', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['edit_file'] }), true)
   })
 
-  it('returns false for empty plugins', () => {
+  it('returns false for empty extensions', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: [] }), false)
   })
 
-  it('returns true for files plugin', () => {
+  it('returns true for files extension', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['files'] }), true)
   })
 
-  it('returns true for sandbox plugin', () => {
+  it('returns true for sandbox extension', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['sandbox'] }), true)
   })
 })

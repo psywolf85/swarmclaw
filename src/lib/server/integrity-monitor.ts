@@ -8,7 +8,7 @@ import { loadIntegrityBaselines, saveIntegrityBaselines } from './storage'
 export interface IntegrityBaselineEntry {
   id: string
   filePath: string
-  kind: 'identity' | 'config' | 'plugin'
+  kind: 'identity' | 'config' | 'extension'
   present: boolean
   hash: string | null
   size: number | null
@@ -90,13 +90,17 @@ function collectWatchTargets(): WatchTarget[] {
   // Repo-level AGENTS.md (one level above app dir when present).
   pushIfExists(targets, path.resolve(cwd, '..', 'AGENTS.md'), 'identity')
 
-  // Plugin files + plugin config.
+  // Extension files + extension config.
+  pushIfExists(targets, path.join(DATA_DIR, 'extensions.json'), 'config')
+  // Also check legacy path for backward compat
   pushIfExists(targets, path.join(DATA_DIR, 'plugins.json'), 'config')
-  const pluginDir = path.join(DATA_DIR, 'plugins')
-  if (fs.existsSync(pluginDir)) {
-    for (const entry of fs.readdirSync(pluginDir)) {
+  const extensionDir = path.join(DATA_DIR, 'extensions')
+  const legacyExtensionDir = path.join(DATA_DIR, 'plugins')
+  const extDir = fs.existsSync(extensionDir) ? extensionDir : fs.existsSync(legacyExtensionDir) ? legacyExtensionDir : null
+  if (extDir) {
+    for (const entry of fs.readdirSync(extDir)) {
       if (!entry.endsWith('.js') && !entry.endsWith('.mjs') && !entry.endsWith('.cjs')) continue
-      pushIfExists(targets, path.join(pluginDir, entry), 'plugin')
+      pushIfExists(targets, path.join(extDir, entry), 'extension')
     }
   }
 

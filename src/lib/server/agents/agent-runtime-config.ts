@@ -18,6 +18,7 @@ export interface ResolvedAgentRoute {
   label: string
   provider: ProviderType
   model: string
+  ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null
   fallbackCredentialIds: string[]
   apiEndpoint?: string | null
@@ -37,6 +38,7 @@ interface RouteSeed {
   label?: string
   provider?: ProviderType | null
   model?: string | null
+  ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null
@@ -281,6 +283,7 @@ function buildRouteFromSeed(
   const apiEndpoint = resolveProviderApiEndpoint({
     provider: providerFromGateway,
     model,
+    ollamaMode: seed.ollamaMode ?? null,
     credentialId,
     apiEndpoint: explicitEndpoint,
   })
@@ -289,6 +292,7 @@ function buildRouteFromSeed(
     label: seed.label?.trim() || (gatewayProfile?.name || `${providerFromGateway}:${model}`),
     provider: providerFromGateway,
     model,
+    ollamaMode: seed.ollamaMode ?? null,
     credentialId,
     fallbackCredentialIds: dedupeCredentialIds(credentialId, seed.fallbackCredentialIds),
     apiEndpoint,
@@ -306,6 +310,7 @@ function dedupeRoutes(routes: ResolvedAgentRoute[]): ResolvedAgentRoute[] {
     const key = [
       route.provider,
       route.model,
+      route.ollamaMode || '',
       route.credentialId || '',
       route.apiEndpoint || '',
       route.gatewayProfileId || '',
@@ -346,6 +351,7 @@ export function resolveAgentRouteCandidatesWithProfiles(
       label: agent.name,
       provider: agent.provider,
       model: agent.model,
+      ollamaMode: agent.ollamaMode ?? null,
       credentialId: agent.credentialId ?? null,
       fallbackCredentialIds: agent.fallbackCredentialIds || [],
       apiEndpoint: agent.apiEndpoint ?? null,
@@ -361,6 +367,7 @@ export function resolveAgentRouteCandidatesWithProfiles(
       label: target.label,
       provider: target.provider,
       model: target.model,
+      ollamaMode: target.ollamaMode ?? null,
       credentialId: target.credentialId ?? null,
       fallbackCredentialIds: target.fallbackCredentialIds || [],
       apiEndpoint: target.apiEndpoint ?? null,
@@ -400,6 +407,7 @@ export function resolvePrimaryAgentRoute(
 export function applyResolvedRoute<T extends {
   provider: ProviderType
   model: string
+  ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null
@@ -413,6 +421,7 @@ export function applyResolvedRoute<T extends {
     ...target,
     provider: route.provider,
     model: route.model,
+    ollamaMode: route.ollamaMode ?? null,
     credentialId: route.credentialId ?? null,
     fallbackCredentialIds: [...route.fallbackCredentialIds],
     apiEndpoint: route.apiEndpoint ?? null,

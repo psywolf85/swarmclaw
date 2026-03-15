@@ -397,12 +397,12 @@ export async function getPlatform(platform: string) {
     case 'email':     return (await import('./email')).default
   }
 
-  // 2. Check Plugin-provided connectors
+  // 2. Check Extension-provided connectors
   try {
-    const { getPluginManager } = await import('../plugins')
-    const manager = getPluginManager()
-    const pluginConnectors = manager.getConnectors()
-    const found = pluginConnectors.find(c => c.id === platform)
+    const { getExtensionManager } = await import('../extensions')
+    const manager = getExtensionManager()
+    const extensionConnectors = manager.getConnectors()
+    const found = extensionConnectors.find(c => c.id === platform)
     
     if (found) {
       return {
@@ -419,7 +419,7 @@ export async function getPlatform(platform: string) {
       }
     }
   } catch (err: unknown) {
-    console.warn(`[connector] Failed to check plugins for platform "${platform}":`, errorMessage(err))
+    console.warn(`[connector] Failed to check extensions for platform "${platform}":`, errorMessage(err))
   }
 
   throw new Error(`Unknown platform: ${platform}`)
@@ -1809,13 +1809,13 @@ async function routeMessage(connector: Connector, msg: InboundMessage): Promise<
   if (agent.soul) promptParts.push(agent.soul)
   if (agent.systemPrompt) promptParts.push(agent.systemPrompt)
   try {
-    const enabledPlugins = dedup([
+    const enabledExtensions = dedup([
       ...getEnabledCapabilityIds(session),
       ...getEnabledCapabilityIds(agent),
     ])
     const runtimeSkills = resolveRuntimeSkills({
       cwd: session.cwd,
-      enabledPlugins,
+      enabledExtensions,
       agentId: agent.id,
       sessionId: session.id,
       userId: session.user,

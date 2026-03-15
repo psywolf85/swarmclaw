@@ -66,7 +66,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -100,7 +100,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -119,7 +119,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       const directSession = Object.values(sessions).find((entry) => entry.id !== 'agent_thread')
       const mainSession = sessions.agent_thread
       console.log(JSON.stringify({ response, directSession, mainSession }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'Roger that via WhatsApp')
     assert.equal(output.directSession.messages.length, 2)
@@ -169,7 +169,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -203,7 +203,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -226,7 +226,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         directEvents: directSession ? systemEvents.peekSystemEvents(directSession.id) : [],
         directSessionId: directSession?.id || null,
       }))
-    `)
+    `) as any
 
     assert.equal(output.wake, null)
     assert.equal(output.threadEvents.length, 0)
@@ -265,7 +265,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           provider: 'test-provider',
           model: 'test-model',
           tools: ['connector_message_tool'],
-          plugins: ['connector_message_tool'],
+          extensions: ['connector_message_tool'],
           createdAt: now,
           updatedAt: now,
         },
@@ -332,7 +332,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         manager.setStreamAgentChatForTest(null)
       }
-    `)
+    `) as any
 
     assert.equal(output.response, 'NO_MESSAGE')
     assert.equal(output.directSession.messages.length, 2)
@@ -353,12 +353,12 @@ describe('sanitizeConnectorOutboundContent', () => {
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const memoryDbMod = await import('./src/lib/server/memory/memory-db')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const memoryDb = (memoryDbMod.getMemoryDb || memoryDbMod.default?.getMemoryDb)()
 
       const now = Date.now()
@@ -382,8 +382,8 @@ describe('sanitizeConnectorOutboundContent', () => {
         },
       }
 
-      plugins.getPluginManager().registerBuiltin('test-voice-pref-plugin', {
-        name: 'Test Voice Pref Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-voice-pref-extension', {
+        name: 'Test Voice Pref Connector Extension',
         connectors: [{
           id: 'test-voice-pref',
           name: 'Test Voice Pref',
@@ -404,7 +404,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           createdAt: now,
           updatedAt: now,
         },
@@ -437,7 +437,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
           connectorContext: {
             connectorId: 'conn_1',
             platform: 'test-voice-pref',
@@ -479,7 +479,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_1')
       }
-    `)
+    `) as any
 
     assert.equal(output.response, 'NO_MESSAGE')
     assert.equal(output.sent.length, 1)
@@ -526,7 +526,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           createdAt: now,
           updatedAt: now,
         },
@@ -559,7 +559,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       })
       const directSession = Object.values(storage.loadSessions()).find((entry) => String(entry.name || '').startsWith('connector:'))
       console.log(JSON.stringify({ response, directSession }))
-    `)
+    `) as any
 
     assert.match(output.response, /couldn't confirm that the configured connector actually sent anything/i)
     assert.equal(output.directSession.messages[1].text, output.response)
@@ -596,7 +596,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           createdAt: now,
           updatedAt: now,
         },
@@ -636,7 +636,7 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const session = Object.values(storage.loadSessions())[0]
       console.log(JSON.stringify({ response, session }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'Allowlist matched')
     assert.equal(output.session.messages[0].source.senderId, '199900000001@lid')
@@ -674,7 +674,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           createdAt: now,
           updatedAt: now,
         },
@@ -730,7 +730,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           })),
         }))
       console.log(JSON.stringify({ directSessions }))
-    `)
+    `) as any
 
     assert.equal(output.directSessions.length, 1)
     assert.equal(output.directSessions[0].messages.length, 4)
@@ -774,7 +774,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -808,7 +808,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -831,7 +831,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         directSessions,
         threadMessages: sessions.agent_thread.messages,
       }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'Replying in the main owner chat')
     assert.equal(output.directSessions.length, 0)
@@ -873,7 +873,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -910,7 +910,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -933,7 +933,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         threadMessages: sessions.agent_thread.messages,
         threadContext: sessions.agent_thread.connectorContext,
       }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'Configured owner route')
     assert.equal(output.directSessions.length, 0)
@@ -948,11 +948,11 @@ describe('sanitizeConnectorOutboundContent', () => {
       const path = await import('node:path')
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -960,8 +960,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-voice-connector-plugin', {
-        name: 'Test Voice Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-voice-connector-extension', {
+        name: 'Test Voice Connector Extension',
         connectors: [{
           id: 'test-voice',
           name: 'Test Voice',
@@ -981,7 +981,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1030,7 +1030,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           connectorContext: {
             connectorId: 'conn_voice',
             platform: 'whatsapp',
@@ -1060,7 +1060,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_voice')
       }
-    `)
+    `) as any
 
     assert.equal(output.result.status, 'voice_sent')
     assert.equal(output.result.to, '278200000001@s.whatsapp.net')
@@ -1075,11 +1075,11 @@ describe('sanitizeConnectorOutboundContent', () => {
       const path = await import('node:path')
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -1087,8 +1087,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-dedupe-voice-connector-plugin', {
-        name: 'Test Dedupe Voice Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dedupe-voice-connector-extension', {
+        name: 'Test Dedupe Voice Connector Extension',
         connectors: [{
           id: 'test-dedupe-voice',
           name: 'Test Dedupe Voice',
@@ -1108,7 +1108,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1145,7 +1145,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -1180,7 +1180,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_dedupe_voice')
       }
-    `)
+    `) as any
 
     assert.equal(output.sent.length, 1)
     assert.equal(output.first.messageId, 'voice-dedupe-1')
@@ -1192,11 +1192,11 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -1204,8 +1204,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-dedupe-text-connector-plugin', {
-        name: 'Test Dedupe Text Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dedupe-text-connector-extension', {
+        name: 'Test Dedupe Text Connector Extension',
         connectors: [{
           id: 'test-dedupe-text',
           name: 'Test Dedupe Text',
@@ -1225,7 +1225,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1262,7 +1262,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -1292,7 +1292,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_dedupe_text')
       }
-    `)
+    `) as any
 
     assert.equal(output.sent.length, 1)
     assert.equal(output.first.messageId, 'text-dedupe-1')
@@ -1306,11 +1306,11 @@ describe('sanitizeConnectorOutboundContent', () => {
       const path = await import('node:path')
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -1318,8 +1318,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-cross-recipient-wrap-connector-plugin', {
-        name: 'Test Cross Recipient Wrap Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-cross-recipient-wrap-connector-extension', {
+        name: 'Test Cross Recipient Wrap Connector Extension',
         connectors: [{
           id: 'test-cross-recipient-wrap',
           name: 'Test Cross Recipient Wrap',
@@ -1339,7 +1339,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Hal2k',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1376,7 +1376,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -1433,7 +1433,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_cross_wrap')
       }
-    `)
+    `) as any
 
     assert.equal(output.sent.length, 3)
     assert.equal(output.first.to, '48172353241206@lid')
@@ -1448,11 +1448,11 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -1460,8 +1460,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       let startCount = 0
-      plugins.getPluginManager().registerBuiltin('test-dedupe-start-connector-plugin', {
-        name: 'Test Dedupe Start Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dedupe-start-connector-extension', {
+        name: 'Test Dedupe Start Connector Extension',
         connectors: [{
           id: 'test-dedupe-start',
           name: 'Test Dedupe Start',
@@ -1481,7 +1481,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1518,7 +1518,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -1545,7 +1545,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_dedupe_start').catch(() => {})
       }
-    `)
+    `) as any
 
     assert.equal(output.startCount, 1)
     assert.equal(output.first.status, 'started')
@@ -1557,11 +1557,11 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
@@ -1569,8 +1569,8 @@ describe('sanitizeConnectorOutboundContent', () => {
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-dedupe-override-connector-plugin', {
-        name: 'Test Dedupe Override Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dedupe-override-connector-extension', {
+        name: 'Test Dedupe Override Connector Extension',
         connectors: [{
           id: 'test-dedupe-override',
           name: 'Test Dedupe Override',
@@ -1590,7 +1590,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -1627,7 +1627,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -1659,7 +1659,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_dedupe_override')
       }
-    `)
+    `) as any
 
     assert.equal(output.sent.length, 2)
     assert.equal(output.first.messageId, 'text-override-1')
@@ -1673,15 +1673,15 @@ describe('sanitizeConnectorOutboundContent', () => {
       const path = await import('node:path')
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const now = Date.now()
       const sent = []
-      plugins.getPluginManager().registerBuiltin('test-dedupe-media-connector-plugin', {
-        name: 'Test Dedupe Media Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dedupe-media-connector-extension', {
+        name: 'Test Dedupe Media Connector Extension',
         connectors: [{
           id: 'test-dedupe-media',
           name: 'Test Dedupe Media',
@@ -1737,7 +1737,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_dedupe_media')
       }
-    `)
+    `) as any
 
     assert.equal(output.sent.length, 1)
     assert.equal(output.first.suppressed, false)
@@ -1748,16 +1748,16 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const now = Date.now()
       let startCount = 0
       const attempts = []
-      plugins.getPluginManager().registerBuiltin('test-recover-connector-plugin', {
-        name: 'Test Recover Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-recover-connector-extension', {
+        name: 'Test Recover Connector Extension',
         connectors: [{
           id: 'test-recover',
           name: 'Test Recover',
@@ -1802,7 +1802,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_recover')
       }
-    `)
+    `) as any
 
     assert.equal(output.result.messageId, 'recover-1')
     assert.equal(output.attempts.length, 2)
@@ -1814,15 +1814,15 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const sent = []
       const now = Date.now()
-      plugins.getPluginManager().registerBuiltin('test-send-plugin', {
-        name: 'Test Send Plugin',
+      ext.getExtensionManager().registerBuiltin('test-send-extension', {
+        name: 'Test Send Extension',
         connectors: [{
           id: 'test-send',
           name: 'Test Send',
@@ -1864,7 +1864,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -1881,7 +1881,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_1')
       }
-    `)
+    `) as any
 
     assert.equal(output.result.messageId, 'out-1')
     assert.equal(output.sent.length, 1)
@@ -1894,17 +1894,17 @@ describe('sanitizeConnectorOutboundContent', () => {
       const managerMod = await import('./src/lib/server/connectors/manager')
       const chatExecMod = await import('./src/lib/server/chat-execution/chat-execution')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const chatExec = chatExecMod.default || chatExecMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const sent = []
       const now = Date.now()
-      plugins.getPluginManager().registerBuiltin('test-dup-heartbeat-plugin', {
-        name: 'Test Dup Heartbeat Plugin',
+      ext.getExtensionManager().registerBuiltin('test-dup-heartbeat-extension', {
+        name: 'Test Dup Heartbeat Extension',
         connectors: [{
           id: 'test-dup-heartbeat',
           name: 'Test Dup Heartbeat',
@@ -1942,7 +1942,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Hal2k',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           heartbeatEnabled: true,
           heartbeatIntervalSec: 60,
           threadSessionId: 'agent_thread',
@@ -1982,7 +1982,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           sessionType: 'human',
           agentId: 'agent_1',
           shortcutForAgentId: 'agent_1',
-          plugins: [],
+          extensions: [],
           connectorContext: {
             connectorId: 'conn_1',
             channelId: 'poisoned-main-thread',
@@ -2031,7 +2031,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         await manager.stopConnector('conn_1')
       }
-    `)
+    `) as any
 
     assert.equal(output.directResponse, 'Direct connector reply')
     assert.equal(output.sent.length, 0)
@@ -2045,12 +2045,12 @@ describe('sanitizeConnectorOutboundContent', () => {
       const managerMod = await import('./src/lib/server/connectors/manager')
       const pairingMod = await import('./src/lib/server/connectors/pairing')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const pairing = pairingMod.default || pairingMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       let providerCalls = 0
       const now = Date.now()
@@ -2068,8 +2068,8 @@ describe('sanitizeConnectorOutboundContent', () => {
         },
       }
 
-      plugins.getPluginManager().registerBuiltin('test-quiet-boundary-connector-plugin', {
-        name: 'Test Quiet Boundary Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-quiet-boundary-connector-extension', {
+        name: 'Test Quiet Boundary Connector Extension',
         connectors: [{
           id: 'test-quiet',
           name: 'Test Quiet',
@@ -2086,7 +2086,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Nova',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2120,7 +2120,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2145,7 +2145,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         directSessionMessageCount: directSession?.messages?.length || 0,
         mainThreadMessageCount: sessions.agent_thread?.messages?.length || 0,
       }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'NO_MESSAGE')
     assert.equal(output.providerCalls, 0)
@@ -2159,12 +2159,12 @@ describe('sanitizeConnectorOutboundContent', () => {
       const managerMod = await import('./src/lib/server/connectors/manager')
       const pairingMod = await import('./src/lib/server/connectors/pairing')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const pairing = pairingMod.default || pairingMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       let providerCalls = 0
       const now = Date.now()
@@ -2183,8 +2183,8 @@ describe('sanitizeConnectorOutboundContent', () => {
         },
       }
 
-      plugins.getPluginManager().registerBuiltin('test-quiet-boundary-connector-plugin-allow-riley', {
-        name: 'Test Quiet Boundary Connector Plugin Allow Riley',
+      ext.getExtensionManager().registerBuiltin('test-quiet-boundary-connector-extension-allow-riley', {
+        name: 'Test Quiet Boundary Connector Extension Allow Riley',
         connectors: [{
           id: 'test-quiet-allow-riley',
           name: 'Test Quiet Allow Riley',
@@ -2201,7 +2201,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Nova',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2235,7 +2235,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2260,7 +2260,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         directSessionMessageCount: directSession?.messages?.length || 0,
         mainThreadMessageCount: sessions.agent_thread?.messages?.length || 0,
       }))
-    `)
+    `) as any
 
     assert.equal(output.response, 'Replying to Riley normally')
     assert.equal(output.providerCalls, 1)
@@ -2274,19 +2274,19 @@ describe('sanitizeConnectorOutboundContent', () => {
       const path = await import('node:path')
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const toolsMod = await import('./src/lib/server/session-tools/index')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const toolsApi = {
         ...toolsMod,
         ...(toolsMod.default || {}),
       }
 
       const now = Date.now()
-      plugins.getPluginManager().registerBuiltin('test-ambiguous-connector-plugin', {
-        name: 'Test Ambiguous Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-ambiguous-connector-extension', {
+        name: 'Test Ambiguous Connector Extension',
         connectors: [{
           id: 'test-voice',
           name: 'Test Voice',
@@ -2303,7 +2303,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'anthropic',
           model: 'claude-test',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           createdAt: now,
           updatedAt: now,
         },
@@ -2367,7 +2367,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -2390,7 +2390,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         await built.cleanup()
         await manager.stopConnector('conn_voice')
       }
-    `)
+    `) as any
 
     assert.match(output.raw, /no target recipient configured/)
   })
@@ -2429,7 +2429,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2463,7 +2463,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2496,7 +2496,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         .sort((a, b) => String(a.senderName).localeCompare(String(b.senderName)))
       const thread = sessions.agent_thread
       console.log(JSON.stringify({ directSessions, threadMessages: thread.messages }))
-    `)
+    `) as any
 
     assert.equal(output.directSessions.length, 4)
     assert.deepEqual(output.directSessions.map((entry: { senderName: string | null }) => entry.senderName), ['Alice', 'Bob', 'Gran', 'Wayde'])
@@ -2551,7 +2551,7 @@ describe('sanitizeConnectorOutboundContent', () => {
             name: 'Molly',
             provider: 'test-provider',
             model: 'test-model',
-            plugins: [],
+            extensions: [],
             threadSessionId: 'agent_thread',
             createdAt: now,
             updatedAt: now,
@@ -2585,7 +2585,7 @@ describe('sanitizeConnectorOutboundContent', () => {
             lastActiveAt: now,
             sessionType: 'human',
             agentId: 'agent_1',
-            plugins: [],
+            extensions: [],
           },
         })
 
@@ -2623,7 +2623,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         streamChat.setStreamAgentChatForTest(null)
       }
-    `)
+    `) as any
 
     assert.equal(output.reply.senderNames.includes('Alice'), false)
     assert.equal(output.reply.senderNames.includes('Gran'), false)
@@ -2647,7 +2647,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'openai',
           model: 'gpt-4.1-mini',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2685,7 +2685,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2701,7 +2701,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       })
       const approvals = Object.values(storage.loadApprovals())
       console.log(JSON.stringify({ reply, approvals }))
-    `)
+    `) as any
 
     assert.match(output.reply, /not approved for this connector/i)
     assert.match(output.reply, /no automatic approval queue is created/i)
@@ -2725,7 +2725,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'openai',
           model: 'gpt-4.1-mini',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2763,7 +2763,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2782,7 +2782,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       const directSessions = Object.values(sessions)
         .filter((entry) => String(entry.name || '').startsWith('connector:'))
       console.log(JSON.stringify({ reply, pending, directSessions }))
-    `)
+    `) as any
 
     assert.match(output.reply, /blocked for this connector/i)
     assert.equal(output.pending.length, 0)
@@ -2826,7 +2826,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2863,7 +2863,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -2901,7 +2901,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         pendingAfter,
         threadMessages: thread.messages,
       }))
-    `)
+    `) as any
 
     assert.match(output.first, /pending pairing/i)
     assert.match(output.second, /pending pairing/i)
@@ -2950,7 +2950,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -2988,7 +2988,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -3009,7 +3009,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         approvals,
         threadMessages: thread.messages,
       }))
-    `)
+    `) as any
 
     assert.equal(output.reply, 'Approved hello to Bob')
     assert.equal(output.approvals.length, 0)
@@ -3043,7 +3043,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -3077,7 +3077,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: ['manage_connectors'],
+          extensions: ['manage_connectors'],
         },
       })
 
@@ -3108,7 +3108,7 @@ describe('sanitizeConnectorOutboundContent', () => {
       } finally {
         manager.setStreamAgentChatForTest(null)
       }
-    `)
+    `) as any
 
     assert.equal(output.response, 'Sorry, I could not produce a reply just now. Please try again.')
     assert.equal(output.directSession.messages.at(-1).role, 'assistant')
@@ -3120,12 +3120,12 @@ describe('sanitizeConnectorOutboundContent', () => {
     const output = runWithTempDataDir(`
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const providersMod = await import('./src/lib/providers/index')
       const runtimeMod = await import('./src/lib/server/runtime/session-run-manager')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
       const providers = providersMod.default || providersMod
       const runtime = runtimeMod.default || runtimeMod
 
@@ -3137,8 +3137,8 @@ describe('sanitizeConnectorOutboundContent', () => {
       const firstStarted = new Promise((resolve) => { resolveFirstStarted = resolve })
       const blockFirstReply = new Promise((resolve) => { releaseFirst = resolve })
 
-      plugins.getPluginManager().registerBuiltin('test-queued-followup-plugin', {
-        name: 'Test Queued Followup Plugin',
+      ext.getExtensionManager().registerBuiltin('test-queued-followup-extension', {
+        name: 'Test Queued Followup Extension',
         connectors: [{
           id: 'test-queued-followup',
           name: 'Test Queued Followup',
@@ -3177,7 +3177,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -3211,7 +3211,7 @@ describe('sanitizeConnectorOutboundContent', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -3287,7 +3287,7 @@ describe('sanitizeConnectorOutboundContent', () => {
         releaseFirst()
         await manager.stopConnector('conn_1')
       }
-    `)
+    `) as any
 
     assert.equal(output.first, 'Reply 1')
     assert.equal(output.second, 'Queued. I will reply here as soon as the current task finishes.')

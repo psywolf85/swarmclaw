@@ -4,7 +4,7 @@ import { ImapFlow } from 'imapflow'
 import { createTransport } from 'nodemailer'
 import { simpleParser } from 'mailparser'
 import { UPLOAD_DIR, loadConnectors } from '@/lib/server/storage'
-import { getPluginManager } from '@/lib/server/plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
 
 export interface MailboxConfig {
   imapHost: string
@@ -74,9 +74,9 @@ function sanitizeAttachmentName(value: string | undefined, fallback: string): st
 }
 
 export function getMailboxConfig(): MailboxConfig {
-  const pluginManager = getPluginManager()
-  const mailboxSettings = pluginManager.getPluginSettings('mailbox') as Record<string, unknown>
-  const emailSettings = pluginManager.getPluginSettings('email') as Record<string, unknown>
+  const extensionManager = getExtensionManager()
+  const mailboxSettings = extensionManager.getExtensionSettings('mailbox') as Record<string, unknown>
+  const emailSettings = extensionManager.getExtensionSettings('email') as Record<string, unknown>
   const connectors = loadConnectors()
   const emailConnector = Object.values(connectors)
     .find((entry) => entry && typeof entry === 'object' && String((entry as Record<string, unknown>).platform || '').toLowerCase() === 'email') as Record<string, unknown> | undefined
@@ -105,7 +105,7 @@ export function getMailboxConfig(): MailboxConfig {
 
 function ensureMailboxConfigured(config: MailboxConfig): void {
   if (!config.imapHost || !config.user || !config.password) {
-    throw new Error('Mailbox plugin requires IMAP host, user, and password.')
+    throw new Error('Mailbox extension requires IMAP host, user, and password.')
   }
 }
 

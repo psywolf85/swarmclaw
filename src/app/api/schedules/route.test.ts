@@ -25,7 +25,7 @@ function seedAgent(id: string, overrides: Record<string, unknown> = {}) {
     credentialId: null,
     fallbackCredentialIds: [],
     apiEndpoint: null,
-    plugins: ['manage_schedules'],
+    extensions: ['manage_schedules'],
     createdAt: now,
     updatedAt: now,
     ...overrides,

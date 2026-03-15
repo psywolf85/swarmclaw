@@ -13,6 +13,8 @@ export type SetupProvider =
   | 'mistral'
   | 'xai'
   | 'fireworks'
+  | 'nebius'
+  | 'deepinfra'
   | 'ollama'
   | 'openclaw'
   | 'custom'
@@ -150,6 +152,28 @@ export const SETUP_PROVIDERS: SetupProviderOption[] = [
     keyLabel: 'fireworks.ai',
     icon: 'F',
     modelLibraryUrl: 'https://fireworks.ai/models',
+  },
+  {
+    id: 'nebius',
+    name: 'Nebius',
+    description: 'Wide catalog of 60+ open-source models via Nebius Token Factory.',
+    requiresKey: true,
+    supportsEndpoint: false,
+    keyUrl: 'https://studio.nebius.com/settings/api-keys',
+    keyLabel: 'studio.nebius.com',
+    icon: 'N',
+    modelLibraryUrl: 'https://nebius.com/services/token-factory',
+  },
+  {
+    id: 'deepinfra',
+    name: 'DeepInfra',
+    description: 'Fast serverless inference for popular open-source models.',
+    requiresKey: true,
+    supportsEndpoint: false,
+    keyUrl: 'https://deepinfra.com/dash/api_keys',
+    keyLabel: 'deepinfra.com',
+    icon: 'D',
+    modelLibraryUrl: 'https://deepinfra.com/models',
   },
   {
     id: 'ollama',
@@ -616,6 +640,20 @@ export const DEFAULT_AGENTS: Record<SetupProvider, DefaultAgentConfig> = {
     description: 'A helpful assistant powered by Fireworks AI.',
     systemPrompt: SWARMCLAW_ASSISTANT_PROMPT,
     model: 'accounts/fireworks/models/deepseek-r1-0528',
+    tools: STARTER_AGENT_TOOLS,
+  },
+  nebius: {
+    name: 'Nebius Agent',
+    description: 'A helpful assistant powered by Nebius.',
+    systemPrompt: SWARMCLAW_ASSISTANT_PROMPT,
+    model: 'deepseek-ai/DeepSeek-R1-0528',
+    tools: STARTER_AGENT_TOOLS,
+  },
+  deepinfra: {
+    name: 'DeepInfra Agent',
+    description: 'A helpful assistant powered by DeepInfra.',
+    systemPrompt: SWARMCLAW_ASSISTANT_PROMPT,
+    model: 'deepseek-ai/DeepSeek-R1-0528',
     tools: STARTER_AGENT_TOOLS,
   },
   ollama: {

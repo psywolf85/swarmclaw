@@ -13,12 +13,8 @@ const originalEnv = {
 
 let tempDir = ''
 let workspaceDir = ''
-let buildDocumentTools: typeof import('./document').buildDocumentTools
-let buildExtractTools: typeof import('./extract').buildExtractTools
-let buildTableTools: typeof import('./table').buildTableTools
 let buildMailboxTools: typeof import('./mailbox').buildMailboxTools
 let buildHumanLoopTools: typeof import('./human-loop').buildHumanLoopTools
-let buildCrawlTools: typeof import('./crawl').buildCrawlTools
 let coerceSubagentActionArgs: typeof import('./subagent').coerceSubagentActionArgs
 let watchJobs: typeof import('@/lib/server/runtime/watch-jobs')
 let storage: typeof import('../storage')
@@ -36,7 +32,7 @@ function makeSession(overrides?: Partial<Session>): Session {
     messages: [],
     createdAt: Date.now(),
     lastActiveAt: Date.now(),
-    plugins: [],
+    extensions: [],
     ...overrides,
   }
 }
@@ -52,7 +48,7 @@ function makeBuildContext(overrides?: {
       sessionId: session.id,
       agentId: session.agentId || 'agent_1',
     },
-    hasPlugin: () => true,
+    hasExtension: () => true,
     hasTool: () => true,
     cleanupFns: [],
     commandTimeoutMs: 5000,
@@ -61,7 +57,7 @@ function makeBuildContext(overrides?: {
     persistDelegateResumeId: () => {},
     readStoredDelegateResumeId: () => null,
     resolveCurrentSession: () => session,
-    activePlugins: [],
+    activeExtensions: [],
   }
 }
 
@@ -74,12 +70,8 @@ before(async () => {
   process.env.SWARMCLAW_BUILD_MODE = '1'
   fs.mkdirSync(process.env.DATA_DIR, { recursive: true })
 
-  ;({ buildDocumentTools } = await import('./document'))
-  ;({ buildExtractTools } = await import('./extract'))
-  ;({ buildTableTools } = await import('./table'))
   ;({ buildMailboxTools } = await import('./mailbox'))
   ;({ buildHumanLoopTools } = await import('./human-loop'))
-  ;({ buildCrawlTools } = await import('./crawl'))
   ;({ coerceSubagentActionArgs } = await import('./subagent'))
   watchJobs = await import('@/lib/server/runtime/watch-jobs')
   storage = await import('../storage')
@@ -96,60 +88,6 @@ after(() => {
 })
 
 describe('primitive tools', () => {
-  it('document tool reads, stores, and searches extracted text', async () => {
-    const sourcePath = path.join(workspaceDir, 'note.txt')
-    fs.writeFileSync(sourcePath, 'Invoice 42 for ACME\nTotal: $120.50\n')
-
-    const [documentTool] = buildDocumentTools(makeBuildContext())
-    const read = JSON.parse(String(await documentTool.invoke({ action: 'read', filePath: 'note.txt' })))
-    assert.match(read.text, /Invoice 42/)
-
-    const stored = JSON.parse(String(await documentTool.invoke({ action: 'store', filePath: 'note.txt', title: 'Invoice Note' })))
-    const search = JSON.parse(String(await documentTool.invoke({ action: 'search', query: 'ACME' })))
-    const fetched = JSON.parse(String(await documentTool.invoke({ action: 'get', id: stored.id })))
-
-    assert.equal(search.matches[0].id, stored.id)
-    assert.equal(fetched.title, 'Invoice Note')
-  })
-
-  it('table tool transforms inline data and writes results', async () => {
-    const [tableTool] = buildTableTools(makeBuildContext())
-    const rows = [
-      { id: '1', name: 'Ada', score: 10 },
-      { id: '2', name: 'Grace', score: 25 },
-      { id: '2', name: 'Grace', score: 25 },
-    ]
-
-    const filtered = JSON.parse(String(await tableTool.invoke({
-      action: 'filter',
-      rows,
-      where: [{ column: 'score', op: 'gt', value: 15 }],
-    })))
-    assert.equal(filtered.rowCount, 2)
-
-    const deduped = JSON.parse(String(await tableTool.invoke({
-      action: 'dedupe',
-      rows,
-      on: ['id'],
-    })))
-    assert.equal(deduped.rowCount, 2)
-
-    const joined = JSON.parse(String(await tableTool.invoke({
-      action: 'join',
-      leftRows: [{ id: '1', team: 'red' }],
-      rightRows: [{ id: '1', email: 'ada@example.com' }],
-      on: 'id',
-    })))
-    assert.equal(joined.rows[0].email, 'ada@example.com')
-
-    const writeResult = JSON.parse(String(await tableTool.invoke({
-      action: 'write',
-      rows,
-      outputPath: 'exports/report.csv',
-    })))
-    assert.equal(fs.existsSync(writeResult.output.filePath), true)
-  })
-
   it('human-loop tool creates durable mailbox waits', async () => {
     const [humanTool] = buildHumanLoopTools(makeBuildContext())
     const sessions = storage.loadSessions()
@@ -238,65 +176,6 @@ describe('primitive tools', () => {
     const status = JSON.parse(String(await mailboxTool.invoke({ action: 'status' })))
     assert.equal(status.configured, false)
     assert.equal(status.folder, 'INBOX')
-  })
-
-  it('extract tool reports active model context', async () => {
-    const [extractTool] = buildExtractTools(makeBuildContext({
-      session: makeSession({
-        provider: 'ollama',
-        model: 'qwen3.5',
-        apiEndpoint: 'http://localhost:11434',
-      }),
-    }))
-    const status = JSON.parse(String(await extractTool.invoke({ action: 'status' })))
-    assert.equal(status.provider, 'ollama')
-    assert.equal(Array.isArray(status.supports), true)
-  })
-
-  it('crawl tool crawls and dedupes fetched pages without a live server', async () => {
-    const originalFetch = global.fetch
-    global.fetch = (async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input.toString()
-      if (url.endsWith('/page-2')) {
-        return new Response('<html><head><title>Page Two</title></head><body><article><h1>Second</h1><p>Next content</p></article></body></html>', {
-          status: 200,
-          headers: { 'content-type': 'text/html' },
-        })
-      }
-      return new Response('<html><head><title>Root</title></head><body><article><h1>Home</h1><p>Welcome</p></article><a href="/page-2" rel="next">Next</a></body></html>', {
-        status: 200,
-        headers: { 'content-type': 'text/html' },
-      })
-    }) as typeof fetch
-
-    try {
-      const [crawlTool] = buildCrawlTools(makeBuildContext())
-      const baseUrl = 'https://example.test/'
-
-      const crawled = JSON.parse(String(await crawlTool.invoke({
-        action: 'crawl_site',
-        url: baseUrl,
-        limit: 2,
-      })))
-      assert.equal(crawled.count, 2)
-      assert.equal(crawled.pages[0].title, 'Root')
-
-      const extracted = JSON.parse(String(await crawlTool.invoke({
-        action: 'extract_sitemap',
-        url: baseUrl,
-        limit: 2,
-      })))
-      assert.equal(extracted.count, 2)
-      assert.equal(extracted.urls.includes('https://example.test/page-2'), true)
-
-      const deduped = JSON.parse(String(await crawlTool.invoke({
-        action: 'dedupe_pages',
-        pages: [crawled.pages[0], crawled.pages[0], crawled.pages[1]],
-      })))
-      assert.equal(deduped.count, 2)
-    } finally {
-      global.fetch = originalFetch
-    }
   })
 
   it('coerces wrapped subagent swarm arguments into typed arrays and booleans', () => {

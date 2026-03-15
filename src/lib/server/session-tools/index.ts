@@ -6,7 +6,7 @@ import { loadSettings, loadSession, loadAgent, loadMcpServers, patchAgent, patch
 import { loadRuntimeSettings } from '@/lib/server/runtime/runtime-settings'
 import { log } from '../logger'
 import { resolveSessionToolPolicy } from '../tool-capability-policy'
-import { expandPluginIds } from '../tool-aliases'
+import { expandExtensionIds } from '../tool-aliases'
 import type { ToolContext, SessionToolsResult, ToolBuildContext, AbortSignalRef } from './context'
 
 // Import all tool modules to trigger their builtin registration
@@ -16,12 +16,9 @@ import { buildEditFileTools } from './edit_file'
 import { buildDelegateTools } from './delegate'
 import { buildWebTools, sweepOrphanedBrowsers, cleanupSessionBrowser, getActiveBrowserCount, hasActiveBrowser } from './web'
 import { buildMemoryTools } from './memory'
-import { buildSandboxTools } from './sandbox'
 import { buildChatroomTools } from './chatroom'
 import { buildSubagentTools } from './subagent'
 import { buildCanvasTools } from './canvas'
-import { buildHttpTools } from './http'
-import { buildGitTools } from './git'
 import { buildWalletTools } from './wallet'
 import { buildOpenClawWorkspaceTools } from './openclaw-workspace'
 import { buildScheduleTools } from './schedule'
@@ -32,25 +29,21 @@ import { buildOpenClawNodeTools } from './openclaw-nodes'
 import { buildContextTools } from './context-mgmt'
 import { buildDiscoveryTools } from './discovery'
 import { buildMonitorTools } from './monitor'
-import { buildPluginCreatorTools } from './plugin-creator'
+import { buildExtensionCreatorTools } from './extension-creator'
 import { buildImageGenTools } from './image-gen'
 import { buildEmailTools } from './email'
-import { buildCalendarTools } from './calendar'
 import { buildReplicateTools } from './replicate'
 import { buildMailboxTools } from './mailbox'
 import { buildHumanLoopTools } from './human-loop'
-import { buildDocumentTools } from './document'
-import { buildExtractTools } from './extract'
-import { buildTableTools } from './table'
-import { buildCrawlTools } from './crawl'
 import { buildGoogleWorkspaceTools } from './google-workspace'
+// http_request consolidated into web 'api' action — buildHttpTools removed
 import { buildSkillRuntimeTools } from './skill-runtime'
 import { buildConnectorTools } from './connector'
 import './connector'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { enforceFileAccessPolicy } from './file-access-policy'
 
-import { getPluginManager } from '../plugins'
+import { getExtensionManager } from '../extensions'
 import { runCapabilityBeforeToolCall, runCapabilityHook } from '../native-capabilities'
 import { jsonSchemaToZod } from '../mcp-client'
 import {
@@ -72,7 +65,7 @@ const DELEGATION_TOOL_NAMES = new Set([
   'delegate_to_gemini_cli',
 ])
 
-export async function buildSessionTools(cwd: string, enabledPlugins: string[], ctx?: ToolContext): Promise<SessionToolsResult> {
+export async function buildSessionTools(cwd: string, enabledExtensions: string[], ctx?: ToolContext): Promise<SessionToolsResult> {
   const tools: StructuredToolInterface[] = []
   const cleanupFns: (() => Promise<void>)[] = []
   const abortSignalRef: AbortSignalRef = {}
@@ -83,28 +76,26 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
     const claudeTimeoutMs = runtime.claudeCodeTimeoutMs
     const cliProcessTimeoutMs = runtime.cliProcessTimeoutMs
     const appSettings = loadSettings()
-    const effectiveEnabledPlugins = dedup(Array.isArray(enabledPlugins) ? enabledPlugins : [])
-    const toolPolicy = resolveSessionToolPolicy(effectiveEnabledPlugins, appSettings)
-    const expandedEnabled = expandPluginIds(toolPolicy.enabledPlugins)
-    const expandedBlocked = expandPluginIds(toolPolicy.blockedPlugins.map((entry) => entry.tool))
+    const effectiveEnabledExtensions = dedup(Array.isArray(enabledExtensions) ? enabledExtensions : [])
+    const toolPolicy = resolveSessionToolPolicy(effectiveEnabledExtensions, appSettings)
+    const expandedEnabled = expandExtensionIds(toolPolicy.enabledExtensions)
+    const expandedBlocked = expandExtensionIds(toolPolicy.blockedExtensions.map((entry) => entry.tool))
     const blockedSet = new Set(expandedBlocked)
     const filteredEnabled = expandedEnabled.filter((id) => !blockedSet.has(id))
-    const pluginManager = getPluginManager()
-    const activePlugins = (filteredEnabled.includes('shell')
+    const extensionManager = getExtensionManager()
+    const activeExtensions = (filteredEnabled.includes('shell')
       && !filteredEnabled.includes('process')
       && !blockedSet.has('process')
       ? [...filteredEnabled, 'process']
-      : filteredEnabled).filter((pluginId) => !pluginManager.isExplicitlyDisabled(pluginId))
-    const activePluginSet = new Set(activePlugins)
-    const hasPlugin = (pluginName: string) => activePluginSet.has(pluginName)
-    /** @deprecated Use hasPlugin */
-    const hasTool = hasPlugin
+      : filteredEnabled).filter((extensionId) => !extensionManager.isExplicitlyDisabled(extensionId))
+    const activeExtensionSet = new Set(activeExtensions)
+    const hasExtension = (extensionName: string) => activeExtensionSet.has(extensionName)
 
-    if (toolPolicy.blockedPlugins.length > 0) {
-      log.info('session-tools', 'Capability policy blocked plugin families', {
+    if (toolPolicy.blockedExtensions.length > 0) {
+      log.info('session-tools', 'Capability policy blocked extension families', {
         sessionId: ctx?.sessionId || null,
         agentId: ctx?.agentId || null,
-        blockedPlugins: toolPolicy.blockedPlugins.map((entry) => `${entry.tool}:${entry.reason}`),
+        blockedExtensions: toolPolicy.blockedExtensions.map((entry) => `${entry.tool}:${entry.reason}`),
       })
     }
 
@@ -158,8 +149,8 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
     const bctx: ToolBuildContext = {
       cwd,
       ctx,
-      hasPlugin,
-      hasTool,
+      hasExtension,
+      hasTool: hasExtension,
       cleanupFns,
       commandTimeoutMs,
       claudeTimeoutMs,
@@ -167,14 +158,14 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
       persistDelegateResumeId,
       readStoredDelegateResumeId,
       resolveCurrentSession,
-      activePlugins,
+      activeExtensions,
       fileAccessPolicy: effectiveFileAccessPolicy,
       sandboxConfig: agentRecord?.sandboxConfig ?? null,
       filesystemScope,
     }
 
     // 1. Build Native Bridge Tools (Legacy enablement)
-    const toolToPluginMap: Record<string, string> = {}
+    const toolToExtensionMap: Record<string, string> = {}
 
     const nativeBuilders: Array<[string, (ctx: ToolBuildContext) => StructuredToolInterface[]]> = [
       ['shell', buildShellTools],
@@ -184,12 +175,9 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
       ['web', buildWebTools],
       ['memory', buildMemoryTools],
       ['manage_platform', buildPlatformTools],
-      ['sandbox', buildSandboxTools],
       ['manage_chatrooms', buildChatroomTools],
       ['spawn_subagent', buildSubagentTools],
       ['canvas', buildCanvasTools],
-      ['http', buildHttpTools],
-      ['git', buildGitTools],
       ['wallet', buildWalletTools],
       ['openclaw_workspace', buildOpenClawWorkspaceTools],
       ['schedule', buildScheduleTools],
@@ -199,60 +187,55 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
       ['discovery', buildDiscoveryTools],
       ['monitor', buildMonitorTools],
       ['manage_connectors', buildConnectorTools],
-      ['plugin_creator', buildPluginCreatorTools],
+      ['extension_creator', buildExtensionCreatorTools],
       ['image_gen', buildImageGenTools],
       ['email', buildEmailTools],
-      ['calendar', buildCalendarTools],
       ['replicate', buildReplicateTools],
       ['google_workspace', buildGoogleWorkspaceTools],
       ['use_skill', buildSkillRuntimeTools],
       ['mailbox', buildMailboxTools],
       ['ask_human', buildHumanLoopTools],
-      ['document', buildDocumentTools],
-      ['extract', buildExtractTools],
-      ['table', buildTableTools],
-      ['crawl', buildCrawlTools],
     ]
 
-    for (const [pluginId, builder] of nativeBuilders) {
+    for (const [extensionId, builder] of nativeBuilders) {
       const builtTools = builder(bctx)
       for (const t of builtTools) {
-        toolToPluginMap[t.name] = pluginId
+        toolToExtensionMap[t.name] = extensionId
       }
       tools.push(...builtTools)
     }
 
     const crudTools = buildCrudTools(bctx)
     for (const toolEntry of crudTools) {
-      toolToPluginMap[toolEntry.name] = toolEntry.name
+      toolToExtensionMap[toolEntry.name] = toolEntry.name
     }
     tools.push(...crudTools)
 
-    // 2. Build Plugin Tools (Built-in + External)
+    // 2. Build Extension Tools (Built-in + External)
     try {
-      const pluginTools = pluginManager.getTools(activePlugins)
+      const extensionTools = extensionManager.getTools(activeExtensions)
       const existingNames = new Set(tools.map((t) => t.name))
       
-      for (const entry of pluginTools) {
+      for (const entry of extensionTools) {
         const pt = entry.tool
         if (!ctx?.delegationEnabled && DELEGATION_TOOL_NAMES.has(pt.name)) {
           continue
         }
         if (existingNames.has(pt.name)) {
-          log.warn('session-tools', 'Skipping plugin tool due to duplicate name', {
+          log.warn('session-tools', 'Skipping extension tool due to duplicate name', {
             toolName: pt.name,
-            pluginId: entry.pluginId,
+            extensionId: entry.extensionId,
           })
           continue
         }
         existingNames.add(pt.name)
-        toolToPluginMap[pt.name] = entry.pluginId
+        toolToExtensionMap[pt.name] = entry.extensionId
 
         tools.push(
           tool(
             async (args) => {
-              if (pluginManager.isExplicitlyDisabled(entry.pluginId)) {
-                throw new Error(`Plugin "${entry.pluginId}" is disabled`)
+              if (extensionManager.isExplicitlyDisabled(entry.extensionId)) {
+                throw new Error(`Extension "${entry.extensionId}" is disabled`)
               }
               try {
                 const normalizedArgs = normalizeToolInputArgs((args ?? {}) as Record<string, unknown>)
@@ -260,10 +243,10 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
                   session: { ...(ctx || {}), ...bctx } as any,
                   message: '',
                 })
-                pluginManager.recordExternalToolSuccess(entry.pluginId)
+                extensionManager.recordExternalToolSuccess(entry.extensionId)
                 return typeof res === 'string' ? res : JSON.stringify(res)
               } catch (err: unknown) {
-                pluginManager.recordExternalToolFailure(entry.pluginId, pt.name, err)
+                extensionManager.recordExternalToolFailure(entry.extensionId, pt.name, err)
                 throw err
               }
             },
@@ -276,7 +259,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
         )
       }
     } catch (err: unknown) {
-      log.error('session-tools', 'Failed to load plugin tools', { error: errorMessage(err) })
+      log.error('session-tools', 'Failed to load extension tools', { error: errorMessage(err) })
     }
 
     // 3. MCP server tools
@@ -294,7 +277,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
           const mcpLcTools = await mcpToolsToLangChain(conn.client, config.name)
           for (const t of mcpLcTools) {
             if (!disabledMcpToolNames.has(t.name)) {
-              toolToPluginMap[t.name] = `mcp:${serverId}`
+              toolToExtensionMap[t.name] = `mcp:${serverId}`
               tools.push(t)
             }
           }
@@ -311,7 +294,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
     }
 
     // 4. Always available: request_tool_access
-    toolToPluginMap['request_tool_access'] = '_system'
+    toolToExtensionMap['request_tool_access'] = '_system'
     tools.push(
       tool(
         async (args) => {
@@ -321,7 +304,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
           if (!toolId?.trim()) {
             return JSON.stringify({
               error: 'toolId is required',
-              message: 'Specify the exact plugin ID to request access for.',
+              message: 'Specify the exact extension ID to request access for.',
             })
           }
           const normalizedToolId = toolId.trim()
@@ -357,10 +340,10 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
         },
         {
           name: 'request_tool_access',
-          description: 'Ask the user for access to a plugin I don\'t currently have.',
+          description: 'Ask the user for access to an extension I don\'t currently have.',
           schema: z.object({
-            toolId: z.string().describe('The plugin ID to request access for'),
-            reason: z.string().describe('Brief explanation of why you need this plugin'),
+            toolId: z.string().describe('The extension ID to request access for'),
+            reason: z.string().describe('Brief explanation of why you need this extension'),
           }),
         },
       ),
@@ -369,8 +352,8 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
     const fileAccessPolicy = agentRecord?.fileAccessPolicy ?? null
 
     const buildFallbackHookSession = (): Session => ({
-      id: ctx?.sessionId || 'plugin-hook-session',
-      name: 'Plugin Hook Session',
+      id: ctx?.sessionId || 'hook-session',
+      name: 'Extension Hook Session',
       cwd,
       user: 'system',
       // Synthetic fallback used only for hook execution when no persisted session exists.
@@ -381,7 +364,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
       createdAt: Date.now(),
       lastActiveAt: Date.now(),
       agentId: ctx?.agentId || null,
-      ...splitCapabilityIds(activePlugins),
+      ...splitCapabilityIds(activeExtensions),
     })
 
     const wrappedTools = tools.map((candidate) => {
@@ -427,7 +410,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
               input: guardedArgs,
               runId: ctx?.runId || undefined,
             },
-            { enabledIds: activePlugins },
+            { enabledIds: activeExtensions },
           )
           if (hookResult.warning) {
             ctx?.onToolCallWarning?.({
@@ -444,7 +427,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
           await runCapabilityHook(
             'afterToolExec',
             { session: hookSession, toolName: candidate.name, input: effectiveArgs, output: outputText },
-            { enabledIds: activePlugins },
+            { enabledIds: activeExtensions },
           )
           return outputText
         },
@@ -463,7 +446,7 @@ export async function buildSessionTools(cwd: string, enabledPlugins: string[], c
           try { await fn() } catch { /* ignore */ }
         }
       },
-      toolToPluginMap,
+      toolToExtensionMap,
       abortSignalRef,
     }
   } catch (err: any) {

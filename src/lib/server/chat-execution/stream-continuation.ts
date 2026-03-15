@@ -196,8 +196,8 @@ export function hasStateChangingWalletEvidence(toolEvents: MessageToolEvent[]): 
       /"action":"send_transaction"/.test(input)
       || /"action":"send"/.test(input)
       || /"action":"sign_transaction"/.test(input)
-      || /"type":"plugin_wallet_action_request"/.test(input)
-      || /"type":"plugin_wallet_transfer_request"/.test(input)
+      || /"type":"extension_wallet_action_request"/.test(input)
+      || /"type":"extension_wallet_transfer_request"/.test(input)
       || /"status":"broadcast"/.test(input)
     )
   })
@@ -560,11 +560,11 @@ export function shouldForceWorkspaceScopeShellFallback(params: {
   userMessage: string
   finalResponse: string
   toolEvents: MessageToolEvent[]
-  enabledPlugins: string[]
+  enabledExtensions: string[]
 }): boolean {
   if (!hasWorkspaceScopeFileError(params.toolEvents)) return false
   if (!params.toolEvents.some((event) => event.name === 'files')) return false
-  if (!params.enabledPlugins.some((toolId) => ['shell', 'execute_command'].includes(toolId))) return false
+  if (!params.enabledExtensions.some((toolId) => ['shell', 'execute_command'].includes(toolId))) return false
   if (params.toolEvents.some((event) => ['shell', 'execute_command'].includes(event.name))) return false
 
   const trimmed = params.finalResponse.trim()

@@ -4,7 +4,7 @@ import {
   AGENT_REGRESSION_SCENARIOS,
   DEFAULT_AGENT_REGRESSION_SCENARIO_IDS,
   resolveRegressionApprovalSettings,
-  resolveRegressionPlugins,
+  resolveRegressionExtensions,
   scoreAssertions,
 } from './agent-regression'
 
@@ -51,17 +51,17 @@ describe('agent regression helpers', () => {
     assert.ok(!DEFAULT_AGENT_REGRESSION_SCENARIO_IDS.includes('blackboard-delegation-fit'))
   })
 
-  it('can resolve regressions against the agent capability set instead of injected scenario plugins', () => {
-    const resolved = resolveRegressionPlugins(
+  it('can resolve regressions against the agent capability set instead of injected scenario extensions', () => {
+    const resolved = resolveRegressionExtensions(
       ['delegate', 'browser', 'manage_secrets', 'email'],
       {
-        plugins: ['codex_cli', 'browser', 'manage_secrets', 'files'],
+        tools: ['codex_cli', 'browser', 'manage_secrets', 'files'],
       },
       'agent',
     )
 
-    assert.deepEqual(resolved.requiredPlugins, ['delegate', 'browser', 'manage_secrets', 'email'])
-    assert.deepEqual(resolved.effectivePlugins, ['codex_cli', 'browser', 'manage_secrets', 'files'])
-    assert.deepEqual(resolved.missingPlugins, ['email'])
+    assert.deepEqual(resolved.requiredExtensions, ['delegate', 'browser', 'manage_secrets', 'email'])
+    assert.deepEqual(resolved.effectiveExtensions, ['codex_cli', 'browser', 'manage_secrets', 'files'])
+    assert.deepEqual(resolved.missingExtensions, ['email'])
   })
 })

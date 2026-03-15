@@ -1,6 +1,7 @@
 import crypto from 'crypto'
 import { hmrSingleton } from '@/lib/shared-utils'
 import { getProviderList } from '@/lib/providers'
+import { isOllamaCloudEndpoint, resolveStoredOllamaMode } from '@/lib/ollama-mode'
 import { OPENAI_COMPATIBLE_DEFAULTS } from '@/lib/server/provider-health'
 import { decryptKey, loadCredentials } from '@/lib/server/storage'
 import type { ProviderInfo, ProviderModelDiscoveryResult } from '@/types'
@@ -21,6 +22,7 @@ interface DiscoverProviderModelsInput {
   providerId: string
   credentialId?: string | null
   endpoint?: string | null
+  ollamaMode?: string | null
   force?: boolean
   requiresApiKey?: boolean
 }
@@ -45,6 +47,11 @@ function clean(value: string | null | undefined): string {
 
 function normalizeEndpoint(raw: string | null | undefined, fallback = ''): string {
   return (clean(raw) || fallback).replace(/\/+$/, '')
+}
+
+function toOpenAiCompatibleEndpoint(raw: string | null | undefined, fallback: string): string {
+  const normalized = normalizeEndpoint(raw, fallback)
+  return normalized.endsWith('/v1') ? normalized : `${normalized}/v1`
 }
 
 function supportsBuiltInModelDiscovery(providerId: string): boolean {
@@ -132,15 +139,26 @@ export function resolveDescriptor(input: DiscoverProviderModelsInput): Discovery
   }
 
   if (providerId === 'ollama') {
-    const ollamaEndpoint = normalizeEndpoint(input.endpoint, provider.defaultEndpoint || 'http://localhost:11434')
-    const isCloud = /^https?:\/\/(?:www\.)?ollama\.com(?:\/|$)/i.test(ollamaEndpoint)
+    const ollamaMode = resolveStoredOllamaMode({
+      ollamaMode: input.ollamaMode ?? null,
+      apiEndpoint: input.endpoint ?? null,
+    })
+    const explicitEndpoint = normalizeEndpoint(input.endpoint)
+    const ollamaEndpoint = ollamaMode === 'cloud'
+      ? toOpenAiCompatibleEndpoint(
+        isOllamaCloudEndpoint(explicitEndpoint) ? explicitEndpoint : null,
+        'https://ollama.com/v1',
+      )
+      : (explicitEndpoint && !isOllamaCloudEndpoint(explicitEndpoint)
+        ? explicitEndpoint
+        : normalizeEndpoint(provider.defaultEndpoint || 'http://localhost:11434', 'http://localhost:11434'))
     return {
       providerId,
       providerName: provider.name,
-      strategy: isCloud ? 'openai-compatible' : 'ollama',
+      strategy: ollamaMode === 'cloud' ? 'openai-compatible' : 'ollama',
       endpoint: ollamaEndpoint,
-      requiresApiKey: requiresApiKeyOverride ?? (isCloud ? true : provider.requiresApiKey),
-      optionalApiKey: isCloud ? false : Boolean(provider.optionalApiKey),
+      requiresApiKey: requiresApiKeyOverride ?? (ollamaMode === 'cloud' ? true : provider.requiresApiKey),
+      optionalApiKey: ollamaMode === 'cloud' ? false : Boolean(provider.optionalApiKey),
       supportsDiscovery,
     }
   }

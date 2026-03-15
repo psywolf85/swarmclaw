@@ -24,7 +24,7 @@ describe('SqliteCheckpointSaver', () => {
     await saver.put(
       { configurable: { thread_id: 'thread_1', checkpoint_ns: 'chat:test' } },
       checkpoint,
-      { topic: 'typed', labels: new Set(['alpha', 'beta']) },
+      { topic: 'typed', labels: new Set(['alpha', 'beta']) } as any,
       {},
     )
 
@@ -34,8 +34,8 @@ describe('SqliteCheckpointSaver', () => {
 
     assert.ok(tuple)
     assert.deepEqual(Array.from(tuple.checkpoint.channel_values.flags as Set<string>), ['a', 'b'])
-    assert.deepEqual(tuple.metadata.topic, 'typed')
-    assert.deepEqual(Array.from(tuple.metadata.labels as Set<string>), ['alpha', 'beta'])
+    assert.deepEqual((tuple.metadata as any).topic, 'typed')
+    assert.deepEqual(Array.from((tuple.metadata as any).labels as Set<string>), ['alpha', 'beta'])
   })
 
   it('preserves normal writes and replaces special writes using LangGraph indices', async () => {
@@ -43,7 +43,7 @@ describe('SqliteCheckpointSaver', () => {
     const config = await saver.put(
       { configurable: { thread_id: 'thread_1', checkpoint_ns: 'chat:test' } },
       makeCheckpoint('cp_0001'),
-      { phase: 'writes' },
+      { phase: 'writes' } as any,
       {},
     )
 
@@ -55,8 +55,8 @@ describe('SqliteCheckpointSaver', () => {
     const tuple = await saver.getTuple(config)
     assert.ok(tuple)
 
-    const normalWrite = tuple.pendingWrites.find((entry) => entry[1] === 'result')
-    const specialWrite = tuple.pendingWrites.find((entry) => entry[1] === ERROR)
+    const normalWrite = tuple.pendingWrites!.find((entry) => entry[1] === 'result')
+    const specialWrite = tuple.pendingWrites!.find((entry) => entry[1] === ERROR)
 
     assert.deepEqual(normalWrite, ['task_1', 'result', 'first'])
     assert.deepEqual(specialWrite, ['task_1', ERROR, 'error-2'])

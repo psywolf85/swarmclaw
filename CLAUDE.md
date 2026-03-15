@@ -54,7 +54,7 @@ All API routes live under `src/app/api/`. Key endpoints:
 - `daemon-state.ts` — Background daemon (30s heartbeat) running scheduler + task queue
 - `connectors/` — Chat platform bridges (Discord, Slack, Telegram, WhatsApp) with `manager.ts` routing messages
 - `session-tools.ts` — Agent tool execution (shell, files, web search, browser, claude_code delegation)
-- `plugins.ts` — Plugin system with lifecycle hooks (JS files in `data/plugins/`)
+- `plugins.ts` — Extension system with lifecycle hooks (JS files in `data/extensions/`)
 - `cost.ts` — Token counting and pricing per provider/model
 - `embeddings.ts` — Vector embedding provider integration
 
@@ -75,7 +75,7 @@ Core type definitions in `src/types/index.ts`: `Agent`, `Session`, `Message`, `P
 ### Data
 - `data/swarmclaw.db` — Main SQLite database (sessions, agents, tasks, usage, etc.)
 - `data/memory.db` — Agent memory with FTS5 + vector search
-- `data/plugins/` — Plugin JS files
+- `data/extensions/` — Extension JS files (migrated from `data/plugins/` automatically)
 - `.env.local` — Auto-generated config (`ACCESS_KEY`, `CREDENTIAL_SECRET`, `PORT=3456`)
 
 ### Dev Server

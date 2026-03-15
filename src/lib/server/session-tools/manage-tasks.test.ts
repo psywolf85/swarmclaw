@@ -89,7 +89,7 @@ describe('manage_tasks tool', () => {
       const tools = crud.buildCrudTools({
         cwd: workspaceDir,
         ctx: { sessionId: 'session-creator', agentId: 'default', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_tasks',
+        hasExtension: (name) => name === 'manage_tasks',
       })
       const tool = tools.find((entry) => entry.name === 'manage_tasks')
       const raw = await tool.invoke({

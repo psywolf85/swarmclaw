@@ -9,10 +9,11 @@ const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|bmp)$/i
 const TEXT_EXTS = /\.(txt|md|csv|json|xml|html|js|ts|tsx|jsx|py|go|rs|java|c|cpp|h|yml|yaml|toml|env|log|sh|sql|css|scss)$/i
 
 export function streamOllamaChat({ session, message, imagePath, apiKey, write, active, loadHistory, onUsage, signal }: StreamChatOptions): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const messages = buildMessages(session, message, imagePath, loadHistory)
     const runtime = resolveOllamaRuntimeConfig({
       model: session.model,
+      ollamaMode: session.ollamaMode,
       apiKey,
       apiEndpoint: session.apiEndpoint,
     })
@@ -69,10 +70,11 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
         let errBody = ''
         apiRes.on('data', (c: Buffer) => errBody += c)
         apiRes.on('end', () => {
-          console.error(`[${session.id}] ollama error ${apiRes.statusCode}:`, errBody.slice(0, 200))
-          write(`data: ${JSON.stringify({ t: 'err', text: `Ollama error (${apiRes.statusCode}): ${errBody.slice(0, 100)}` })}\n\n`)
+          const msg = `Ollama error ${apiRes.statusCode}: ${errBody.slice(0, 200)}`
+          console.error(`[${session.id}] ${msg}`)
+          write(`data: ${JSON.stringify({ t: 'err', text: msg.slice(0, 120) })}\n\n`)
           active.delete(session.id)
-          resolve(fullResponse)
+          reject(new Error(msg))
         })
         return
       }
@@ -122,7 +124,7 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
       }
       write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
       active.delete(session.id)
-      resolve(fullResponse)
+      reject(new Error(errMsg))
     })
 
     apiReq.end(payload)

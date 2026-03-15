@@ -133,6 +133,7 @@ test('applyResolvedRoute copies gateway, endpoint, and fallback credentials onto
   assert.deepEqual(next, {
     provider: 'openclaw',
     model: 'default',
+    ollamaMode: null,
     credentialId: 'cred-1',
     fallbackCredentialIds: ['cred-2', 'cred-3'],
     apiEndpoint: 'https://gateway.example.com/v1',
@@ -140,7 +141,7 @@ test('applyResolvedRoute copies gateway, endpoint, and fallback credentials onto
   })
 })
 
-test('resolveAgentRouteCandidatesWithProfiles repairs a stale Ollama credential reference when only one provider credential exists', async () => {
+test('resolveAgentRouteCandidatesWithProfiles keeps explicit Ollama cloud routes on the cloud path', async () => {
   const storage = await import('@/lib/server/storage')
   const now = Date.now()
   storage.saveCredentials({
@@ -156,6 +157,7 @@ test('resolveAgentRouteCandidatesWithProfiles repairs a stale Ollama credential 
   const [route] = resolveAgentRouteCandidatesWithProfiles(makeAgent({
     provider: 'ollama',
     model: 'glm-5:cloud',
+    ollamaMode: 'cloud',
     credentialId: 'stale-ollama-cred',
     apiEndpoint: null,
   }), [])
@@ -163,6 +165,36 @@ test('resolveAgentRouteCandidatesWithProfiles repairs a stale Ollama credential 
   assert.ok(route)
   assert.equal(route.provider, 'ollama')
   assert.equal(route.model, 'glm-5:cloud')
+  assert.equal(route.ollamaMode, 'cloud')
   assert.equal(route.credentialId, 'cred-ollama-cloud')
   assert.equal(route.apiEndpoint, 'https://ollama.com')
+})
+
+test('resolveAgentRouteCandidatesWithProfiles keeps explicit Ollama local routes local even with a credential and :cloud model', async () => {
+  const storage = await import('@/lib/server/storage')
+  const now = Date.now()
+  storage.saveCredentials({
+    'cred-ollama-cloud': {
+      id: 'cred-ollama-cloud',
+      provider: 'ollama',
+      name: 'Ollama Cloud',
+      encryptedKey: storage.encryptKey('ollama-cloud-key'),
+      createdAt: now,
+    },
+  })
+
+  const [route] = resolveAgentRouteCandidatesWithProfiles(makeAgent({
+    provider: 'ollama',
+    model: 'glm-5:cloud',
+    ollamaMode: 'local',
+    credentialId: 'cred-ollama-cloud',
+    apiEndpoint: null,
+  }), [])
+
+  assert.ok(route)
+  assert.equal(route.provider, 'ollama')
+  assert.equal(route.model, 'glm-5:cloud')
+  assert.equal(route.ollamaMode, 'local')
+  assert.equal(route.credentialId, 'cred-ollama-cloud')
+  assert.equal(route.apiEndpoint, 'http://localhost:11434')
 })

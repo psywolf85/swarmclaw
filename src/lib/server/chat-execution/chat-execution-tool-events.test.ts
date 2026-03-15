@@ -257,10 +257,10 @@ describe('requestedToolNamesFromMessage', () => {
 
 describe('hasDirectLocalCodingTools', () => {
   it('treats shell and file tooling as local coding capability', () => {
-    assert.equal(hasDirectLocalCodingTools({ plugins: ['files'] }), true)
-    assert.equal(hasDirectLocalCodingTools({ plugins: ['shell'] }), true)
-    assert.equal(hasDirectLocalCodingTools({ plugins: ['edit_file'] }), true)
-    assert.equal(hasDirectLocalCodingTools({ plugins: ['delegate'] }), false)
+    assert.equal(hasDirectLocalCodingTools({ extensions: ['files'] }), true)
+    assert.equal(hasDirectLocalCodingTools({ extensions: ['shell'] }), true)
+    assert.equal(hasDirectLocalCodingTools({ extensions: ['edit_file'] }), true)
+    assert.equal(hasDirectLocalCodingTools({ extensions: ['delegate'] }), false)
   })
 })
 

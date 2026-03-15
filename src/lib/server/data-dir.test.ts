@@ -59,10 +59,10 @@ describe('data-dir resolution', () => {
     const fakeHome = path.join(tempDir, 'home')
 
     try {
-      const env = { ...process.env, HOME: fakeHome, npm_lifecycle_event: 'build:ci' }
-      delete env.DATA_DIR
-      delete env.WORKSPACE_DIR
-      delete env.BROWSER_PROFILES_DIR
+      const env = { ...process.env, HOME: fakeHome, npm_lifecycle_event: 'build:ci' } as NodeJS.ProcessEnv
+      delete (env as Record<string, unknown>).DATA_DIR
+      delete (env as Record<string, unknown>).WORKSPACE_DIR
+      delete (env as Record<string, unknown>).BROWSER_PROFILES_DIR
 
       const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', `
         const modNs = await import('./src/lib/server/data-dir')
@@ -97,10 +97,10 @@ describe('data-dir resolution', () => {
     const swarmclawHome = path.join(tempDir, 'project', '.swarmclaw')
 
     try {
-      const env = { ...process.env, HOME: fakeHome, SWARMCLAW_HOME: swarmclawHome }
-      delete env.DATA_DIR
-      delete env.WORKSPACE_DIR
-      delete env.BROWSER_PROFILES_DIR
+      const env = { ...process.env, HOME: fakeHome, SWARMCLAW_HOME: swarmclawHome } as NodeJS.ProcessEnv
+      delete (env as Record<string, unknown>).DATA_DIR
+      delete (env as Record<string, unknown>).WORKSPACE_DIR
+      delete (env as Record<string, unknown>).BROWSER_PROFILES_DIR
 
       const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '--eval', `
         const modNs = await import('./src/lib/server/data-dir')

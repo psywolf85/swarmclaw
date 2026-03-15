@@ -108,11 +108,15 @@ function rowToEntry(row: Record<string, unknown>): MemoryEntry {
 import { buildFtsQuery } from '@/lib/server/memory/memory-db'
 
 function addRawMemory(data: {
+  id?: string
   agentId?: string | null
   sessionId?: string | null
+  taskId?: string | null
+  url?: string | null
   category: string
   title: string
   content: string
+  textContent?: string | null
   metadata?: Record<string, unknown>
 }): MemoryEntry {
   const id = crypto.randomBytes(6).toString('hex')

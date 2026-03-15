@@ -69,7 +69,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -99,7 +99,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -139,7 +139,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate' || name === 'memory' || name === 'memory_store',
+        hasExtension: (name) => name === 'delegate' || name === 'memory' || name === 'memory_store',
         hasTool: (name) => name === 'delegate' || name === 'memory' || name === 'memory_store',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -175,7 +175,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -211,7 +211,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -250,7 +250,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -286,7 +286,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,
@@ -325,7 +325,7 @@ describe('delegate fallback', () => {
       const tools = buildDelegateTools({
         cwd: process.cwd(),
         ctx: { sessionId: 'session-test', agentId: 'agent-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'delegate',
+        hasExtension: (name) => name === 'delegate',
         hasTool: (name) => name === 'delegate',
         cleanupFns: [],
         commandTimeoutMs: 5000,

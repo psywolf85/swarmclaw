@@ -77,7 +77,7 @@ test('executeSessionChatTurn syncs updated agent runtime fields onto its thread 
         disabled: false,
         heartbeatEnabled: false,
         heartbeatIntervalSec: null,
-        plugins: ['memory'],
+        extensions: ['memory'],
         createdAt: now,
         updatedAt: now,
       },
@@ -94,7 +94,7 @@ test('executeSessionChatTurn syncs updated agent runtime fields onto its thread 
     const agents = storage.loadAgents()
     agents.molly.provider = 'test-provider'
     agents.molly.model = 'unit'
-    agents.molly.plugins = []
+    agents.molly.extensions = []
     agents.molly.heartbeatEnabled = true
     agents.molly.heartbeatIntervalSec = 90
     agents.molly.updatedAt = now + 1
@@ -110,7 +110,7 @@ test('executeSessionChatTurn syncs updated agent runtime fields onto its thread 
     console.log(JSON.stringify({
       provider: persisted?.provider || null,
       model: persisted?.model || null,
-      plugins: persisted?.plugins || [],
+      extensions: persisted?.extensions || [],
       heartbeatEnabled: persisted?.heartbeatEnabled ?? null,
       heartbeatIntervalSec: persisted?.heartbeatIntervalSec ?? null,
       connectorContext: persisted?.connectorContext || null,
@@ -119,7 +119,7 @@ test('executeSessionChatTurn syncs updated agent runtime fields onto its thread 
 
   assert.equal(output.provider, 'test-provider')
   assert.equal(output.model, 'unit')
-  assert.deepEqual(output.plugins, [])
+  assert.deepEqual(output.extensions, [])
   assert.equal(output.heartbeatEnabled, true)
   assert.equal(output.heartbeatIntervalSec, 90)
   assert.equal(output.connectorContext, null)
@@ -166,7 +166,7 @@ test('executeSessionChatTurn keeps tool-only heartbeats off the visible main-thr
         disabled: false,
         heartbeatEnabled: true,
         heartbeatIntervalSec: 60,
-        plugins: [],
+        extensions: [],
         threadSessionId: 'agent_thread',
         createdAt: now,
         updatedAt: now,
@@ -192,7 +192,7 @@ test('executeSessionChatTurn keeps tool-only heartbeats off the visible main-thr
         sessionType: 'human',
         agentId: 'hal',
         shortcutForAgentId: 'hal',
-        plugins: [],
+        extensions: [],
         connectorContext: {
           connectorId: 'conn-stale',
           channelId: 'wrong-chat',
@@ -364,7 +364,7 @@ test('executeSessionChatTurn forces external connector sessions onto session-sco
         heartbeatEnabled: false,
         heartbeatIntervalSec: null,
         memoryScopeMode: 'agent',
-        plugins: ['memory'],
+        extensions: ['memory'],
         createdAt: now,
         updatedAt: now,
       },
@@ -387,7 +387,7 @@ test('executeSessionChatTurn forces external connector sessions onto session-sco
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'inbox',
-        plugins: ['memory'],
+        extensions: ['memory'],
         memoryScopeMode: 'agent',
         connectorContext: {
           connectorId: 'conn-whats',
@@ -421,7 +421,7 @@ test('executeSessionChatTurn applies lifecycle hooks for model resolution and me
   const output = runWithTempDataDir(`
     const storageMod = await import('@/lib/server/storage')
     const providersMod = await import('@/lib/providers/index')
-    const pluginsMod = await import('@/lib/server/plugins')
+    const extMod = await import('@/lib/server/extensions')
     const execMod = await import('@/lib/server/chat-execution/chat-execution')
     const storage = storageMod.default || storageMod['module.exports'] || storageMod
     const executeSessionChatTurn = execMod.executeSessionChatTurn
@@ -430,12 +430,12 @@ test('executeSessionChatTurn applies lifecycle hooks for model resolution and me
     const providers = providersMod.PROVIDERS
       || providersMod.default?.PROVIDERS
       || providersMod['module.exports']?.PROVIDERS
-    const pluginManager = pluginsMod.getPluginManager
-      ? pluginsMod.getPluginManager()
-      : pluginsMod.default?.getPluginManager?.()
+    const extensionManager = extMod.getExtensionManager
+      ? extMod.getExtensionManager()
+      : extMod.default?.getExtensionManager?.()
 
     const lifecycleMarks = []
-    pluginManager.registerBuiltin('lifecycle_hooks_test', {
+    extensionManager.registerBuiltin('lifecycle_hooks_test', {
       name: 'Lifecycle Hooks Test',
       hooks: {
         beforeModelResolve: () => ({
@@ -485,7 +485,7 @@ test('executeSessionChatTurn applies lifecycle hooks for model resolution and me
         disabled: false,
         heartbeatEnabled: false,
         heartbeatIntervalSec: null,
-        plugins: ['lifecycle_hooks_test'],
+        extensions: ['lifecycle_hooks_test'],
         createdAt: now,
         updatedAt: now,
       },
@@ -504,7 +504,7 @@ test('executeSessionChatTurn applies lifecycle hooks for model resolution and me
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'lifecycle',
-        plugins: ['lifecycle_hooks_test'],
+        extensions: ['lifecycle_hooks_test'],
       },
     })
 

@@ -20,14 +20,14 @@ interface Props {
   busy: boolean
   onSend: (text: string) => void
   onStop: () => void
-  pluginChatActions?: Array<{ id: string; label: string; action: string; value: string; tooltip?: string }>
+  extensionChatActions?: Array<{ id: string; label: string; action: string; value: string; tooltip?: string }>
 }
 
 // FilePreview is now imported from @/components/shared/file-preview
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
 
-export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions = [] }: Props) {
+export function ChatInput({ streaming, busy, onSend, onStop, extensionChatActions = [] }: Props) {
   const [value, setValue] = useState('')
   const [extrasOpen, setExtrasOpen] = useState(false)
   const { ref: textareaRef, resize } = useAutoResize()
@@ -284,7 +284,11 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      {index === 0 && (
+                      {item.sending ? (
+                        <span className="rounded-pill border border-sky-300/15 bg-sky-300/10 px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] text-sky-200 animate-pulse">
+                          Sending
+                        </span>
+                      ) : index === 0 && (
                         <span className="rounded-pill border border-amber-300/15 bg-amber-300/10 px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] text-amber-100">
                           Next
                         </span>
@@ -308,18 +312,20 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
                       {item.text}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => { if (sessionId) void removeQueuedMessage(sessionId, item.runId) }}
-                    className="shrink-0 rounded-[8px] border border-transparent bg-transparent p-1.5 text-amber-300/60 transition-all hover:border-amber-300/20 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
-                    aria-label={`Remove queued message ${index + 1}`}
-                    title="Remove from queue"
-                  >
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                      <line x1="18" y1="6" x2="6" y2="18" />
-                      <line x1="6" y1="6" x2="18" y2="18" />
-                    </svg>
-                  </button>
+                  {!item.sending && (
+                    <button
+                      type="button"
+                      onClick={() => { if (sessionId) void removeQueuedMessage(sessionId, item.runId) }}
+                      className="shrink-0 rounded-[8px] border border-transparent bg-transparent p-1.5 text-amber-300/60 transition-all hover:border-amber-300/20 hover:bg-amber-300/[0.08] hover:text-amber-100 cursor-pointer"
+                      aria-label={`Remove queued message ${index + 1}`}
+                      title="Remove from queue"
+                    >
+                      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                      </svg>
+                    </button>
+                  )}
                 </div>
               ))}
             </div>
@@ -473,13 +479,13 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
               </svg>
               New context window
             </button>
-            {pluginChatActions.length > 0 && (
+            {extensionChatActions.length > 0 && (
               <>
                 <div className="mx-2 my-1 h-px bg-white/[0.06]" />
                 <div className="px-3 pb-1 pt-1 text-[10px] font-700 uppercase tracking-[0.08em] text-text-3/50">
                   Quick actions
                 </div>
-                {pluginChatActions.map((action) => (
+                {extensionChatActions.map((action) => (
                   <Tooltip key={action.id}>
                     <TooltipTrigger asChild>
                       <button

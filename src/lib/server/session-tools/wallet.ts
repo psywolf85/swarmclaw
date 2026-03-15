@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import crypto from 'node:crypto'
 
-import type { ApprovalCategory, ApprovalRequest, Plugin, PluginHooks, WalletTransaction } from '@/types'
+import type { ApprovalCategory, ApprovalRequest, Extension, ExtensionHooks, WalletTransaction } from '@/types'
 import { genId } from '@/lib/id'
 import {
   formatWalletAmount,
@@ -391,7 +391,7 @@ async function executeWalletAction(args: unknown, context: { agentId?: string | 
           .map((asset) => `- \`${asset.balanceDisplay}\` on \`${asset.networkLabel}\`${asset.isNative ? '' : ` via \`${asset.symbol}\``}${describeWalletAssetIdentity(asset)}`)
           .join('\n')
         return JSON.stringify({
-          kind: 'plugin-ui',
+          kind: 'extension-ui',
           text: `### Wallet Balance\n\n**Chain:** \`${wallet.chain}\`\n**Address:** \`${wallet.publicKey}\`\n**Primary Balance:** \`${portfolio.balanceDisplay}\`\n**Assets Detected:** \`${portfolio.summary.nonZeroAssets}\`\n${assetLines ? `\n${assetLines}` : '\nNo funded assets detected yet.'}`,
           actions: [
             { id: 'view-wallet', label: 'View Address', href: getWalletExplorerUrl(wallet.chain, 'address', wallet.publicKey) },
@@ -463,7 +463,7 @@ async function executeWalletAction(args: unknown, context: { agentId?: string | 
 
         if (data.signature) {
           return JSON.stringify({
-            kind: 'plugin-ui',
+            kind: 'extension-ui',
             text: `### Transaction Sent!\n\n**Amount:** \`${formattedAmount} ${symbol}\`\n**To:** \`${toAddress}\`\n**Tx:** \`${data.signature.slice(0, 10)}...\``,
             actions: [
               { id: 'view-tx', label: 'View Transaction', href: getWalletExplorerUrl(wallet.chain, 'transaction', data.signature) },
@@ -485,7 +485,7 @@ async function executeWalletAction(args: unknown, context: { agentId?: string | 
           .join('\n')
 
         return JSON.stringify({
-          kind: 'plugin-ui',
+          kind: 'extension-ui',
           text: `### Recent Transactions\n\n${txLines || 'No recent transactions found.'}`,
           actions: [
             { id: 'view-history', label: 'View Address', href: getWalletExplorerUrl(wallet.chain, 'address', wallet.publicKey) },
@@ -1048,7 +1048,7 @@ async function executeWalletAction(args: unknown, context: { agentId?: string | 
   }
 }
 
-const WalletPlugin: Plugin = {
+const WalletExtension: Extension = {
   name: 'Core Wallet',
   description: 'Manage an agent wallet, inspect assets, sign payloads, and execute generic onchain actions without venue-specific adapters.',
   hooks: {
@@ -1147,7 +1147,7 @@ const WalletPlugin: Plugin = {
       }
       return lines
     },
-  } as PluginHooks,
+  } as ExtensionHooks,
   ui: {
     sidebarItems: [
       {
@@ -1286,16 +1286,16 @@ const WalletPlugin: Plugin = {
   ],
 }
 
-registerNativeCapability('wallet', WalletPlugin)
+registerNativeCapability('wallet', WalletExtension)
 
 export function buildWalletTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('wallet')) return []
+  if (!bctx.hasExtension('wallet')) return []
   return [
     tool(
       async (args) => executeWalletAction(args, { agentId: bctx.ctx?.agentId, sessionId: bctx.ctx?.sessionId }),
       {
         name: 'wallet_tool',
-        description: WalletPlugin.tools![0].description,
+        description: WalletExtension.tools![0].description,
         schema: z.object({
           action: z.enum(WALLET_TOOL_ACTIONS),
           chain: z.enum(['solana', 'ethereum']).optional().describe('Choose a specific wallet chain when the agent has multiple wallets.'),

@@ -46,16 +46,9 @@ async function fileToContentParts(filePath: string): Promise<any[]> {
 }
 
 export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey, systemPrompt, write, active, loadHistory, onUsage, signal }: StreamChatOptions): Promise<string> {
-  return new Promise(async (resolve) => {
+  return new Promise(async (resolve, reject) => {
     const messages = await buildMessages(session, message, imagePath, systemPrompt, loadHistory, imageUrl)
     const model = session.model || 'gpt-4o'
-
-    const payload = JSON.stringify({
-      model,
-      messages,
-      stream: true,
-      stream_options: { include_usage: true },
-    })
 
     let fullResponse = ''
 
@@ -76,23 +69,53 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
     active.set(session.id, { kill: () => abortController.abort() })
 
     try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': contentType,
-        },
-        body: payload,
-        signal: abortController.signal,
-      })
+      // Try with stream_options first; if the provider rejects with 400, retry without it
+      let res: Response | undefined
+      let usageEnabled = true
+      for (const includeStreamOptions of [true, false]) {
+        const payloadObj: Record<string, unknown> = {
+          model,
+          messages,
+          stream: true,
+        }
+        if (includeStreamOptions) {
+          payloadObj.stream_options = { include_usage: true }
+        }
+        const payload = JSON.stringify(payloadObj)
+
+        res = await fetch(url, {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${apiKey}`,
+            'Content-Type': contentType,
+          },
+          body: payload,
+          signal: abortController.signal,
+        })
+
+        if (res.status === 400 && includeStreamOptions) {
+          // Provider likely rejected stream_options — retry without it
+          usageEnabled = false
+          continue
+        }
+        usageEnabled = includeStreamOptions
+        break
+      }
+
+      if (!res) {
+        active.delete(session.id)
+        reject(new Error('No response from provider'))
+        return
+      }
 
       // Detect HTML responses (e.g. landing page returned instead of API)
       const resContentType = res.headers.get('content-type') || ''
       if (resContentType.includes('text/html')) {
+        const msg = 'Received HTML instead of API response. The endpoint may be misconfigured or returning a landing page.'
         console.error(`[${session.id}] received HTML instead of API response from ${baseUrl} (provider: ${session.provider})`)
-        write(`data: ${JSON.stringify({ t: 'err', text: 'Received HTML instead of API response. The endpoint may be misconfigured or returning a landing page.' })}\n\n`)
+        write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
         active.delete(session.id)
-        resolve(fullResponse)
+        reject(new Error(msg))
         return
       }
 
@@ -108,14 +131,15 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
         } catch {}
         write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
         active.delete(session.id)
-        resolve(fullResponse)
+        reject(new Error(`OpenAI error ${res.status}: ${errMsg}`))
         return
       }
 
       if (!res.body) {
-        console.error(`[${session.id}] no response body from ${baseUrl}`)
+        const msg = `No response body from ${baseUrl}`
+        console.error(`[${session.id}] ${msg}`)
         active.delete(session.id)
-        resolve(fullResponse)
+        reject(new Error(msg))
         return
       }
 
@@ -144,7 +168,7 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
               write(`data: ${JSON.stringify({ t: 'd', text: delta })}\n\n`)
             }
             // Extract usage from the final chunk (stream_options: include_usage)
-            if (parsed.usage && onUsage) {
+            if (usageEnabled && parsed.usage && onUsage) {
               onUsage({
                 inputTokens: parsed.usage.prompt_tokens || 0,
                 outputTokens: parsed.usage.completion_tokens || 0,
@@ -162,10 +186,12 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
         console.error(`[${session.id}] openai request error:`, err.message)
         write(`data: ${JSON.stringify({ t: 'err', text: `Connection failed: ${err.message}` })}\n\n`)
       }
-    } finally {
       active.delete(session.id)
-      resolve(fullResponse)
+      reject(err)
+      return
     }
+    active.delete(session.id)
+    resolve(fullResponse)
   })
 }
 

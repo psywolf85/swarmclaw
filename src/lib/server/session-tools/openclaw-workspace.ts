@@ -7,7 +7,7 @@ import * as os from 'os'
 import { loadSettings } from '../storage'
 import type { ToolBuildContext } from './context'
 import { MAX_OUTPUT, truncate } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 
@@ -97,12 +97,12 @@ async function executeWorkspaceAction(args: any) {
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const WorkspacePlugin: Plugin = {
+const WorkspaceExtension: Extension = {
   name: 'OpenClaw Workspace',
   description: 'Manage OpenClaw workspace versioning: backup, rollback, and history.',
-  hooks: {} as PluginHooks,
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'openclaw_workspace',
@@ -122,19 +122,19 @@ const WorkspacePlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('openclaw_workspace', WorkspacePlugin)
+registerNativeCapability('openclaw_workspace', WorkspaceExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildOpenClawWorkspaceTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('openclaw_workspace')) return []
+  if (!bctx.hasExtension('openclaw_workspace')) return []
   return [
     tool(
       async (args) => executeWorkspaceAction(args),
       {
         name: 'openclaw_workspace',
-        description: WorkspacePlugin.tools![0].description,
+        description: WorkspaceExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

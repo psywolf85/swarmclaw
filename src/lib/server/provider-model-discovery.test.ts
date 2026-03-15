@@ -8,6 +8,7 @@ import {
   extractDiscoveredModels,
   ttlForDescriptor,
   parseErrorMessage,
+  resolveDescriptor,
   type DiscoveryDescriptor,
 } from './provider-model-discovery'
 
@@ -183,6 +184,28 @@ test('extractDiscoveredModels skips filter for ollama', () => {
   const result = extractDiscoveredModels('ollama', 'ollama', payload)
   assert.deepEqual(result.models, ['llama3.2', 'nomic-embed-text'])
   assert.equal(result.rawCount, 2)
+})
+
+test('resolveDescriptor keeps explicit local Ollama discovery local even for :cloud model names', () => {
+  const descriptor = resolveDescriptor({
+    providerId: 'ollama',
+    ollamaMode: 'local',
+    credentialId: 'cred-1',
+  })
+  assert.equal(descriptor?.strategy, 'ollama')
+  assert.equal(descriptor?.endpoint, 'http://localhost:11434')
+  assert.equal(descriptor?.requiresApiKey, false)
+})
+
+test('resolveDescriptor uses explicit cloud Ollama discovery only when cloud mode is selected', () => {
+  const descriptor = resolveDescriptor({
+    providerId: 'ollama',
+    ollamaMode: 'cloud',
+    endpoint: 'http://localhost:11434',
+  })
+  assert.equal(descriptor?.strategy, 'openai-compatible')
+  assert.equal(descriptor?.endpoint, 'https://ollama.com/v1')
+  assert.equal(descriptor?.requiresApiKey, true)
 })
 
 // ---------------------------------------------------------------------------

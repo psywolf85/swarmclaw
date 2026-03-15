@@ -5,38 +5,38 @@ import { useAppStore } from '@/stores/use-app-store'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { api } from '@/lib/app/api-client'
-import { getPluginSourceLabel } from '@/lib/plugin-sources'
+import { getExtensionSourceLabel } from '@/lib/extension-sources'
 import { toast } from 'sonner'
-import type { PluginMeta, PluginSettingsField, MarketplacePlugin } from '@/types'
+import type { ExtensionMeta, ExtensionSettingsField, MarketplaceExtension } from '@/types'
 import { dedup } from '@/lib/shared-utils'
 
-function pluginDescription(plugin: PluginMeta): string {
-  const raw = (plugin.description || '').trim()
+function extensionDescription(ext: ExtensionMeta): string {
+  const raw = (ext.description || '').trim()
   if (raw) return raw
   return 'No description provided. This installed extension is available and can be configured from this panel.'
 }
 
-function pluginCapabilityBadges(plugin: PluginMeta): string[] {
+function extensionCapabilityBadges(ext: ExtensionMeta): string[] {
   const badges: string[] = []
-  if (plugin.toolCount && plugin.toolCount > 0) badges.push(`${plugin.toolCount} tool${plugin.toolCount === 1 ? '' : 's'}`)
-  if (plugin.hookCount && plugin.hookCount > 0) badges.push(`${plugin.hookCount} hook${plugin.hookCount === 1 ? '' : 's'}`)
-  if (plugin.hasUI) badges.push('UI extension')
-  if (plugin.providerCount && plugin.providerCount > 0) badges.push(`${plugin.providerCount} provider${plugin.providerCount === 1 ? '' : 's'}`)
-  if (plugin.connectorCount && plugin.connectorCount > 0) badges.push(`${plugin.connectorCount} connector${plugin.connectorCount === 1 ? '' : 's'}`)
-  if (plugin.hasDependencyManifest) badges.push(`${plugin.dependencyCount ?? 0} dep${plugin.dependencyCount === 1 ? '' : 's'}`)
+  if (ext.toolCount && ext.toolCount > 0) badges.push(`${ext.toolCount} tool${ext.toolCount === 1 ? '' : 's'}`)
+  if (ext.hookCount && ext.hookCount > 0) badges.push(`${ext.hookCount} hook${ext.hookCount === 1 ? '' : 's'}`)
+  if (ext.hasUI) badges.push('UI extension')
+  if (ext.providerCount && ext.providerCount > 0) badges.push(`${ext.providerCount} provider${ext.providerCount === 1 ? '' : 's'}`)
+  if (ext.connectorCount && ext.connectorCount > 0) badges.push(`${ext.connectorCount} connector${ext.connectorCount === 1 ? '' : 's'}`)
+  if (ext.hasDependencyManifest) badges.push(`${ext.dependencyCount ?? 0} dep${ext.dependencyCount === 1 ? '' : 's'}`)
   return badges
 }
 
-export function PluginSheet() {
-  const open = useAppStore((s) => s.pluginSheetOpen)
-  const setOpen = useAppStore((s) => s.setPluginSheetOpen)
-  const editingFilename = useAppStore((s) => s.editingPluginFilename)
-  const setEditingFilename = useAppStore((s) => s.setEditingPluginFilename)
+export function ExtensionSheet() {
+  const open = useAppStore((s) => s.extensionSheetOpen)
+  const setOpen = useAppStore((s) => s.setExtensionSheetOpen)
+  const editingFilename = useAppStore((s) => s.editingExtensionFilename)
+  const setEditingFilename = useAppStore((s) => s.setEditingExtensionFilename)
   const extensions = useAppStore((s) => s.extensions)
   const loadExtensions = useAppStore((s) => s.loadExtensions)
 
   const [tab, setTab] = useState<'marketplace' | 'url'>('marketplace')
-  const [marketplace, setMarketplace] = useState<MarketplacePlugin[]>([])
+  const [marketplace, setMarketplace] = useState<MarketplaceExtension[]>([])
   const [loading, setLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
   const [urlInput, setUrlInput] = useState('')
@@ -47,10 +47,10 @@ export function PluginSheet() {
   const [search, setSearch] = useState('')
   const [activeTag, setActiveTag] = useState<string | null>(null)
   const [sort, setSort] = useState<'name' | 'downloads'>('downloads')
-  const [pluginSettingsValues, setPluginSettingsValues] = useState<Record<string, unknown>>({})
+  const [extensionSettingsValues, setExtensionSettingsValues] = useState<Record<string, unknown>>({})
   const [configuredSecretFields, setConfiguredSecretFields] = useState<string[]>([])
-  const [pluginSettingsLoading, setPluginSettingsLoading] = useState(false)
-  const [pluginSettingsSaving, setPluginSettingsSaving] = useState(false)
+  const [extensionSettingsLoading, setExtensionSettingsLoading] = useState(false)
+  const [extensionSettingsSaving, setExtensionSettingsSaving] = useState(false)
   const [dependencyInstalling, setDependencyInstalling] = useState(false)
 
   const editing = editingFilename ? extensions[editingFilename] : null
@@ -58,27 +58,27 @@ export function PluginSheet() {
   // Load per-extension settings when editing an extension that has settingsFields
   useEffect(() => {
     if (!editing?.settingsFields?.length) {
-      setPluginSettingsValues({})
+      setExtensionSettingsValues({})
       setConfiguredSecretFields([])
       return
     }
-    setPluginSettingsLoading(true)
-    api<{ values?: Record<string, unknown>; configuredSecretFields?: string[] }>('GET', `/extensions/settings?pluginId=${encodeURIComponent(editing.filename)}`)
+    setExtensionSettingsLoading(true)
+    api<{ values?: Record<string, unknown>; configuredSecretFields?: string[] }>('GET', `/extensions/settings?extensionId=${encodeURIComponent(editing.filename)}`)
       .then((data) => {
-        setPluginSettingsValues(data?.values ?? {})
+        setExtensionSettingsValues(data?.values ?? {})
         setConfiguredSecretFields(Array.isArray(data?.configuredSecretFields) ? data.configuredSecretFields : [])
       })
       .catch(() => {
-        setPluginSettingsValues({})
+        setExtensionSettingsValues({})
         setConfiguredSecretFields([])
       })
-      .finally(() => setPluginSettingsLoading(false))
+      .finally(() => setExtensionSettingsLoading(false))
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editingFilename])
 
-  const savePluginSettings = useCallback(async () => {
+  const saveExtensionSettings = useCallback(async () => {
     if (!editing) return
-    setPluginSettingsSaving(true)
+    setExtensionSettingsSaving(true)
     try {
       const secretFieldSet = new Set(
         (editing.settingsFields || [])
@@ -86,29 +86,29 @@ export function PluginSheet() {
           .map((field) => field.key),
       )
       const payload = Object.fromEntries(
-        Object.entries(pluginSettingsValues).filter(([key, value]) => {
+        Object.entries(extensionSettingsValues).filter(([key, value]) => {
           if (!secretFieldSet.has(key)) return true
           return value !== undefined && value !== ''
         }),
       )
       const response = await api<{ values?: Record<string, unknown>; configuredSecretFields?: string[] }>(
         'PUT',
-        `/extensions/settings?pluginId=${encodeURIComponent(editing.filename)}`,
+        `/extensions/settings?extensionId=${encodeURIComponent(editing.filename)}`,
         payload,
       )
-      setPluginSettingsValues(response?.values ?? {})
+      setExtensionSettingsValues(response?.values ?? {})
       setConfiguredSecretFields(Array.isArray(response?.configuredSecretFields) ? response.configuredSecretFields : [])
       toast.success('Extension settings saved')
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save extension settings')
     }
-    setPluginSettingsSaving(false)
-  }, [editing, pluginSettingsValues])
+    setExtensionSettingsSaving(false)
+  }, [editing, extensionSettingsValues])
 
   const loadMarketplace = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await api<MarketplacePlugin[]>('GET', '/extensions/marketplace')
+      const data = await api<MarketplaceExtension[]>('GET', '/extensions/marketplace')
       if (Array.isArray(data)) setMarketplace(data)
     } catch { /* ignore */ }
     setLoading(false)
@@ -131,7 +131,7 @@ export function PluginSheet() {
     setConfirmDelete(false)
   }
 
-  const togglePlugin = async (filename: string, enabled: boolean) => {
+  const toggleExtension = async (filename: string, enabled: boolean) => {
     try {
       await api('POST', '/extensions', { filename, enabled })
       toast.success(enabled ? 'Extension enabled' : 'Extension disabled')
@@ -141,7 +141,7 @@ export function PluginSheet() {
     }
   }
 
-  const deletePlugin = async (filename: string) => {
+  const deleteExtension = async (filename: string) => {
     setDeleting(true)
     try {
       await api('DELETE', `/extensions?filename=${encodeURIComponent(filename)}`)
@@ -172,7 +172,7 @@ export function PluginSheet() {
     setDependencyInstalling(false)
   }, [editing?.filename, editing?.packageManager, loadExtensions])
 
-  const installFromMarketplace = async (p: MarketplacePlugin) => {
+  const installFromMarketplace = async (p: MarketplaceExtension) => {
     setInstalling(p.id)
     const toastId = toast.loading(`Installing ${p.name}...`)
     try {
@@ -229,7 +229,7 @@ export function PluginSheet() {
                   <span className="text-[10px] font-mono text-text-3/70">v{editing.version || '1.0.0'}</span>
                   {editing.openclaw && <span className="text-[9px] font-600 text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full">OpenClaw</span>}
                 </div>
-                <p className="text-[12px] text-text-3/80 leading-relaxed">{pluginDescription(editing)}</p>
+                <p className="text-[12px] text-text-3/80 leading-relaxed">{extensionDescription(editing)}</p>
               </div>
               <span className={`shrink-0 text-[10px] font-600 px-2 py-1 rounded-full ${
                 editing.enabled ? 'text-emerald-300 bg-emerald-500/10' : 'text-text-3/80 bg-white/[0.05]'
@@ -253,11 +253,11 @@ export function PluginSheet() {
               </div>
               <div className="rounded-[10px] bg-bg/50 border border-white/[0.05] px-2.5 py-2">
                 <div className="text-[10px] uppercase tracking-[0.08em] text-text-3/60 mb-0.5">Publisher</div>
-                <div className="text-[11px] text-text-2">{getPluginSourceLabel(editing.sourceLabel)}</div>
+                <div className="text-[11px] text-text-2">{getExtensionSourceLabel(editing.sourceLabel)}</div>
               </div>
               <div className="rounded-[10px] bg-bg/50 border border-white/[0.05] px-2.5 py-2">
                 <div className="text-[10px] uppercase tracking-[0.08em] text-text-3/60 mb-0.5">Installed Via</div>
-                <div className="text-[11px] text-text-2">{getPluginSourceLabel(editing.installSource || editing.sourceLabel)}</div>
+                <div className="text-[11px] text-text-2">{getExtensionSourceLabel(editing.installSource || editing.sourceLabel)}</div>
               </div>
             </div>
 
@@ -265,8 +265,8 @@ export function PluginSheet() {
 
             <div className="text-[11px] font-mono text-text-3/60 mt-3 break-all">{editing.filename}</div>
             <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-              {pluginCapabilityBadges(editing).length > 0 ? (
-                pluginCapabilityBadges(editing).map((badge) => (
+              {extensionCapabilityBadges(editing).length > 0 ? (
+                extensionCapabilityBadges(editing).map((badge) => (
                   <span key={badge} className="text-[10px] font-600 px-1.5 py-0.5 rounded-full text-text-3/80 bg-white/[0.05]">
                     {badge}
                   </span>
@@ -276,12 +276,12 @@ export function PluginSheet() {
               )}
               {editing.sourceLabel && (
                 <span className="text-[10px] font-700 px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300">
-                  {getPluginSourceLabel(editing.sourceLabel)}
+                  {getExtensionSourceLabel(editing.sourceLabel)}
                 </span>
               )}
               {editing.installSource && editing.installSource !== editing.sourceLabel && (
                 <span className="text-[10px] font-700 px-1.5 py-0.5 rounded-full bg-white/[0.05] text-text-3/75">
-                  via {getPluginSourceLabel(editing.installSource)}
+                  via {getExtensionSourceLabel(editing.installSource)}
                 </span>
               )}
             </div>
@@ -349,7 +349,7 @@ export function PluginSheet() {
               <span className="text-[11px] text-text-3/60">Disable to keep the extension installed but inactive.</span>
             </div>
             <div
-              onClick={() => togglePlugin(editing.filename, !editing.enabled)}
+              onClick={() => toggleExtension(editing.filename, !editing.enabled)}
               className={`w-11 h-6 rounded-full transition-all duration-200 relative cursor-pointer shrink-0
                 ${editing.enabled ? 'bg-accent-bright' : 'bg-white/[0.08]'}`}
             >
@@ -361,27 +361,27 @@ export function PluginSheet() {
           {editing.settingsFields && editing.settingsFields.length > 0 && (
             <div className="py-4 px-4 rounded-[14px] bg-surface border border-white/[0.06] space-y-3">
               <div className="text-[13px] font-600 text-text">Settings</div>
-              {pluginSettingsLoading ? (
+              {extensionSettingsLoading ? (
                 <p className="text-[11px] text-text-3/60">Loading...</p>
               ) : (
                 <>
-                  {editing.settingsFields.map((field: PluginSettingsField) => (
-                    <PluginSettingRow
+                  {editing.settingsFields.map((field: ExtensionSettingsField) => (
+                    <ExtensionSettingRow
                       key={field.key}
                       field={field}
-                      value={pluginSettingsValues[field.key]}
+                      value={extensionSettingsValues[field.key]}
                       configured={configuredSecretFields.includes(field.key)}
-                      onChange={(v) => setPluginSettingsValues((prev) => ({ ...prev, [field.key]: v }))}
+                      onChange={(v) => setExtensionSettingsValues((prev) => ({ ...prev, [field.key]: v }))}
                     />
                   ))}
                   <button
-                    onClick={savePluginSettings}
-                    disabled={pluginSettingsSaving}
+                    onClick={saveExtensionSettings}
+                    disabled={extensionSettingsSaving}
                     className="w-full py-2 rounded-[10px] text-[12px] font-600 bg-accent-soft text-accent-bright border border-accent-bright/20
                       hover:bg-accent-soft/80 transition-all cursor-pointer disabled:opacity-40 disabled:cursor-default mt-1"
                     style={{ fontFamily: 'inherit' }}
                   >
-                    {pluginSettingsSaving ? 'Saving...' : 'Save Settings'}
+                    {extensionSettingsSaving ? 'Saving...' : 'Save Settings'}
                   </button>
                 </>
               )}
@@ -421,7 +421,7 @@ export function PluginSheet() {
                     const q = search.toLowerCase()
                     const filtered = marketplace
                       .filter((p) => {
-                        const sourceTerms = [getPluginSourceLabel(p.source).toLowerCase(), getPluginSourceLabel(p.catalogSource).toLowerCase()]
+                        const sourceTerms = [getExtensionSourceLabel(p.source).toLowerCase(), getExtensionSourceLabel(p.catalogSource).toLowerCase()]
                         if (
                           q
                           && !p.name.toLowerCase().includes(q)
@@ -497,12 +497,12 @@ export function PluginSheet() {
                                       <div className="flex items-center gap-1.5 mt-2 flex-wrap">
                                         {p.source && (
                                           <span className="text-[10px] font-700 px-1.5 py-0.5 rounded-full bg-sky-500/10 text-sky-300">
-                                            {getPluginSourceLabel(p.source)}
+                                            {getExtensionSourceLabel(p.source)}
                                           </span>
                                         )}
                                         {p.catalogSource && p.catalogSource !== p.source && (
                                           <span className="text-[10px] font-700 px-1.5 py-0.5 rounded-full bg-white/[0.05] text-text-3/75">
-                                            via {getPluginSourceLabel(p.catalogSource)}
+                                            via {getExtensionSourceLabel(p.catalogSource)}
                                           </span>
                                         )}
                                       </div>
@@ -601,7 +601,7 @@ export function PluginSheet() {
         onConfirm={() => {
           if (!editing) return
           setConfirmDelete(false)
-          void deletePlugin(editing.filename)
+          void deleteExtension(editing.filename)
         }}
         onCancel={() => { if (!deleting) setConfirmDelete(false) }}
       />
@@ -609,13 +609,13 @@ export function PluginSheet() {
   )
 }
 
-function PluginSettingRow({
+function ExtensionSettingRow({
   field,
   value,
   configured,
   onChange,
 }: {
-  field: PluginSettingsField
+  field: ExtensionSettingsField
   value: unknown
   configured: boolean
   onChange: (v: unknown) => void

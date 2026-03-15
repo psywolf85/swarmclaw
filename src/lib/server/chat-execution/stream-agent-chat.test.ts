@@ -37,7 +37,7 @@ const streamContinuationSource = fs.readFileSync(path.join(path.dirname(new URL(
 const streamSources = `${streamAgentChatSource}\n${streamContinuationSource}`
 
 describe('buildToolDisciplineLines', () => {
-  it('lists exact callable tool names for plugin families like sandbox and browser', () => {
+  it('lists exact callable tool names for extension families like sandbox and browser', () => {
     const lines = buildToolAvailabilityLines(['sandbox', 'browser', 'manage_schedules'])
 
     assert.equal(lines[0], 'Tool names are case-sensitive. Call tools exactly as listed.')
@@ -253,7 +253,7 @@ describe('buildToolDisciplineLines', () => {
   it('canonicalizes required tool names when checking completion', () => {
     // The requiredToolsPending filter must canonicalize tool names so that
     // alias names (e.g. ask_human) match canonical names from LangGraph events.
-    assert.ok(streamAgentChatSource.includes('canonicalizePluginId(toolName) || toolName'))
+    assert.ok(streamAgentChatSource.includes('canonicalizeExtensionId(toolName) || toolName'))
     assert.ok(streamAgentChatSource.includes('!usedToolNames.has(toolName) && !usedToolNames.has(canonical)'))
   })
 
@@ -265,7 +265,7 @@ describe('buildToolDisciplineLines', () => {
 })
 
 describe('buildExternalWalletExecutionBlock', () => {
-  it('omits plugin-specific tool names when wallet/network capabilities are unavailable', () => {
+  it('omits extension-specific tool names when wallet/network capabilities are unavailable', () => {
     const block = buildExternalWalletExecutionBlock(['files'])
 
     assert.equal(block, '')
@@ -468,7 +468,7 @@ describe('shouldForceWorkspaceScopeShellFallback', () => {
       shouldForceWorkspaceScopeShellFallback({
         userMessage: 'Append beta to /tmp/demo/notes.txt and leave /tmp/demo/summary.json intact.',
         finalResponse: 'The target path is outside the session workspace, so the `files` tool cannot access it.',
-        enabledPlugins: ['files', 'shell'],
+        enabledExtensions: ['files', 'shell'],
         toolEvents: [
           {
             name: 'files',
@@ -486,7 +486,7 @@ describe('shouldForceWorkspaceScopeShellFallback', () => {
       shouldForceWorkspaceScopeShellFallback({
         userMessage: 'Append beta to /tmp/demo/notes.txt and leave /tmp/demo/summary.json intact.',
         finalResponse: 'Used shell to update the file.',
-        enabledPlugins: ['files', 'shell'],
+        enabledExtensions: ['files', 'shell'],
         toolEvents: [
           {
             name: 'files',
@@ -817,7 +817,7 @@ describe('shouldForceExternalExecutionFollowthrough', () => {
           {
             name: 'wallet_tool',
             input: '{"action":"send_transaction","chain":"ethereum"}',
-            output: '{"type":"plugin_wallet_action_request","status":"pending"}',
+            output: '{"type":"extension_wallet_action_request","status":"pending"}',
           },
         ],
       }),
@@ -866,7 +866,7 @@ describe('shouldForceAttachmentFollowthrough', () => {
     assert.equal(
       shouldForceAttachmentFollowthrough({
         userMessage: 'Look up my ally code from the attached screenshot.',
-        enabledPlugins: ['web', 'browser'],
+        enabledExtensions: ['web', 'browser'],
         hasToolCalls: false,
         hasAttachmentContext: true,
       }),
@@ -875,7 +875,7 @@ describe('shouldForceAttachmentFollowthrough', () => {
     assert.equal(
       shouldForceAttachmentFollowthrough({
         userMessage: 'Research the URL shown in the attached screenshot and inspect it in the browser.',
-        enabledPlugins: ['web', 'browser'],
+        enabledExtensions: ['web', 'browser'],
         hasToolCalls: false,
         hasAttachmentContext: true,
       }),
@@ -887,7 +887,7 @@ describe('shouldForceAttachmentFollowthrough', () => {
     assert.equal(
       shouldForceAttachmentFollowthrough({
         userMessage: 'Look up my ally code from the attached screenshot.',
-        enabledPlugins: ['web', 'browser'],
+        enabledExtensions: ['web', 'browser'],
         hasToolCalls: false,
         hasAttachmentContext: false,
       }),
@@ -896,7 +896,7 @@ describe('shouldForceAttachmentFollowthrough', () => {
     assert.equal(
       shouldForceAttachmentFollowthrough({
         userMessage: 'Look up my ally code from the attached screenshot.',
-        enabledPlugins: ['web', 'browser'],
+        enabledExtensions: ['web', 'browser'],
         hasToolCalls: true,
         hasAttachmentContext: true,
       }),
@@ -905,7 +905,7 @@ describe('shouldForceAttachmentFollowthrough', () => {
     assert.equal(
       shouldForceAttachmentFollowthrough({
         userMessage: 'What does this screenshot say?',
-        enabledPlugins: ['web', 'browser'],
+        enabledExtensions: ['web', 'browser'],
         hasToolCalls: false,
         hasAttachmentContext: true,
       }),

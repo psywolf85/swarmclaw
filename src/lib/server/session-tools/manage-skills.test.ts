@@ -24,7 +24,7 @@ function buildManageSkillsTool() {
   const tools = buildCrudTools({
     cwd: workspaceDir,
     ctx: { sessionId: 'skill-session', agentId: 'agent-skill-test', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-    hasPlugin: (name) => name === 'manage_skills',
+    hasExtension: (name) => name === 'manage_skills',
     hasTool: (name) => name === 'manage_skills',
     cleanupFns: [],
     commandTimeoutMs: 1_000,
@@ -33,7 +33,7 @@ function buildManageSkillsTool() {
     persistDelegateResumeId: () => {},
     readStoredDelegateResumeId: () => null,
     resolveCurrentSession: () => null,
-    activePlugins: ['manage_skills', 'google_workspace'],
+    activeExtensions: ['manage_skills', 'google_workspace'],
   })
   const tool = tools.find((entry) => entry.name === 'manage_skills')
   assert.ok(tool, 'expected manage_skills tool')
@@ -65,7 +65,7 @@ before(async () => {
       name: 'Skill Tester',
       provider: 'openai',
       model: 'gpt-test',
-      plugins: ['manage_skills'],
+      extensions: ['manage_skills'],
       tools: ['manage_skills'],
       skillIds: [],
       delegationEnabled: false,
@@ -73,7 +73,7 @@ before(async () => {
       delegationTargetAgentIds: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    } satisfies Agent,
+    } as unknown as Agent,
   })
   saveSessions({
     'skill-session': {
@@ -88,7 +88,7 @@ before(async () => {
       lastActiveAt: Date.now(),
       sessionType: 'human',
       agentId: 'agent-skill-test',
-      plugins: ['manage_skills'],
+      extensions: ['manage_skills'],
       heartbeatEnabled: false,
     },
   })

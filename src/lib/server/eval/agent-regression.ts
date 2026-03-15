@@ -9,9 +9,9 @@ import { dedup } from '@/lib/shared-utils'
 import { submitDecision } from '../approvals'
 import { executeSessionChatTurn, type ExecuteChatTurnResult } from '@/lib/server/chat-execution/chat-execution'
 import { WORKSPACE_DIR } from '../data-dir'
-import { getPluginManager } from '../plugins'
+import { getExtensionManager } from '../extensions'
 import { sendMailboxEnvelope, listMailbox } from '@/lib/server/chatrooms/session-mailbox'
-import { canonicalizePluginId, expandPluginIds } from '../tool-aliases'
+import { canonicalizeExtensionId, expandExtensionIds } from '../tool-aliases'
 import { processDueWatchJobs } from '@/lib/server/runtime/watch-jobs'
 import {
   deleteApproval,
@@ -37,7 +37,7 @@ import {
 } from '../storage'
 
 export type RegressionApprovalMode = 'manual' | 'auto' | 'off'
-export type RegressionPluginMode = 'scenario' | 'agent'
+export type RegressionExtensionMode = 'scenario' | 'agent'
 
 export interface RegressionAssertion {
   name: string
@@ -50,16 +50,16 @@ export interface AgentRegressionScenarioResult {
   scenarioId: string
   name: string
   approvalMode: RegressionApprovalMode
-  pluginMode: RegressionPluginMode
+  extensionMode: RegressionExtensionMode
   status: 'passed' | 'failed'
   score: number
   maxScore: number
   assertions: RegressionAssertion[]
   sessionId: string
   workspaceDir: string
-  requiredPlugins: string[]
-  effectivePlugins: string[]
-  missingPlugins: string[]
+  requiredExtensions: string[]
+  effectiveExtensions: string[]
+  missingExtensions: string[]
   toolNames: string[]
   approvalIds: string[]
   approvals: RegressionApprovalEvidence[]
@@ -90,12 +90,12 @@ interface ScenarioContext {
   agentId: string
   agent: Record<string, unknown>
   approvalMode: RegressionApprovalMode
-  pluginMode: RegressionPluginMode
+  extensionMode: RegressionExtensionMode
   sessionId: string
   workspaceDir: string
-  requiredPlugins: string[]
-  effectivePlugins: string[]
-  missingPlugins: string[]
+  requiredExtensions: string[]
+  effectiveExtensions: string[]
+  missingExtensions: string[]
   responseTexts: string[]
   toolEvents: MessageToolEvent[]
   toolNames: Set<string>
@@ -105,15 +105,15 @@ interface ScenarioContext {
 interface AgentRegressionScenarioDefinition {
   id: string
   name: string
-  plugins: string[]
+  extensions: string[]
   defaultInSuite?: boolean
   run: (ctx: ScenarioContext) => Promise<AgentRegressionScenarioResult>
 }
 
-interface RegressionPluginResolution {
-  requiredPlugins: string[]
-  effectivePlugins: string[]
-  missingPlugins: string[]
+interface RegressionExtensionResolution {
+  requiredExtensions: string[]
+  effectiveExtensions: string[]
+  missingExtensions: string[]
 }
 
 interface MockMailAccount {
@@ -818,7 +818,7 @@ export function scoreAssertions(assertions: RegressionAssertion[]): { score: num
   }
 }
 
-function normalizePluginList(values: unknown): string[] {
+function normalizeExtensionList(values: unknown): string[] {
   if (!Array.isArray(values)) return []
   const seen = new Set<string>()
   const normalized: string[] = []
@@ -832,33 +832,36 @@ function normalizePluginList(values: unknown): string[] {
   return normalized
 }
 
-export function resolveRegressionPlugins(
-  requiredPlugins: string[],
+export function resolveRegressionExtensions(
+  requiredExtensions: string[],
   agent: Record<string, unknown>,
-  pluginMode: RegressionPluginMode,
-): RegressionPluginResolution {
+  extensionMode: RegressionExtensionMode,
+): RegressionExtensionResolution {
   const requiredCanonical = dedup(
-    normalizePluginList(requiredPlugins)
-      .map((plugin) => canonicalizePluginId(plugin))
+    normalizeExtensionList(requiredExtensions)
+      .map((ext) => canonicalizeExtensionId(ext))
       .filter(Boolean),
   )
-  if (pluginMode === 'scenario') {
+  if (extensionMode === 'scenario') {
     return {
-      requiredPlugins: requiredCanonical,
-      effectivePlugins: normalizePluginList(requiredPlugins),
-      missingPlugins: [],
+      requiredExtensions: requiredCanonical,
+      effectiveExtensions: normalizeExtensionList(requiredExtensions),
+      missingExtensions: [],
     }
   }
 
-  const effectivePlugins = normalizePluginList(Array.isArray(agent.tools) ? agent.tools as string[] : [])
-  const expandedAgentPlugins = new Set(expandPluginIds(effectivePlugins))
-  const missingPlugins = requiredCanonical.filter((plugin) => !expandedAgentPlugins.has(plugin))
+  const effectiveExtensions = normalizeExtensionList(Array.isArray(agent.tools) ? agent.tools as string[] : [])
+  const expandedAgentExtensions = new Set(expandExtensionIds(effectiveExtensions))
+  const missingExtensions = requiredCanonical.filter((ext) => !expandedAgentExtensions.has(ext))
   return {
-    requiredPlugins: requiredCanonical,
-    effectivePlugins,
-    missingPlugins,
+    requiredExtensions: requiredCanonical,
+    effectiveExtensions,
+    missingExtensions,
   }
 }
+
+/** @deprecated Use resolveRegressionExtensions */
+export const resolveRegressionPlugins = resolveRegressionExtensions
 
 function listSessionApprovals(sessionId: string): ApprovalRequest[] {
   return Object.values(loadApprovals() as Record<string, ApprovalRequest>)
@@ -874,8 +877,8 @@ function buildApprovalEvidence(sessionId: string): RegressionApprovalEvidence[] 
     title: approval.title,
     toolId: typeof approval.data?.toolId === 'string'
       ? approval.data.toolId
-      : typeof approval.data?.pluginId === 'string'
-        ? approval.data.pluginId
+      : typeof approval.data?.extensionId === 'string'
+        ? approval.data.extensionId
         : null,
   }))
 }
@@ -971,7 +974,7 @@ function buildRegressionSession(params: {
   agent: Record<string, unknown>
   sessionId: string
   cwd: string
-  plugins: string[]
+  effectiveTools: string[]
 }): Session {
   const now = Date.now()
   return {
@@ -995,7 +998,7 @@ function buildRegressionSession(params: {
     lastActiveAt: now,
     sessionType: 'human',
     agentId: params.agent.id as string,
-    tools: [...params.plugins],
+    tools: [...params.effectiveTools],
     extensions: [],
   }
 }
@@ -1072,7 +1075,7 @@ async function runApprovalResumeScenario(ctx: ScenarioContext): Promise<AgentReg
   const approvalsAfterFirstTurn = listSessionApprovals(ctx.sessionId)
   const shellApprovals = approvalsAfterFirstTurn.filter((approval) => (
     approval.category === 'tool_access'
-    && String(approval.data?.toolId || approval.data?.pluginId || '').trim() === 'shell'
+    && String(approval.data?.toolId || approval.data?.extensionId || '').trim() === 'shell'
   ))
 
   if (ctx.approvalMode === 'manual') {
@@ -1124,14 +1127,14 @@ async function runApprovalResumeScenario(ctx: ScenarioContext): Promise<AgentReg
     scenarioId: 'approval-resume',
     name: 'Approval Resume',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: shellApprovals.map((approval) => approval.id),
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1188,14 +1191,14 @@ async function runDelegateLiteralScenario(ctx: ScenarioContext): Promise<AgentRe
     scenarioId: 'delegate-literal-artifact',
     name: 'Delegate Literal Artifact',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1257,14 +1260,14 @@ async function runScheduleScenario(ctx: ScenarioContext): Promise<AgentRegressio
     scenarioId: 'schedule-script',
     name: 'Schedule Script Workflow',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1331,14 +1334,14 @@ async function runOpenEndedIterationScenario(ctx: ScenarioContext): Promise<Agen
     scenarioId: 'open-ended-iteration',
     name: 'Open-Ended Iteration Pack',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1356,7 +1359,7 @@ async function runMockSignupSecretEmailScenario(ctx: ScenarioContext): Promise<A
   const settingsSnapshot = loadSettings()
 
   try {
-    getPluginManager().setPluginSettings('email', {
+    getExtensionManager().setExtensionSettings('email', {
       host: '127.0.0.1',
       port: smtpHarness.port,
       secure: false,
@@ -1452,14 +1455,14 @@ async function runMockSignupSecretEmailScenario(ctx: ScenarioContext): Promise<A
       scenarioId: 'mock-signup-secret-email',
       name: 'Mock Signup Secret Email',
       approvalMode: ctx.approvalMode,
-      pluginMode: ctx.pluginMode,
+      extensionMode: ctx.extensionMode,
       ...scored,
       assertions,
       sessionId: ctx.sessionId,
       workspaceDir: ctx.workspaceDir,
-      requiredPlugins: [...ctx.requiredPlugins],
-      effectivePlugins: [...ctx.effectivePlugins],
-      missingPlugins: [...ctx.missingPlugins],
+      requiredExtensions: [...ctx.requiredExtensions],
+      effectiveExtensions: [...ctx.effectiveExtensions],
+      missingExtensions: [...ctx.missingExtensions],
       toolNames: Array.from(ctx.toolNames),
       approvalIds: [],
       approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1591,14 +1594,14 @@ async function runHumanVerifiedSignupScenario(ctx: ScenarioContext): Promise<Age
       scenarioId: 'human-verified-signup',
       name: 'Human Verified Signup',
       approvalMode: ctx.approvalMode,
-      pluginMode: ctx.pluginMode,
+      extensionMode: ctx.extensionMode,
       ...scored,
       assertions,
       sessionId: ctx.sessionId,
       workspaceDir: ctx.workspaceDir,
-      requiredPlugins: [...ctx.requiredPlugins],
-      effectivePlugins: [...ctx.effectivePlugins],
-      missingPlugins: [...ctx.missingPlugins],
+      requiredExtensions: [...ctx.requiredExtensions],
+      effectiveExtensions: [...ctx.effectiveExtensions],
+      missingExtensions: [...ctx.missingExtensions],
       toolNames: Array.from(ctx.toolNames),
       approvalIds: [],
       approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1701,14 +1704,14 @@ async function runResearchBuildDeployScenario(ctx: ScenarioContext): Promise<Age
       scenarioId: 'research-build-deploy',
       name: 'Research Build Deploy',
       approvalMode: ctx.approvalMode,
-      pluginMode: ctx.pluginMode,
+      extensionMode: ctx.extensionMode,
       ...scored,
       assertions,
       sessionId: ctx.sessionId,
       workspaceDir: ctx.workspaceDir,
-      requiredPlugins: [...ctx.requiredPlugins],
-      effectivePlugins: [...ctx.effectivePlugins],
-      missingPlugins: [...ctx.missingPlugins],
+      requiredExtensions: [...ctx.requiredExtensions],
+      effectiveExtensions: [...ctx.effectiveExtensions],
+      missingExtensions: [...ctx.missingExtensions],
       toolNames: Array.from(ctx.toolNames),
       approvalIds: [],
       approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1884,14 +1887,14 @@ async function runBlackboardDelegationScenario(ctx: ScenarioContext): Promise<Ag
       scenarioId: 'blackboard-delegation-fit',
       name: 'Blackboard Delegation Fit',
       approvalMode: ctx.approvalMode,
-      pluginMode: ctx.pluginMode,
+      extensionMode: ctx.extensionMode,
       ...scored,
       assertions,
       sessionId: ctx.sessionId,
       workspaceDir: ctx.workspaceDir,
-      requiredPlugins: [...ctx.requiredPlugins],
-      effectivePlugins: [...ctx.effectivePlugins],
-      missingPlugins: [...ctx.missingPlugins],
+      requiredExtensions: [...ctx.requiredExtensions],
+      effectiveExtensions: [...ctx.effectiveExtensions],
+      missingExtensions: [...ctx.missingExtensions],
       toolNames: Array.from(ctx.toolNames),
       approvalIds: [],
       approvals: buildApprovalEvidence(ctx.sessionId),
@@ -1966,14 +1969,14 @@ async function runToolCallEfficiencyScenario(ctx: ScenarioContext): Promise<Agen
     scenarioId: 'tool-call-efficiency',
     name: 'Tool Call Efficiency',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -2048,14 +2051,14 @@ async function runFileCreationFollowthroughScenario(ctx: ScenarioContext): Promi
     scenarioId: 'file-creation-followthrough',
     name: 'File Creation Followthrough',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -2096,7 +2099,7 @@ async function runKnowledgeFirstFileScenario(ctx: ScenarioContext): Promise<Agen
 
   // Count web-related tool calls — there should be zero for commonly known data
   const webToolCalls = ctx.toolEvents.filter(
-    (e) => e.name && ['web', 'web_search', 'web_fetch'].includes(canonicalizePluginId(e.name) || e.name),
+    (e) => e.name && ['web', 'web_search', 'web_fetch'].includes(canonicalizeExtensionId(e.name) || e.name),
   ).length
 
   const assertions: RegressionAssertion[] = [
@@ -2132,14 +2135,14 @@ async function runKnowledgeFirstFileScenario(ctx: ScenarioContext): Promise<Agen
     scenarioId: 'knowledge-first-file',
     name: 'Knowledge-First File Creation',
     approvalMode: ctx.approvalMode,
-    pluginMode: ctx.pluginMode,
+    extensionMode: ctx.extensionMode,
     ...scored,
     assertions,
     sessionId: ctx.sessionId,
     workspaceDir: ctx.workspaceDir,
-    requiredPlugins: [...ctx.requiredPlugins],
-    effectivePlugins: [...ctx.effectivePlugins],
-    missingPlugins: [...ctx.missingPlugins],
+    requiredExtensions: [...ctx.requiredExtensions],
+    effectiveExtensions: [...ctx.effectiveExtensions],
+    missingExtensions: [...ctx.missingExtensions],
     toolNames: Array.from(ctx.toolNames),
     approvalIds: [],
     approvals: buildApprovalEvidence(ctx.sessionId),
@@ -2154,68 +2157,68 @@ export const AGENT_REGRESSION_SCENARIOS: AgentRegressionScenarioDefinition[] = [
   {
     id: 'approval-resume',
     name: 'Approval Resume',
-    plugins: ['files'],
+    extensions: ['files'],
     run: runApprovalResumeScenario,
   },
   {
     id: 'delegate-literal-artifact',
     name: 'Delegate Literal Artifact',
-    plugins: ['delegate'],
+    extensions: ['delegate'],
     run: runDelegateLiteralScenario,
   },
   {
     id: 'schedule-script',
     name: 'Schedule Script Workflow',
-    plugins: ['manage_schedules'],
+    extensions: ['manage_schedules'],
     run: runScheduleScenario,
   },
   {
     id: 'open-ended-iteration',
     name: 'Open-Ended Iteration Pack',
-    plugins: ['files'],
+    extensions: ['files'],
     run: runOpenEndedIterationScenario,
   },
   {
     id: 'mock-signup-secret-email',
     name: 'Mock Signup Secret Email',
-    plugins: ['browser', 'manage_secrets', 'email'],
+    extensions: ['browser', 'manage_secrets', 'email'],
     run: runMockSignupSecretEmailScenario,
   },
   {
     id: 'human-verified-signup',
     name: 'Human Verified Signup',
-    plugins: ['browser', 'ask_human', 'manage_secrets'],
+    extensions: ['browser', 'ask_human', 'manage_secrets'],
     run: runHumanVerifiedSignupScenario,
   },
   {
     id: 'research-build-deploy',
     name: 'Research Build Deploy',
-    plugins: ['http_request', 'files', 'browser'],
+    extensions: ['http_request', 'files', 'browser'],
     run: runResearchBuildDeployScenario,
   },
   {
     id: 'blackboard-delegation-fit',
     name: 'Blackboard Delegation Fit',
-    plugins: ['manage_agents', 'manage_tasks', 'files'],
+    extensions: ['manage_agents', 'manage_tasks', 'files'],
     defaultInSuite: false,
     run: runBlackboardDelegationScenario,
   },
   {
     id: 'tool-call-efficiency',
     name: 'Tool Call Efficiency',
-    plugins: ['shell', 'web'],
+    extensions: ['shell', 'web'],
     run: runToolCallEfficiencyScenario,
   },
   {
     id: 'file-creation-followthrough',
     name: 'File Creation Followthrough',
-    plugins: ['files', 'shell'],
+    extensions: ['files', 'shell'],
     run: runFileCreationFollowthroughScenario,
   },
   {
     id: 'knowledge-first-file',
     name: 'Knowledge-First File Creation',
-    plugins: ['files', 'web'],
+    extensions: ['files', 'web'],
     run: runKnowledgeFirstFileScenario,
   },
 ]
@@ -2237,13 +2240,13 @@ export async function runAgentRegressionSuite(params?: {
   agentId?: string
   approvalModes?: RegressionApprovalMode[]
   scenarioIds?: string[]
-  pluginMode?: RegressionPluginMode
+  extensionMode?: RegressionExtensionMode
 }): Promise<AgentRegressionSuiteResult> {
   const agentId = params?.agentId || 'default'
   const approvalModes: RegressionApprovalMode[] = params?.approvalModes?.length
     ? [...params.approvalModes]
     : ['manual', 'auto', 'off']
-  const pluginMode: RegressionPluginMode = params?.pluginMode === 'agent' ? 'agent' : 'scenario'
+  const extensionMode: RegressionExtensionMode = params?.extensionMode === 'agent' ? 'agent' : 'scenario'
   const agents = loadAgents() as unknown as Record<string, Record<string, unknown>>
   const agent = agents[agentId]
   if (!agent) throw new Error(`Unknown agent: ${agentId}`)
@@ -2267,12 +2270,12 @@ export async function runAgentRegressionSuite(params?: {
         const scenarioDir = path.join(suiteDir, approvalMode, definition.id)
         ensureDir(scenarioDir)
         const sessionId = `${suiteId}-${approvalMode}-${definition.id}`
-        const pluginResolution = resolveRegressionPlugins(definition.plugins, agent, pluginMode)
+        const extensionResolution = resolveRegressionExtensions(definition.extensions, agent, extensionMode)
         const session = buildRegressionSession({
           agent,
           sessionId,
           cwd: scenarioDir,
-          plugins: pluginResolution.effectivePlugins,
+          effectiveTools: extensionResolution.effectiveExtensions,
         })
         const sessions = loadSessions()
         sessions[sessionId] = session
@@ -2283,12 +2286,12 @@ export async function runAgentRegressionSuite(params?: {
           agentId,
           agent,
           approvalMode,
-          pluginMode,
+          extensionMode,
           sessionId,
           workspaceDir: scenarioDir,
-          requiredPlugins: pluginResolution.requiredPlugins,
-          effectivePlugins: pluginResolution.effectivePlugins,
-          missingPlugins: pluginResolution.missingPlugins,
+          requiredExtensions: extensionResolution.requiredExtensions,
+          effectiveExtensions: extensionResolution.effectiveExtensions,
+          missingExtensions: extensionResolution.missingExtensions,
           responseTexts: [],
           toolEvents: [],
           toolNames: new Set<string>(),

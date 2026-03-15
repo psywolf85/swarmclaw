@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getPluginManager } from '@/lib/server/plugins'
-import '@/lib/server/builtin-plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
+import '@/lib/server/builtin-extensions'
 
 export const dynamic = 'force-dynamic'
 
@@ -8,7 +8,7 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const type = searchParams.get('type')
 
-  const manager = getPluginManager()
+  const manager = getExtensionManager()
   const extensions = manager.getUIExtensions()
 
   if (type === 'sidebar') {

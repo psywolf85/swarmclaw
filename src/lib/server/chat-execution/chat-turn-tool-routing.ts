@@ -14,14 +14,14 @@ import type { StructuredToolInterface } from '@langchain/core/tools'
 import type { AppSettings, MessageToolEvent, SSEEvent } from '@/types'
 import { loadAgents } from '@/lib/server/storage'
 import { buildSessionTools } from '@/lib/server/session-tools'
-import { resolveConcreteToolPolicyBlock, type PluginPolicyDecision } from '@/lib/server/tool-capability-policy'
+import { resolveConcreteToolPolicyBlock, type ExtensionPolicyDecision } from '@/lib/server/tool-capability-policy'
 import { resolveActiveProjectContext } from '@/lib/server/project-context'
 import { resolveEffectiveSessionMemoryScopeMode } from '@/lib/server/memory/session-memory-scope'
 import { genId } from '@/lib/id'
 import { log } from '@/lib/server/logger'
 import { rankDelegatesByHealth } from '@/lib/server/provider-health'
 import { routeTaskIntent, type CapabilityRoutingDecision } from '@/lib/server/capability-router'
-import { canonicalizePluginId, pluginIdMatches } from '@/lib/server/tool-aliases'
+import { canonicalizeExtensionId, extensionIdMatches } from '@/lib/server/tool-aliases'
 import {
   buildDirectMemoryRecallResponse,
   classifyDirectMemoryIntent,
@@ -54,8 +54,8 @@ export interface ToolRoutingContext {
   sessionId: string
   message: string
   effectiveMessage: string
-  enabledPlugins: string[]
-  toolPolicy: PluginPolicyDecision
+  enabledExtensions: string[]
+  toolPolicy: ExtensionPolicyDecision
   appSettings: AppSettings | Record<string, unknown>
   internal: boolean
   source: string
@@ -328,7 +328,7 @@ export function buildToolUnavailableResponse(toolName: string, unavailableReason
 }
 
 function defaultUnavailableReason(toolName: string): string {
-  const canonical = canonicalizePluginId(toolName) || toolName
+  const canonical = canonicalizeExtensionId(toolName) || toolName
   if (canonical === 'delegate') return 'delegation is not enabled for this agent right now'
   return `${describeToolCapability(toolName)} is not available in this chat`
 }
@@ -339,8 +339,8 @@ function isToolErrorText(outputText: string | null | undefined): boolean {
 
 export function resolveRequestedToolPreflightResponse(params: {
   message: string
-  enabledPlugins: string[]
-  toolPolicy: PluginPolicyDecision
+  enabledExtensions: string[]
+  toolPolicy: ExtensionPolicyDecision
   appSettings: AppSettings | Record<string, unknown>
   internal: boolean
   source: string
@@ -367,7 +367,7 @@ export function resolveRequestedToolPreflightResponse(params: {
       unavailableResponses.push(buildToolUnavailableResponse(toolName, 'delegation is not enabled for this agent right now'))
       continue
     }
-    if (!pluginIdMatches(params.enabledPlugins, toolName)) {
+    if (!extensionIdMatches(params.enabledExtensions, toolName)) {
       unavailableResponses.push(buildToolUnavailableResponse(toolName, defaultUnavailableReason(toolName)))
     }
   }
@@ -410,7 +410,7 @@ async function invokeSessionTool(
   const agent = ctx.session.agentId ? loadAgents()[ctx.session.agentId] : null
   const agentRecord = agent as Record<string, unknown> | null
   const activeProjectContext = resolveActiveProjectContext(ctx.session as unknown as { agentId?: string | null; cwd?: string | null; projectId?: string | null })
-  const { tools, cleanup } = await buildSessionTools(ctx.session.cwd, ctx.enabledPlugins, {
+  const { tools, cleanup } = await buildSessionTools(ctx.session.cwd, ctx.enabledExtensions, {
     agentId: ctx.session.agentId || null,
     sessionId: ctx.sessionId,
     delegationEnabled: agentRecord?.delegationEnabled === true,
@@ -499,7 +499,7 @@ export async function runPostLlmToolRouting(
     ? requestedToolNamesFromMessage(ctx.message)
     : []
   const routingDecision: CapabilityRoutingDecision | null = (!ctx.internal && ctx.source === 'chat')
-    ? routeTaskIntent(ctx.message, ctx.enabledPlugins, ctx.appSettings)
+    ? routeTaskIntent(ctx.message, ctx.enabledExtensions, ctx.appSettings)
     : null
 
   // --- Forced connector_message_tool ---

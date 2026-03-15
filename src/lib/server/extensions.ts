@@ -4,112 +4,135 @@ import crypto from 'crypto'
 import { createRequire } from 'module'
 import { spawn } from 'child_process'
 import type {
-  Plugin,
-  PluginHooks,
-  PluginMeta,
-  PluginToolDef,
-  PluginUIExtension,
-  PluginProviderExtension,
-  PluginConnectorExtension,
+  Extension,
+  ExtensionHooks,
+  ExtensionMeta,
+  ExtensionToolDef,
+  ExtensionUIDefinition,
+  ExtensionProviderDefinition,
+  ExtensionConnectorDefinition,
   Session,
-  PluginPackageManager,
-  PluginDependencyInstallStatus,
-  PluginPromptBuildResult,
-  PluginToolCallResult,
-  PluginModelResolveResult,
-  PluginBeforeMessageWriteResult,
-  PluginSubagentSpawningResult,
+  ExtensionPackageManager,
+  ExtensionDependencyInstallStatus,
+  ExtensionPromptBuildResult,
+  ExtensionToolCallResult,
+  ExtensionModelResolveResult,
+  ExtensionBeforeMessageWriteResult,
+  ExtensionSubagentSpawningResult,
   Message,
 } from '@/types'
 import {
-  inferPluginInstallSourceFromUrl,
-  inferPluginPublisherSourceFromUrl,
+  inferExtensionInstallSourceFromUrl,
+  inferExtensionPublisherSourceFromUrl,
   isMarketplaceInstallSource,
-  normalizePluginInstallSource,
-  normalizePluginPublisherSource,
-} from '@/lib/plugin-sources'
+  normalizeExtensionInstallSource,
+  normalizeExtensionPublisherSource,
+} from '@/lib/extension-sources'
 import { DATA_DIR } from './data-dir'
-import { canonicalizePluginId, expandPluginIds, getPluginAliases } from './tool-aliases'
+import { canonicalizeExtensionId, expandExtensionIds, getExtensionAliases } from './tool-aliases'
 import { log } from './logger'
 import { createNotification } from './create-notification'
 import { notify } from './ws-hub'
 import { decryptKey, encryptKey, loadSettings, saveSettings } from './storage'
-import { buildPluginHooks } from './plugins-approval-guidance'
+import { buildExtensionHooks } from './extensions-approval-guidance'
 import { errorMessage } from '@/lib/shared-utils'
 
-const PLUGINS_DIR = path.join(DATA_DIR, 'plugins')
-const PLUGIN_WORKSPACES_DIR = path.join(PLUGINS_DIR, '.workspaces')
-const PLUGINS_CONFIG = path.join(DATA_DIR, 'plugins.json')
-const PLUGIN_FAILURES = path.join(DATA_DIR, 'plugin-failures.json')
-const MAX_EXTERNAL_PLUGIN_BYTES = 1024 * 1024
-const SUPPORTED_PLUGIN_PACKAGE_MANAGERS: PluginPackageManager[] = ['npm', 'pnpm', 'yarn', 'bun']
-const PACKAGE_INSTALL_TIMEOUT_MS = 5 * 60 * 1000
-const MAX_CONSECUTIVE_PLUGIN_FAILURES = (() => {
-  const raw = Number.parseInt(process.env.SWARMCLAW_PLUGIN_FAILURE_THRESHOLD || '3', 10)
+const EXTENSIONS_DIR = path.join(DATA_DIR, 'extensions')
+const EXTENSION_WORKSPACES_DIR = path.join(EXTENSIONS_DIR, '.workspaces')
+const EXTENSIONS_CONFIG = path.join(DATA_DIR, 'extensions.json')
+const EXTENSION_FAILURES = path.join(DATA_DIR, 'extension-failures.json')
+
+// Backward-compat: migrate legacy paths on first access
+const _migrateLegacyPaths = (() => {
+  let done = false
+  return () => {
+    if (done) return
+    done = true
+    try {
+      const legacyDir = path.join(DATA_DIR, 'plugins')
+      if (fs.existsSync(legacyDir) && !fs.existsSync(EXTENSIONS_DIR)) {
+        fs.renameSync(legacyDir, EXTENSIONS_DIR)
+      }
+      const legacyConfig = path.join(DATA_DIR, 'plugins.json')
+      if (fs.existsSync(legacyConfig) && !fs.existsSync(EXTENSIONS_CONFIG)) {
+        fs.renameSync(legacyConfig, EXTENSIONS_CONFIG)
+      }
+      const legacyFailures = path.join(DATA_DIR, 'plugin-failures.json')
+      if (fs.existsSync(legacyFailures) && !fs.existsSync(EXTENSION_FAILURES)) {
+        fs.renameSync(legacyFailures, EXTENSION_FAILURES)
+      }
+    } catch { /* ignore migration errors */ }
+  }
+})()
+const MAX_EXTERNAL_EXTENSION_BYTES = 1024 * 1024
+const SUPPORTED_EXTENSION_PACKAGE_MANAGERS: ExtensionPackageManager[] = ['npm', 'pnpm', 'yarn', 'bun']
+const EXTENSION_INSTALL_TIMEOUT_MS = 5 * 60 * 1000
+const MAX_CONSECUTIVE_EXTENSION_FAILURES = (() => {
+  const raw = Number.parseInt(process.env.SWARMCLAW_EXTENSION_FAILURE_THRESHOLD || '3', 10)
   if (!Number.isFinite(raw)) return 3
   return Math.max(2, Math.min(20, raw))
 })()
 
-interface PluginFailureRecord {
+interface ExtensionFailureRecord {
   count: number
   lastError: string
   lastStage: string
   lastFailedAt: number
 }
 
-interface PluginConfigEntry {
+interface ExtensionConfigEntry {
   enabled?: boolean
   createdByAgentId?: string
-  source?: PluginMeta['source']
-  sourceLabel?: PluginMeta['sourceLabel']
-  installSource?: PluginMeta['installSource']
+  source?: ExtensionMeta['source']
+  sourceLabel?: ExtensionMeta['sourceLabel']
+  installSource?: ExtensionMeta['installSource']
   sourceUrl?: string
   sourceHash?: string
   installedAt?: number
   updatedAt?: number
-  packageManager?: PluginPackageManager
-  dependencyInstallStatus?: PluginDependencyInstallStatus
+  packageManager?: ExtensionPackageManager
+  dependencyInstallStatus?: ExtensionDependencyInstallStatus
   dependencyInstallError?: string
   dependencyInstalledAt?: number
 }
 
-interface InstalledPluginSource {
+interface InstalledExtensionSource {
   filename: string
   sourceUrl: string
   sourceHash: string
   contentType?: string
 }
 
-interface PluginSourceDownload {
+interface ExtensionSourceDownload {
   code: string
   contentType: string
   normalizedUrl: string
   hash: string
 }
 
-interface PluginDependencyInfo {
+interface ExtensionDependencyInfo {
   hasManifest: boolean
   dependencyCount: number
   devDependencyCount: number
-  packageManager?: PluginPackageManager
-  installStatus: PluginDependencyInstallStatus
+  packageManager?: ExtensionPackageManager
+  installStatus: ExtensionDependencyInstallStatus
   installError?: string
   installedAt?: number
 }
 
-interface UpsertPluginOptions {
+interface UpsertExtensionOptions {
   packageJson?: unknown
   packageManager?: string | null
   installDependencies?: boolean
   meta?: Record<string, unknown>
 }
 
-interface PluginSecretSettingValue {
-  __pluginSecret: true
+interface ExtensionSecretSettingValue {
+  __extensionSecret: true
   encrypted: string
 }
 
-interface PluginLogger {
+interface ExtensionLogger {
   info: (msg: string, m?: unknown) => void
   warn: (msg: string, m?: unknown) => void
   error: (msg: string, m?: unknown) => void
@@ -126,32 +149,32 @@ type HookRegistrar = {
   onMessage?: (fn: (...args: unknown[]) => unknown) => void
 }
 
-type HookContext<K extends keyof PluginHooks> =
-  PluginHooks[K] extends ((ctx: infer C) => unknown) | undefined ? C : never
+type HookContext<K extends keyof ExtensionHooks> =
+  ExtensionHooks[K] extends ((ctx: infer C) => unknown) | undefined ? C : never
 
 /** Legacy OpenClaw format: activate(ctx)/deactivate() */
-interface OpenClawLegacyPlugin {
+interface OpenClawLegacyExtension {
   name: string
   version?: string
-  activate: (ctx: HookRegistrar & { registerTool: (def: PluginToolDef) => void; log: PluginLogger }) => void
+  activate: (ctx: HookRegistrar & { registerTool: (def: ExtensionToolDef) => void; log: ExtensionLogger }) => void
   deactivate?: () => void
 }
 
 /**
- * Real OpenClaw plugin format: function export `(api) => {}` or object with `register(api)`.
+ * Real OpenClaw extension format: function export `(api) => {}` or object with `register(api)`.
  * Supports api.registerHook(), api.registerTool(), api.registerCommand(), api.registerService().
  */
-interface OpenClawPluginApi {
+interface OpenClawExtensionApi {
   registerHook: (event: string, handler: (...args: unknown[]) => unknown, meta?: { name?: string; description?: string }) => void
-  registerTool: (def: PluginToolDef | { name: string; description?: string; parameters?: Record<string, unknown>; planning?: PluginToolDef['planning']; execute: (...args: unknown[]) => unknown }) => void
+  registerTool: (def: ExtensionToolDef | { name: string; description?: string; parameters?: Record<string, unknown>; planning?: ExtensionToolDef['planning']; execute: (...args: unknown[]) => unknown }) => void
   registerCommand: (def: { name: string; description?: string; handler: (...args: unknown[]) => unknown }) => void
   registerService: (def: { id: string; start: () => void; stop?: () => void }) => void
   registerProvider: (def: Record<string, unknown>) => void
   registerChannel: (def: Record<string, unknown>) => void
   registerGatewayMethod: (name: string, handler: (...args: unknown[]) => unknown) => void
   registerCli: (fn: (...args: unknown[]) => unknown, meta?: { commands?: string[] }) => void
-  logger: PluginLogger
-  log: PluginLogger
+  logger: ExtensionLogger
+  log: ExtensionLogger
   config: Record<string, unknown>
   runtime: Record<string, unknown>
 }
@@ -165,10 +188,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function isPluginSecretSettingValue(value: unknown): value is PluginSecretSettingValue {
+function isExtensionSecretSettingValue(value: unknown): value is ExtensionSecretSettingValue {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const rec = value as Record<string, unknown>
-  return rec.__pluginSecret === true && typeof rec.encrypted === 'string'
+  return rec.__extensionSecret === true && typeof rec.encrypted === 'string'
 }
 
 function concatOptionalTextSegments(...segments: Array<string | null | undefined>): string | undefined {
@@ -179,9 +202,9 @@ function concatOptionalTextSegments(...segments: Array<string | null | undefined
 }
 
 function mergePromptBuildResults(
-  current: PluginPromptBuildResult | undefined,
-  next: PluginPromptBuildResult,
-): PluginPromptBuildResult {
+  current: ExtensionPromptBuildResult | undefined,
+  next: ExtensionPromptBuildResult,
+): ExtensionPromptBuildResult {
   return {
     systemPrompt: current?.systemPrompt ?? next.systemPrompt,
     prependContext: concatOptionalTextSegments(current?.prependContext, next.prependContext),
@@ -191,9 +214,9 @@ function mergePromptBuildResults(
 }
 
 function mergeModelResolveResults(
-  current: PluginModelResolveResult | undefined,
-  next: PluginModelResolveResult,
-): PluginModelResolveResult {
+  current: ExtensionModelResolveResult | undefined,
+  next: ExtensionModelResolveResult,
+): ExtensionModelResolveResult {
   return {
     providerOverride: next.providerOverride ?? current?.providerOverride,
     modelOverride: next.modelOverride ?? current?.modelOverride,
@@ -201,7 +224,7 @@ function mergeModelResolveResults(
   }
 }
 
-function isToolCallControlResult(value: unknown): value is PluginToolCallResult {
+function isToolCallControlResult(value: unknown): value is ExtensionToolCallResult {
   if (!isRecord(value)) return false
   return 'input' in value || 'params' in value || 'block' in value || 'blockReason' in value || 'warning' in value
 }
@@ -213,12 +236,12 @@ function isMessageLike(value: unknown): value is Message {
     && typeof value.time === 'number'
 }
 
-function isBeforeMessageWriteResult(value: unknown): value is PluginBeforeMessageWriteResult {
+function isBeforeMessageWriteResult(value: unknown): value is ExtensionBeforeMessageWriteResult {
   if (!isRecord(value)) return false
   return 'message' in value || 'block' in value
 }
 
-function isSubagentSpawningResult(value: unknown): value is PluginSubagentSpawningResult {
+function isSubagentSpawningResult(value: unknown): value is ExtensionSubagentSpawningResult {
   return isRecord(value) && (value.status === 'ok' || value.status === 'error')
 }
 
@@ -234,18 +257,18 @@ function mergeToolCallInput(
   return nextInput
 }
 
-function hashPluginSource(content: string): string {
+function hashExtensionSource(content: string): string {
   return crypto.createHash('sha256').update(content).digest('hex')
 }
 
-function normalizePluginPackageManager(raw: unknown): PluginPackageManager | null {
+function normalizeExtensionPackageManager(raw: unknown): ExtensionPackageManager | null {
   const text = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
   if (!text) return null
-  const normalized = text.split('@')[0] as PluginPackageManager
-  return SUPPORTED_PLUGIN_PACKAGE_MANAGERS.includes(normalized) ? normalized : null
+  const normalized = text.split('@')[0] as ExtensionPackageManager
+  return SUPPORTED_EXTENSION_PACKAGE_MANAGERS.includes(normalized) ? normalized : null
 }
 
-function pluginWorkspaceKey(filename: string): string {
+function extensionWorkspaceKey(filename: string): string {
   return path.basename(filename).replace(/[^a-zA-Z0-9_-]/g, '_')
 }
 
@@ -253,15 +276,15 @@ function trimProcessOutput(output: string): string {
   return output.trim().slice(-4000)
 }
 
-function normalizePluginManifest(
+function normalizeExtensionManifest(
   rawManifest: unknown,
   filename: string,
-  packageManager?: PluginPackageManager | null,
+  packageManager?: ExtensionPackageManager | null,
 ): Record<string, unknown> {
   const parsed = typeof rawManifest === 'string'
     ? JSON.parse(rawManifest) as unknown
     : rawManifest
-  if (!isRecord(parsed)) throw new Error('Plugin package.json must be a JSON object')
+  if (!isRecord(parsed)) throw new Error('Extension package.json must be a JSON object')
 
   const manifest = { ...parsed } as Record<string, unknown>
   if (typeof manifest.name !== 'string' || !manifest.name.trim()) {
@@ -286,7 +309,7 @@ function countManifestDependencies(manifest: Record<string, unknown> | null): {
   }
 }
 
-function getInstallCommand(packageManager: PluginPackageManager): { command: string; args: string[] } {
+function getInstallCommand(packageManager: ExtensionPackageManager): { command: string; args: string[] } {
   switch (packageManager) {
     case 'pnpm':
       return { command: 'pnpm', args: ['install', '--ignore-scripts', '--config.ignore-workspace=true'] }
@@ -300,7 +323,7 @@ function getInstallCommand(packageManager: PluginPackageManager): { command: str
   }
 }
 
-function toRawPluginUrl(url: string): string {
+function toRawExtensionUrl(url: string): string {
   if (url.includes('github.com') && url.includes('/blob/')) {
     return url.replace('github.com', 'raw.githubusercontent.com').replace('/blob/', '/')
   }
@@ -310,47 +333,41 @@ function toRawPluginUrl(url: string): string {
   return url
 }
 
-function inferStoredPluginSource(config: PluginConfigEntry | null | undefined): PluginMeta['source'] {
+function inferStoredExtensionSource(config: ExtensionConfigEntry | null | undefined): ExtensionMeta['source'] {
   if (config?.source === 'local' || config?.source === 'manual' || config?.source === 'marketplace') {
     return config.source
   }
   if (config?.sourceUrl) {
-    const installSource = normalizePluginInstallSource(config?.installSource)
-      || inferPluginInstallSourceFromUrl(config.sourceUrl)
+    const installSource = normalizeExtensionInstallSource(config?.installSource)
+      || inferExtensionInstallSourceFromUrl(config.sourceUrl)
     return isMarketplaceInstallSource(installSource) ? 'marketplace' : 'manual'
   }
   return 'local'
 }
 
-function inferStoredPublisherSource(config: PluginConfigEntry | null | undefined): NonNullable<PluginMeta['sourceLabel']> {
-  return normalizePluginPublisherSource(config?.sourceLabel)
-    || inferPluginPublisherSourceFromUrl(config?.sourceUrl)
+function inferStoredPublisherSource(config: ExtensionConfigEntry | null | undefined): NonNullable<ExtensionMeta['sourceLabel']> {
+  return normalizeExtensionPublisherSource(config?.sourceLabel)
+    || inferExtensionPublisherSourceFromUrl(config?.sourceUrl)
     || (config?.sourceUrl ? 'manual' : 'local')
 }
 
-function inferStoredInstallSource(config: PluginConfigEntry | null | undefined): NonNullable<PluginMeta['installSource']> {
-  return normalizePluginInstallSource(config?.installSource)
-    || inferPluginInstallSourceFromUrl(config?.sourceUrl)
+function inferStoredInstallSource(config: ExtensionConfigEntry | null | undefined): NonNullable<ExtensionMeta['installSource']> {
+  return normalizeExtensionInstallSource(config?.installSource)
+    || inferExtensionInstallSourceFromUrl(config?.sourceUrl)
     || (config?.sourceUrl ? 'manual' : 'local')
 }
 
-export function normalizeMarketplacePluginUrl(url: string): string {
+export function normalizeMarketplaceExtensionUrl(url: string): string {
   const trimmed = typeof url === 'string' ? url.trim() : ''
   if (!trimmed) return trimmed
 
-  let normalized = trimmed
-    .replace('github.com/swarmclawai/plugins/', 'github.com/swarmclawai/swarmforge/')
-    .replace('raw.githubusercontent.com/swarmclawai/plugins/', 'raw.githubusercontent.com/swarmclawai/swarmforge/')
-
-  normalized = toRawPluginUrl(normalized)
+  let normalized = toRawExtensionUrl(trimmed)
 
   return normalized
     .replace('/swarmclawai/swarmforge/master/', '/swarmclawai/swarmforge/main/')
-    .replace('/swarmclawai/plugins/master/', '/swarmclawai/swarmforge/main/')
-    .replace('/swarmclawai/plugins/main/', '/swarmclawai/swarmforge/main/')
 }
 
-export function sanitizePluginFilename(filename: string): string {
+export function sanitizeExtensionFilename(filename: string): string {
   const trimmed = typeof filename === 'string' ? filename.trim() : ''
   if (!trimmed) throw new Error('Filename is required')
   if (!trimmed.endsWith('.js') && !trimmed.endsWith('.mjs')) {
@@ -363,8 +380,8 @@ export function sanitizePluginFilename(filename: string): string {
   return sanitized
 }
 
-async function downloadPluginSource(url: string): Promise<PluginSourceDownload> {
-  const normalizedUrl = normalizeMarketplacePluginUrl(url)
+async function downloadExtensionSource(url: string): Promise<ExtensionSourceDownload> {
+  const normalizedUrl = normalizeMarketplaceExtensionUrl(url)
   if (!normalizedUrl || !normalizedUrl.startsWith('https://')) {
     throw new Error('URL must be a valid HTTPS URL')
   }
@@ -377,17 +394,17 @@ async function downloadPluginSource(url: string): Promise<PluginSourceDownload> 
   const contentType = res.headers.get('content-type') || ''
   const lengthHeader = res.headers.get('content-length')
   const declaredSize = lengthHeader ? Number.parseInt(lengthHeader, 10) : Number.NaN
-  if (Number.isFinite(declaredSize) && declaredSize > MAX_EXTERNAL_PLUGIN_BYTES) {
-    throw new Error(`Plugin file is too large (${declaredSize} bytes)`)
+  if (Number.isFinite(declaredSize) && declaredSize > MAX_EXTERNAL_EXTENSION_BYTES) {
+    throw new Error(`Extension file is too large (${declaredSize} bytes)`)
   }
 
   let code = await res.text()
-  if (Buffer.byteLength(code, 'utf8') > MAX_EXTERNAL_PLUGIN_BYTES) {
-    throw new Error(`Plugin file exceeds ${MAX_EXTERNAL_PLUGIN_BYTES} bytes`)
+  if (Buffer.byteLength(code, 'utf8') > MAX_EXTERNAL_EXTENSION_BYTES) {
+    throw new Error(`Extension file exceeds ${MAX_EXTERNAL_EXTENSION_BYTES} bytes`)
   }
 
   if (contentType.includes('text/html') && code.includes('<!DOCTYPE')) {
-    throw new Error('URL returned an HTML page instead of JavaScript. Use a raw/direct link to the plugin file.')
+    throw new Error('URL returned an HTML page instead of JavaScript. Use a raw/direct link to the extension file.')
   }
 
   // Compatibility: modern Node exposes global fetch.
@@ -398,13 +415,13 @@ async function downloadPluginSource(url: string): Promise<PluginSourceDownload> 
     code,
     contentType,
     normalizedUrl,
-    hash: hashPluginSource(code),
+    hash: hashExtensionSource(code),
   }
 }
 
-function coerceTools(rawTools: unknown): PluginToolDef[] {
+function coerceTools(rawTools: unknown): ExtensionToolDef[] {
   if (Array.isArray(rawTools)) {
-    const tools: PluginToolDef[] = []
+    const tools: ExtensionToolDef[] = []
     for (const rawTool of rawTools) {
       if (!isRecord(rawTool)) continue
       const name = typeof rawTool.name === 'string' ? rawTool.name.trim() : ''
@@ -412,10 +429,10 @@ function coerceTools(rawTools: unknown): PluginToolDef[] {
       if (!name || typeof execute !== 'function') continue
       tools.push({
         name,
-        description: typeof rawTool.description === 'string' ? rawTool.description : `Plugin tool: ${name}`,
+        description: typeof rawTool.description === 'string' ? rawTool.description : `Extension tool: ${name}`,
         parameters: isRecord(rawTool.parameters) ? rawTool.parameters : { type: 'object', properties: {} },
-        planning: isRecord(rawTool.planning) ? rawTool.planning as PluginToolDef['planning'] : undefined,
-        execute: execute as PluginToolDef['execute'],
+        planning: isRecord(rawTool.planning) ? rawTool.planning as ExtensionToolDef['planning'] : undefined,
+        execute: execute as ExtensionToolDef['execute'],
       })
     }
     return tools
@@ -423,13 +440,13 @@ function coerceTools(rawTools: unknown): PluginToolDef[] {
 
   // Compatibility: object-map format (e.g. { ping: () => 'pong' }).
   if (isRecord(rawTools)) {
-    const tools: PluginToolDef[] = []
+    const tools: ExtensionToolDef[] = []
     for (const [name, rawTool] of Object.entries(rawTools)) {
       if (!name.trim()) continue
       if (typeof rawTool === 'function') {
         tools.push({
           name,
-          description: `Plugin tool: ${name}`,
+          description: `Extension tool: ${name}`,
           parameters: { type: 'object', properties: {} },
           execute: async (args) => rawTool(args),
         })
@@ -438,10 +455,10 @@ function coerceTools(rawTools: unknown): PluginToolDef[] {
       if (!isRecord(rawTool) || typeof rawTool.execute !== 'function') continue
       tools.push({
         name,
-        description: typeof rawTool.description === 'string' ? rawTool.description : `Plugin tool: ${name}`,
+        description: typeof rawTool.description === 'string' ? rawTool.description : `Extension tool: ${name}`,
         parameters: isRecord(rawTool.parameters) ? rawTool.parameters : { type: 'object', properties: {} },
-        planning: isRecord(rawTool.planning) ? rawTool.planning as PluginToolDef['planning'] : undefined,
-        execute: rawTool.execute as PluginToolDef['execute'],
+        planning: isRecord(rawTool.planning) ? rawTool.planning as ExtensionToolDef['planning'] : undefined,
+        execute: rawTool.execute as ExtensionToolDef['execute'],
       })
     }
     return tools
@@ -450,12 +467,12 @@ function coerceTools(rawTools: unknown): PluginToolDef[] {
   return []
 }
 
-function normalizePlugin(mod: unknown): Plugin | null {
+function normalizeExtension(mod: unknown): Extension | null {
   const modObj = mod as Record<string, unknown>
   const raw: Record<string, unknown> = (modObj?.default as Record<string, unknown>) || modObj
 
   if (raw.name && (raw.hooks || raw.tools || raw.ui || raw.providers || raw.connectors)) {
-    const hooks = isRecord(raw.hooks) ? (raw.hooks as PluginHooks) : {}
+    const hooks = isRecord(raw.hooks) ? (raw.hooks as ExtensionHooks) : {}
     return {
       name: raw.name as string,
       version: (raw.version as string) || '0.0.1',
@@ -464,29 +481,29 @@ function normalizePlugin(mod: unknown): Plugin | null {
       openclaw: raw.openclaw === true,
       hooks,
       tools: coerceTools(raw.tools),
-      ui: isRecord(raw.ui) ? (raw.ui as PluginUIExtension) : undefined,
-      providers: Array.isArray(raw.providers) ? (raw.providers as PluginProviderExtension[]) : undefined,
-      connectors: Array.isArray(raw.connectors) ? (raw.connectors as PluginConnectorExtension[]) : undefined,
-    } as Plugin
+      ui: isRecord(raw.ui) ? (raw.ui as ExtensionUIDefinition) : undefined,
+      providers: Array.isArray(raw.providers) ? (raw.providers as ExtensionProviderDefinition[]) : undefined,
+      connectors: Array.isArray(raw.connectors) ? (raw.connectors as ExtensionConnectorDefinition[]) : undefined,
+    } as Extension
   }
 
   // --- Real OpenClaw format: function export `(api) => {}` or object with `register(api)` ---
   const registerFn = typeof raw === 'function'
-    ? raw as (api: OpenClawPluginApi) => void
+    ? raw as (api: OpenClawExtensionApi) => void
     : typeof raw.register === 'function'
-      ? raw.register as (api: OpenClawPluginApi) => void
+      ? raw.register as (api: OpenClawExtensionApi) => void
       : typeof raw.default === 'function' && !raw.name && !raw.hooks
-        ? raw.default as (api: OpenClawPluginApi) => void
+        ? raw.default as (api: OpenClawExtensionApi) => void
         : null
 
   if (registerFn) {
-    const pluginName = (raw.id || raw.name || 'openclaw-plugin') as string
-    const pluginVersion = (raw.version || '1.0.0') as string
-    const pluginDesc = (raw.description || '') as string
-    const hooks: PluginHooks = {}
-    const tools: PluginToolDef[] = []
+    const extensionName = (raw.id || raw.name || 'openclaw-extension') as string
+    const extensionVersion = (raw.version || '1.0.0') as string
+    const extensionDesc = (raw.description || '') as string
+    const hooks: ExtensionHooks = {}
+    const tools: ExtensionToolDef[] = []
 
-    const hookEventMap: Record<string, keyof PluginHooks> = {
+    const hookEventMap: Record<string, keyof ExtensionHooks> = {
       'before_model_resolve': 'beforeModelResolve',
       'before_prompt_build': 'beforePromptBuild',
       'before_tool_call': 'beforeToolCall',
@@ -510,13 +527,13 @@ function normalizePlugin(mod: unknown): Plugin | null {
       'agent:context': 'getAgentContext',
     }
 
-    const pluginLogger: PluginLogger = {
-      info: (msg: string, m?: unknown) => log.info(`plugin:${pluginName}`, msg, m),
-      warn: (msg: string, m?: unknown) => log.warn(`plugin:${pluginName}`, msg, m),
-      error: (msg: string, m?: unknown) => log.error(`plugin:${pluginName}`, msg, m),
+    const extensionLogger: ExtensionLogger = {
+      info: (msg: string, m?: unknown) => log.info(`extension:${extensionName}`, msg, m),
+      warn: (msg: string, m?: unknown) => log.warn(`extension:${extensionName}`, msg, m),
+      error: (msg: string, m?: unknown) => log.error(`extension:${extensionName}`, msg, m),
     }
 
-    const api: OpenClawPluginApi = {
+    const api: OpenClawExtensionApi = {
       registerHook: (event: string, handler: (...args: unknown[]) => unknown) => {
         const hookKey = hookEventMap[event]
         if (hookKey) {
@@ -528,12 +545,12 @@ function normalizePlugin(mod: unknown): Plugin | null {
         if (def?.name && typeof def.execute === 'function') {
           tools.push({
             name: def.name,
-            description: def.description || `Plugin tool: ${def.name}`,
+            description: def.description || `Extension tool: ${def.name}`,
             parameters: (def.parameters || { type: 'object', properties: {} }) as Record<string, unknown>,
             planning: isRecord((def as Record<string, unknown>).planning)
-              ? (def as PluginToolDef).planning
+              ? (def as ExtensionToolDef).planning
               : undefined,
-            execute: def.execute as PluginToolDef['execute'],
+            execute: def.execute as ExtensionToolDef['execute'],
           })
         }
       },
@@ -543,8 +560,8 @@ function normalizePlugin(mod: unknown): Plugin | null {
       registerChannel: () => { /* Channels not yet bridged */ },
       registerGatewayMethod: () => { /* RPC not supported */ },
       registerCli: () => { /* CLI not supported */ },
-      logger: pluginLogger,
-      log: pluginLogger,
+      logger: extensionLogger,
+      log: extensionLogger,
       config: {},
       runtime: {},
     }
@@ -552,17 +569,17 @@ function normalizePlugin(mod: unknown): Plugin | null {
     try {
       registerFn(api)
     } catch (err: unknown) {
-      log.error('plugins', 'OpenClaw register() failed', {
-        pluginName,
+      log.error('extensions', 'OpenClaw register() failed', {
+        extensionName,
         error: errorMessage(err),
       })
       return null
     }
 
     return {
-      name: pluginName,
-      version: pluginVersion,
-      description: pluginDesc || `OpenClaw plugin (v${pluginVersion})`,
+      name: extensionName,
+      version: extensionVersion,
+      description: extensionDesc || `OpenClaw extension (v${extensionVersion})`,
       author: typeof raw.author === 'string' ? raw.author : undefined,
       openclaw: true,
       hooks,
@@ -572,31 +589,31 @@ function normalizePlugin(mod: unknown): Plugin | null {
 
   // --- Legacy OpenClaw format: activate(ctx)/deactivate() ---
   if (raw.name && typeof raw.activate === 'function') {
-    const oc = raw as unknown as OpenClawLegacyPlugin
-    const hooks: PluginHooks = {}
-    const tools: PluginToolDef[] = []
+    const oc = raw as unknown as OpenClawLegacyExtension
+    const hooks: ExtensionHooks = {}
+    const tools: ExtensionToolDef[] = []
 
     const registrar = {
-      onAgentStart: (fn: (...args: unknown[]) => unknown) => { hooks.beforeAgentStart = fn as PluginHooks['beforeAgentStart'] },
-      onAgentComplete: (fn: (...args: unknown[]) => unknown) => { hooks.afterAgentComplete = fn as PluginHooks['afterAgentComplete'] },
-      onBeforePromptBuild: (fn: (...args: unknown[]) => unknown) => { hooks.beforePromptBuild = fn as PluginHooks['beforePromptBuild'] },
-      onBeforeToolCall: (fn: (...args: unknown[]) => unknown) => { hooks.beforeToolCall = fn as PluginHooks['beforeToolCall'] },
-      onToolCall: (fn: (...args: unknown[]) => unknown) => { hooks.beforeToolExec = fn as PluginHooks['beforeToolExec'] },
-      onToolResult: (fn: (...args: unknown[]) => unknown) => { hooks.afterToolExec = fn as PluginHooks['afterToolExec'] },
-      onMessage: (fn: (...args: unknown[]) => unknown) => { hooks.onMessage = fn as PluginHooks['onMessage'] },
-      registerTool: (def: PluginToolDef) => { if (def?.name) tools.push(def) },
+      onAgentStart: (fn: (...args: unknown[]) => unknown) => { hooks.beforeAgentStart = fn as ExtensionHooks['beforeAgentStart'] },
+      onAgentComplete: (fn: (...args: unknown[]) => unknown) => { hooks.afterAgentComplete = fn as ExtensionHooks['afterAgentComplete'] },
+      onBeforePromptBuild: (fn: (...args: unknown[]) => unknown) => { hooks.beforePromptBuild = fn as ExtensionHooks['beforePromptBuild'] },
+      onBeforeToolCall: (fn: (...args: unknown[]) => unknown) => { hooks.beforeToolCall = fn as ExtensionHooks['beforeToolCall'] },
+      onToolCall: (fn: (...args: unknown[]) => unknown) => { hooks.beforeToolExec = fn as ExtensionHooks['beforeToolExec'] },
+      onToolResult: (fn: (...args: unknown[]) => unknown) => { hooks.afterToolExec = fn as ExtensionHooks['afterToolExec'] },
+      onMessage: (fn: (...args: unknown[]) => unknown) => { hooks.onMessage = fn as ExtensionHooks['onMessage'] },
+      registerTool: (def: ExtensionToolDef) => { if (def?.name) tools.push(def) },
       log: {
-        info: (msg: string, m?: unknown) => log.info(`plugin:${oc.name}`, msg, m),
-        warn: (msg: string, m?: unknown) => log.warn(`plugin:${oc.name}`, msg, m),
-        error: (msg: string, m?: unknown) => log.error(`plugin:${oc.name}`, msg, m),
+        info: (msg: string, m?: unknown) => log.info(`extension:${oc.name}`, msg, m),
+        warn: (msg: string, m?: unknown) => log.warn(`extension:${oc.name}`, msg, m),
+        error: (msg: string, m?: unknown) => log.error(`extension:${oc.name}`, msg, m),
       }
     }
 
     try {
       oc.activate(registrar)
     } catch (err: unknown) {
-      log.error('plugins', 'OpenClaw activate() failed', {
-        pluginName: oc.name,
+      log.error('extensions', 'OpenClaw activate() failed', {
+        extensionName: oc.name,
         error: errorMessage(err),
       })
       return null
@@ -605,7 +622,7 @@ function normalizePlugin(mod: unknown): Plugin | null {
     return {
       name: oc.name,
       version: oc.version,
-      description: `OpenClaw plugin (v${oc.version || '0.0.0'})`,
+      description: `OpenClaw extension (v${oc.version || '0.0.0'})`,
       openclaw: true,
       hooks,
       tools,
@@ -614,58 +631,58 @@ function normalizePlugin(mod: unknown): Plugin | null {
   return null
 }
 
-interface LoadedPlugin {
+interface LoadedExtension {
   id: string
-  meta: PluginMeta
-  hooks: PluginHooks
-  tools: PluginToolDef[]
-  ui?: PluginUIExtension
-  providers?: PluginProviderExtension[]
-  connectors?: PluginConnectorExtension[]
+  meta: ExtensionMeta
+  hooks: ExtensionHooks
+  tools: ExtensionToolDef[]
+  ui?: ExtensionUIDefinition
+  providers?: ExtensionProviderDefinition[]
+  connectors?: ExtensionConnectorDefinition[]
   isBuiltin?: boolean
 }
 
-function createPluginRequire(): NodeRequire | null {
+function createExtensionRequire(): NodeRequire | null {
   try {
     return createRequire(path.join(process.cwd(), 'package.json'))
   } catch (err: unknown) {
-    log.warn('plugins', 'createRequire failed; external plugins disabled', {
+    log.warn('extensions', 'createRequire failed; external extensions disabled', {
       error: errorMessage(err),
     })
     return null
   }
 }
 
-export interface ExternalPluginToolEntry {
-  pluginId: string
-  pluginName: string
-  tool: PluginToolDef
+export interface ExternalExtensionToolEntry {
+  extensionId: string
+  extensionName: string
+  tool: ExtensionToolDef
 }
 
-class PluginManager {
-  private plugins: Map<string, LoadedPlugin> = new Map()
-  private builtins: Map<string, Plugin> = new Map()
+class ExtensionManager {
+  private extensions: Map<string, LoadedExtension> = new Map()
+  private builtins: Map<string, Extension> = new Map()
   private loaded = false
   private watcher: fs.FSWatcher | null = null
 
-  registerBuiltin(id: string, plugin: Plugin) {
-    const canonicalId = this.canonicalPluginId(id)
-    this.builtins.set(canonicalId, plugin)
+  registerBuiltin(id: string, extension: Extension) {
+    const canonicalId = this.canonicalExtensionId(id)
+    this.builtins.set(canonicalId, extension)
     // Builtins can be imported/registered after first load, so force re-evaluation.
     this.loaded = false
   }
 
-  private ensurePluginWatcher(): void {
+  private ensureExtensionWatcher(): void {
     if (this.watcher) return
     try {
-      this.ensurePluginDirs()
-      const watcher = fs.watch(PLUGINS_DIR, (_eventType, filename) => {
+      this.ensureExtensionDirs()
+      const watcher = fs.watch(EXTENSIONS_DIR, (_eventType, filename) => {
         if (!filename || (!filename.endsWith('.js') && !filename.endsWith('.mjs'))) return
         this.loaded = false
         notify('extensions')
       })
       watcher.on('error', (err: unknown) => {
-        log.warn('plugins', 'Plugin watcher disabled after runtime watch failure', {
+        log.warn('extensions', 'Extension watcher disabled after runtime watch failure', {
           error: errorMessage(err),
         })
         if (this.watcher === watcher) {
@@ -676,23 +693,24 @@ class PluginManager {
       watcher.unref?.()
       this.watcher = watcher
     } catch (err: unknown) {
-      log.warn('plugins', 'Failed to watch plugins directory', {
+      log.warn('extensions', 'Failed to watch extensions directory', {
         error: errorMessage(err),
       })
     }
   }
 
-  private isExternalPluginFilename(id: string): boolean {
+  private isExternalExtensionFilename(id: string): boolean {
     return id.endsWith('.js') || id.endsWith('.mjs')
   }
 
-  private ensurePluginDirs(): void {
-    if (!fs.existsSync(PLUGINS_DIR)) fs.mkdirSync(PLUGINS_DIR, { recursive: true })
-    if (!fs.existsSync(PLUGIN_WORKSPACES_DIR)) fs.mkdirSync(PLUGIN_WORKSPACES_DIR, { recursive: true })
+  private ensureExtensionDirs(): void {
+    _migrateLegacyPaths()
+    if (!fs.existsSync(EXTENSIONS_DIR)) fs.mkdirSync(EXTENSIONS_DIR, { recursive: true })
+    if (!fs.existsSync(EXTENSION_WORKSPACES_DIR)) fs.mkdirSync(EXTENSION_WORKSPACES_DIR, { recursive: true })
   }
 
   private getWorkspaceDir(filename: string): string {
-    return path.join(PLUGIN_WORKSPACES_DIR, pluginWorkspaceKey(filename))
+    return path.join(EXTENSION_WORKSPACES_DIR, extensionWorkspaceKey(filename))
   }
 
   private getWorkspaceEntryPath(filename: string): string {
@@ -717,7 +735,7 @@ class PluginManager {
     }
   }
 
-  private getDependencyInfo(filename: string, explicitConfig?: PluginConfigEntry | null): PluginDependencyInfo {
+  private getDependencyInfo(filename: string, explicitConfig?: ExtensionConfigEntry | null): ExtensionDependencyInfo {
     const manifest = this.readWorkspaceManifest(filename)
     const counts = countManifestDependencies(manifest)
     return {
@@ -725,8 +743,8 @@ class PluginManager {
       dependencyCount: counts.dependencyCount,
       devDependencyCount: counts.devDependencyCount,
       packageManager:
-        normalizePluginPackageManager(explicitConfig?.packageManager)
-        || normalizePluginPackageManager(manifest?.packageManager)
+        normalizeExtensionPackageManager(explicitConfig?.packageManager)
+        || normalizeExtensionPackageManager(manifest?.packageManager)
         || undefined,
       installStatus: explicitConfig?.dependencyInstallStatus || (manifest ? 'ready' : 'none'),
       installError: explicitConfig?.dependencyInstallError,
@@ -735,13 +753,13 @@ class PluginManager {
   }
 
   private writeWorkspaceShim(filename: string): void {
-    const relEntry = `./.workspaces/${pluginWorkspaceKey(filename)}/index.js`
-    const shim = `// Auto-generated plugin workspace shim. Edit the managed source file instead.\nmodule.exports = require(${JSON.stringify(relEntry)})\n`
-    fs.writeFileSync(path.join(PLUGINS_DIR, filename), shim, 'utf8')
+    const relEntry = `./.workspaces/${extensionWorkspaceKey(filename)}/index.js`
+    const shim = `// Auto-generated extension workspace shim. Edit the managed source file instead.\nmodule.exports = require(${JSON.stringify(relEntry)})\n`
+    fs.writeFileSync(path.join(EXTENSIONS_DIR, filename), shim, 'utf8')
   }
 
-  private clearPluginRequireCache(dynamicRequire: NodeRequire, filename: string): void {
-    const rootPath = path.join(PLUGINS_DIR, filename)
+  private clearExtensionRequireCache(dynamicRequire: NodeRequire, filename: string): void {
+    const rootPath = path.join(EXTENSIONS_DIR, filename)
     delete dynamicRequire.cache[rootPath]
     const workspaceDir = this.getWorkspaceDir(filename)
     for (const cacheKey of Object.keys(dynamicRequire.cache)) {
@@ -751,13 +769,13 @@ class PluginManager {
     }
   }
 
-  private resolvePluginSourcePath(filename: string): string {
+  private resolveExtensionSourcePath(filename: string): string {
     return this.hasWorkspace(filename)
       ? this.getWorkspaceEntryPath(filename)
-      : path.join(PLUGINS_DIR, filename)
+      : path.join(EXTENSIONS_DIR, filename)
   }
 
-  private async runDependencyInstall(packageManager: PluginPackageManager, cwd: string): Promise<void> {
+  private async runDependencyInstall(packageManager: ExtensionPackageManager, cwd: string): Promise<void> {
     const { command, args } = getInstallCommand(packageManager)
 
     await new Promise<void>((resolve, reject) => {
@@ -771,8 +789,8 @@ class PluginManager {
       let stdout = ''
       const timer = setTimeout(() => {
         child.kill('SIGTERM')
-        reject(new Error(`${command} install timed out after ${Math.round(PACKAGE_INSTALL_TIMEOUT_MS / 1000)}s`))
-      }, PACKAGE_INSTALL_TIMEOUT_MS)
+        reject(new Error(`${command} install timed out after ${Math.round(EXTENSION_INSTALL_TIMEOUT_MS / 1000)}s`))
+      }, EXTENSION_INSTALL_TIMEOUT_MS)
 
       child.stdout?.on('data', (chunk: Buffer | string) => {
         stdout = trimProcessOutput(`${stdout}${chunk.toString()}`)
@@ -799,40 +817,40 @@ class PluginManager {
     })
   }
 
-  private canonicalPluginId(id: string): string {
+  private canonicalExtensionId(id: string): string {
     const trimmed = typeof id === 'string' ? id.trim() : ''
     if (!trimmed) return ''
-    if (this.isExternalPluginFilename(trimmed)) return path.basename(trimmed)
-    return canonicalizePluginId(trimmed)
+    if (this.isExternalExtensionFilename(trimmed)) return path.basename(trimmed)
+    return canonicalizeExtensionId(trimmed)
   }
 
   private configIdsFor(id: string): string[] {
-    const canonicalId = this.canonicalPluginId(id)
+    const canonicalId = this.canonicalExtensionId(id)
     if (!canonicalId) return []
-    if (this.isExternalPluginFilename(canonicalId)) return [canonicalId]
-    const aliases = getPluginAliases(canonicalId)
+    if (this.isExternalExtensionFilename(canonicalId)) return [canonicalId]
+    const aliases = getExtensionAliases(canonicalId)
     const ids = new Set<string>([canonicalId, ...aliases])
     return Array.from(ids)
   }
 
-  private readConfigEntry(id: string, config?: Record<string, PluginConfigEntry>): PluginConfigEntry | null {
+  private readConfigEntry(id: string, config?: Record<string, ExtensionConfigEntry>): ExtensionConfigEntry | null {
     const cfg = config || this.loadConfig()
-    let merged: PluginConfigEntry | null = null
+    let merged: ExtensionConfigEntry | null = null
     for (const key of this.configIdsFor(id)) {
       const entry = cfg[key]
       if (!entry) continue
       merged = { ...(merged || {}), ...entry }
-      if (key === this.canonicalPluginId(id)) break
+      if (key === this.canonicalExtensionId(id)) break
     }
     return merged
   }
 
-  private writeConfig(config: Record<string, PluginConfigEntry>): void {
-    fs.writeFileSync(PLUGINS_CONFIG, JSON.stringify(config, null, 2))
+  private writeConfig(config: Record<string, ExtensionConfigEntry>): void {
+    fs.writeFileSync(EXTENSIONS_CONFIG, JSON.stringify(config, null, 2))
   }
 
-  private updateConfigEntry(id: string, patch: PluginConfigEntry | null): void {
-    const canonicalId = this.canonicalPluginId(id)
+  private updateConfigEntry(id: string, patch: ExtensionConfigEntry | null): void {
+    const canonicalId = this.canonicalExtensionId(id)
     const config = this.loadConfig()
     for (const key of this.configIdsFor(canonicalId)) {
       if (key !== canonicalId) delete config[key]
@@ -849,12 +867,12 @@ class PluginManager {
     if (!Array.isArray(enabledIds) || enabledIds.length === 0) {
       return includeAllWhenEmpty ? null : new Set<string>()
     }
-    return new Set(expandPluginIds(enabledIds))
+    return new Set(expandExtensionIds(enabledIds))
   }
 
-  private readFailureState(): Record<string, PluginFailureRecord> {
+  private readFailureState(): Record<string, ExtensionFailureRecord> {
     try {
-      const parsed = JSON.parse(fs.readFileSync(PLUGIN_FAILURES, 'utf8')) as Record<string, PluginFailureRecord>
+      const parsed = JSON.parse(fs.readFileSync(EXTENSION_FAILURES, 'utf8')) as Record<string, ExtensionFailureRecord>
       if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
       return parsed
     } catch {
@@ -862,11 +880,11 @@ class PluginManager {
     }
   }
 
-  private writeFailureState(state: Record<string, PluginFailureRecord>): void {
+  private writeFailureState(state: Record<string, ExtensionFailureRecord>): void {
     try {
-      fs.writeFileSync(PLUGIN_FAILURES, JSON.stringify(state, null, 2))
+      fs.writeFileSync(EXTENSION_FAILURES, JSON.stringify(state, null, 2))
     } catch (err: unknown) {
-      log.warn('plugins', 'Failed to persist plugin failure state', { error: errorMessage(err) })
+      log.warn('extensions', 'Failed to persist extension failure state', { error: errorMessage(err) })
     }
   }
 
@@ -882,24 +900,24 @@ class PluginManager {
     this.writeFailureState(state)
   }
 
-  private autoDisableExternalPlugin(id: string, reason: string, failure: PluginFailureRecord): void {
+  private autoDisableExternalExtension(id: string, reason: string, failure: ExtensionFailureRecord): void {
     try {
       const current = this.readConfigEntry(id)
       if (current?.enabled === false) return
       this.updateConfigEntry(id, { ...(current || {}), enabled: false })
     } catch (err: unknown) {
-      log.error('plugins', 'Failed to write plugins config while auto-disabling plugin', {
-        pluginId: id,
+      log.error('extensions', 'Failed to write extensions config while auto-disabling extension', {
+        extensionId: id,
         error: errorMessage(err),
       })
       return
     }
     this.loaded = false
 
-    log.error('plugins', 'Auto-disabled plugin after repeated failures', {
-      pluginId: id,
+    log.error('extensions', 'Auto-disabled extension after repeated failures', {
+      extensionId: id,
       failureCount: failure.count,
-      threshold: MAX_CONSECUTIVE_PLUGIN_FAILURES,
+      threshold: MAX_CONSECUTIVE_EXTENSION_FAILURES,
       reason,
       lastError: failure.lastError,
       stage: failure.lastStage,
@@ -907,23 +925,23 @@ class PluginManager {
 
     createNotification({
       type: 'warning',
-      title: `Plugin auto-disabled: ${id}`,
+      title: `Extension auto-disabled: ${id}`,
       message: `${reason}. It failed ${failure.count} times consecutively and was disabled for stability.`,
-      actionLabel: 'Open Plugins',
+      actionLabel: 'Open Extensions',
       actionUrl: '/extensions',
-      entityType: 'plugin',
+      entityType: 'extension',
       entityId: id,
-      dedupKey: `plugin-auto-disabled:${id}`,
+      dedupKey: `extension-auto-disabled:${id}`,
     })
     notify('extensions')
   }
 
-  private markPluginFailure(id: string, stage: string, err: unknown, disableEligible: boolean): void {
+  private markExtensionFailure(id: string, stage: string, err: unknown, disableEligible: boolean): void {
     const errorText = errorMessage(err)
     const state = this.readFailureState()
-    const failureKey = this.canonicalPluginId(id)
+    const failureKey = this.canonicalExtensionId(id)
     const nextCount = (state[failureKey]?.count || 0) + 1
-    const record: PluginFailureRecord = {
+    const record: ExtensionFailureRecord = {
       count: nextCount,
       lastError: errorText,
       lastStage: stage,
@@ -932,35 +950,35 @@ class PluginManager {
     state[failureKey] = record
     this.writeFailureState(state)
 
-    log.warn('plugins', 'Plugin failure recorded', {
-      pluginId: id,
+    log.warn('extensions', 'Extension failure recorded', {
+      extensionId: id,
       stage,
       failureCount: nextCount,
-      threshold: MAX_CONSECUTIVE_PLUGIN_FAILURES,
+      threshold: MAX_CONSECUTIVE_EXTENSION_FAILURES,
       error: errorText,
     })
 
     if (
       disableEligible
-      && nextCount >= MAX_CONSECUTIVE_PLUGIN_FAILURES
+      && nextCount >= MAX_CONSECUTIVE_EXTENSION_FAILURES
       && !this.builtins.has(failureKey)
     ) {
-      this.autoDisableExternalPlugin(failureKey, `Plugin failure at ${stage}`, record)
+      this.autoDisableExternalExtension(failureKey, `Extension failure at ${stage}`, record)
     }
   }
 
-  private markPluginSuccess(id: string): void {
+  private markExtensionSuccess(id: string): void {
     try {
       this.clearFailureState(id)
     } catch (err: unknown) {
-      log.warn('plugins', 'markPluginSuccess failed', { error: errorMessage(err), pluginId: id })
+      log.warn('extensions', 'markExtensionSuccess failed', { error: errorMessage(err), extensionId: id })
     }
   }
 
   load() {
     if (this.loaded) return
-    this.plugins.clear()
-    this.ensurePluginWatcher()
+    this.extensions.clear()
+    this.ensureExtensionWatcher()
 
     const config = this.loadConfig()
 
@@ -969,7 +987,7 @@ class PluginManager {
       const explicitConfig = this.readConfigEntry(id, config)
       const isEnabled = explicitConfig != null ? explicitConfig.enabled !== false : p.enabledByDefault !== false
       if (isEnabled) {
-        this.plugins.set(id, {
+        this.extensions.set(id, {
           id,
           meta: {
             name: p.name,
@@ -983,22 +1001,22 @@ class PluginManager {
             installSource: 'builtin',
             openclaw: p.openclaw === true,
           },
-          hooks: buildPluginHooks(id, p.name, p.hooks, p.tools),
+          hooks: buildExtensionHooks(id, p.name, p.hooks, p.tools),
           tools: p.tools || [],
           ui: p.ui,
           providers: p.providers,
           connectors: p.connectors,
           isBuiltin: true
         })
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       }
     }
 
     // 2. Load External
     try {
-      this.ensurePluginDirs()
-      const files = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith('.js') || f.endsWith('.mjs'))
-      const dynamicRequire = createPluginRequire()
+      this.ensureExtensionDirs()
+      const files = fs.readdirSync(EXTENSIONS_DIR).filter(f => f.endsWith('.js') || f.endsWith('.mjs'))
+      const dynamicRequire = createExtensionRequire()
 
       if (dynamicRequire) {
         for (const file of files) {
@@ -1007,42 +1025,42 @@ class PluginManager {
             const isEnabled = explicitConfig?.enabled !== false
             if (!isEnabled) continue
 
-            const fullPath = path.join(PLUGINS_DIR, file)
-            this.clearPluginRequireCache(dynamicRequire, file)
-            const plugin = normalizePlugin(dynamicRequire(fullPath))
-            if (!plugin) {
-              this.markPluginFailure(file, 'load.normalize', 'Plugin format unsupported or activate() failed', true)
+            const fullPath = path.join(EXTENSIONS_DIR, file)
+            this.clearExtensionRequireCache(dynamicRequire, file)
+            const ext = normalizeExtension(dynamicRequire(fullPath))
+            if (!ext) {
+              this.markExtensionFailure(file, 'load.normalize', 'Extension format unsupported or activate() failed', true)
               continue
             }
 
-            this.plugins.set(file, {
+            this.extensions.set(file, {
               id: file,
               meta: {
-                name: plugin.name,
-                description: plugin.description || '',
+                name: ext.name,
+                description: ext.description || '',
                 filename: file,
                 enabled: true,
-                author: plugin.author,
-                version: plugin.version || '0.0.1',
-                source: inferStoredPluginSource(explicitConfig),
+                author: ext.author,
+                version: ext.version || '0.0.1',
+                source: inferStoredExtensionSource(explicitConfig),
                 sourceLabel: inferStoredPublisherSource(explicitConfig),
                 installSource: inferStoredInstallSource(explicitConfig),
                 sourceUrl: explicitConfig?.sourceUrl,
-                openclaw: plugin.openclaw === true,
+                openclaw: ext.openclaw === true,
               },
-              hooks: buildPluginHooks(file, plugin.name, plugin.hooks, plugin.tools),
-              tools: plugin.tools || [],
-              ui: plugin.ui,
-              providers: plugin.providers,
-              connectors: plugin.connectors,
+              hooks: buildExtensionHooks(file, ext.name, ext.hooks, ext.tools),
+              tools: ext.tools || [],
+              ui: ext.ui,
+              providers: ext.providers,
+              connectors: ext.connectors,
             })
-            this.markPluginSuccess(file)
+            this.markExtensionSuccess(file)
           } catch (err: unknown) {
-            log.error('plugins', 'Failed to load external plugin', {
-              pluginId: file,
+            log.error('extensions', 'Failed to load external extension', {
+              extensionId: file,
               error: errorMessage(err),
             })
-            this.markPluginFailure(file, 'load.require', err, true)
+            this.markExtensionFailure(file, 'load.require', err, true)
           }
         }
       }
@@ -1051,37 +1069,37 @@ class PluginManager {
     this.loaded = true
   }
 
-  getTools(enabledIds: string[]): Array<{ pluginId: string; tool: PluginToolDef }> {
+  getTools(enabledIds: string[]): Array<{ extensionId: string; tool: ExtensionToolDef }> {
     this.load()
-    const all: Array<{ pluginId: string; tool: PluginToolDef }> = []
-    const ids = new Set(expandPluginIds(enabledIds))
-    for (const [id, p] of this.plugins.entries()) {
+    const all: Array<{ extensionId: string; tool: ExtensionToolDef }> = []
+    const ids = new Set(expandExtensionIds(enabledIds))
+    for (const [id, p] of this.extensions.entries()) {
       if (ids.has(id)) {
         const tools = Array.isArray(p.tools) ? p.tools : []
         for (const t of tools) {
           if (!t || typeof t.name !== 'string' || typeof t.execute !== 'function') continue
-          all.push({ pluginId: id, tool: t })
+          all.push({ extensionId: id, tool: t })
         }
       }
     }
     return all
   }
 
-  getExternalTools(): PluginToolDef[] {
+  getExternalTools(): ExtensionToolDef[] {
     return this.getExternalToolEntries().map((entry) => entry.tool)
   }
 
-  getExternalToolEntries(): ExternalPluginToolEntry[] {
+  getExternalToolEntries(): ExternalExtensionToolEntry[] {
     this.load()
-    const all: ExternalPluginToolEntry[] = []
-    for (const p of this.plugins.values()) {
+    const all: ExternalExtensionToolEntry[] = []
+    for (const p of this.extensions.values()) {
       if (p.isBuiltin) continue
-      const pluginTools = Array.isArray(p.tools) ? p.tools : []
-      for (const tool of pluginTools) {
+      const extensionTools = Array.isArray(p.tools) ? p.tools : []
+      for (const tool of extensionTools) {
         if (!tool || typeof tool.name !== 'string' || typeof tool.execute !== 'function') continue
         all.push({
-          pluginId: p.id,
-          pluginName: p.meta.name,
+          extensionId: p.id,
+          extensionName: p.meta.name,
           tool,
         })
       }
@@ -1089,57 +1107,57 @@ class PluginManager {
     return all
   }
 
-  getProviders(): PluginProviderExtension[] {
+  getProviders(): ExtensionProviderDefinition[] {
     this.load()
-    const allProviders: PluginProviderExtension[] = []
-    for (const p of this.plugins.values()) {
+    const allProviders: ExtensionProviderDefinition[] = []
+    for (const p of this.extensions.values()) {
       if (p.providers) allProviders.push(...p.providers)
     }
     return allProviders
   }
 
-  getConnectors(): PluginConnectorExtension[] {
+  getConnectors(): ExtensionConnectorDefinition[] {
     this.load()
-    const allConnectors: PluginConnectorExtension[] = []
-    for (const p of this.plugins.values()) {
+    const allConnectors: ExtensionConnectorDefinition[] = []
+    for (const p of this.extensions.values()) {
       if (p.connectors) allConnectors.push(...p.connectors)
     }
     return allConnectors
   }
 
-  getUIExtensions(): PluginUIExtension[] {
+  getUIExtensions(): ExtensionUIDefinition[] {
     this.load()
-    const allUI: PluginUIExtension[] = []
-    for (const p of this.plugins.values()) {
+    const allUI: ExtensionUIDefinition[] = []
+    for (const p of this.extensions.values()) {
       if (p.ui) allUI.push(p.ui)
     }
     return allUI
   }
 
-  listPluginIds(): string[] {
+  listExtensionIds(): string[] {
     this.load()
-    return Array.from(this.plugins.keys())
+    return Array.from(this.extensions.keys())
   }
 
-  async runHook<K extends keyof PluginHooks>(hookName: K, ctx: HookContext<K>, options?: HookExecutionOptions) {
+  async runHook<K extends keyof ExtensionHooks>(hookName: K, ctx: HookContext<K>, options?: HookExecutionOptions) {
     this.load()
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks[hookName]
       if (hook) {
         try {
           await (hook as (hookCtx: HookContext<K>) => Promise<unknown> | unknown)(ctx)
-          this.markPluginSuccess(id)
+          this.markExtensionSuccess(id)
         } catch (err: unknown) {
-          log.error('plugins', 'Plugin hook failed', {
-            pluginId: id,
-            pluginName: p.meta.name,
+          log.error('extensions', 'Extension hook failed', {
+            extensionId: id,
+            extensionName: p.meta.name,
             hookName: String(hookName),
             error: errorMessage(err),
           })
-          this.markPluginFailure(id, `hook.${String(hookName)}`, err, true)
+          this.markExtensionFailure(id, `hook.${String(hookName)}`, err, true)
         }
       }
     }
@@ -1154,28 +1172,28 @@ class PluginManager {
       messages: import('@/types').Message[]
     },
     options?: HookExecutionOptions,
-  ): Promise<PluginPromptBuildResult | null> {
+  ): Promise<ExtensionPromptBuildResult | null> {
     this.load()
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
-    let result: PluginPromptBuildResult | undefined
+    let result: ExtensionPromptBuildResult | undefined
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks.beforePromptBuild
       if (!hook) continue
       try {
         const next = await hook(params)
         if (next && typeof next === 'object' && !Array.isArray(next)) {
-          result = mergePromptBuildResults(result, next as PluginPromptBuildResult)
+          result = mergePromptBuildResults(result, next as ExtensionPromptBuildResult)
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'beforePromptBuild hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'beforePromptBuild hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.beforePromptBuild', err, true)
+        this.markExtensionFailure(id, 'hook.beforePromptBuild', err, true)
       }
     }
 
@@ -1192,28 +1210,28 @@ class PluginManager {
       apiEndpoint?: string | null
     },
     options?: HookExecutionOptions,
-  ): Promise<PluginModelResolveResult | null> {
+  ): Promise<ExtensionModelResolveResult | null> {
     this.load()
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
-    let result: PluginModelResolveResult | undefined
+    let result: ExtensionModelResolveResult | undefined
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks.beforeModelResolve
       if (!hook) continue
       try {
         const next = await hook(params)
         if (next && typeof next === 'object' && !Array.isArray(next)) {
-          result = mergeModelResolveResults(result, next as PluginModelResolveResult)
+          result = mergeModelResolveResults(result, next as ExtensionModelResolveResult)
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'beforeModelResolve hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'beforeModelResolve hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.beforeModelResolve', err, true)
+        this.markExtensionFailure(id, 'hook.beforeModelResolve', err, true)
       }
     }
 
@@ -1236,7 +1254,7 @@ class PluginManager {
     let blockReason: string | null = null
     let warning: string | null = null
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
 
       const beforeToolCall = p.hooks.beforeToolCall
@@ -1254,7 +1272,7 @@ class PluginManager {
             if (result.block === true) {
               blockReason = typeof result.blockReason === 'string' && result.blockReason.trim()
                 ? result.blockReason.trim()
-                : 'Tool call blocked by plugin hook'
+                : 'Tool call blocked by extension hook'
             }
             if (typeof result.warning === 'string' && result.warning.trim()) {
               warning = result.warning.trim()
@@ -1272,15 +1290,15 @@ class PluginManager {
           } else if (result && typeof result === 'object' && !Array.isArray(result)) {
             currentInput = result as Record<string, unknown>
           }
-          this.markPluginSuccess(id)
+          this.markExtensionSuccess(id)
         } catch (err: unknown) {
-          log.error('plugins', 'beforeToolCall hook failed', {
-            pluginId: id,
-            pluginName: p.meta.name,
+          log.error('extensions', 'beforeToolCall hook failed', {
+            extensionId: id,
+            extensionName: p.meta.name,
             toolName: params.toolName,
             error: errorMessage(err),
           })
-          this.markPluginFailure(id, 'hook.beforeToolCall', err, true)
+          this.markExtensionFailure(id, 'hook.beforeToolCall', err, true)
         }
       }
 
@@ -1294,15 +1312,15 @@ class PluginManager {
         if (legacyResult && typeof legacyResult === 'object' && !Array.isArray(legacyResult)) {
           currentInput = legacyResult as Record<string, unknown>
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'beforeToolExec hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'beforeToolExec hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           toolName: params.toolName,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.beforeToolExec', err, true)
+        this.markExtensionFailure(id, 'hook.beforeToolExec', err, true)
       }
 
       if (blockReason) break
@@ -1325,7 +1343,7 @@ class PluginManager {
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
     let currentMessage = params.message
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks.toolResultPersist
       if (!hook) continue
@@ -1342,14 +1360,14 @@ class PluginManager {
         } else if (isRecord(result) && isMessageLike(result.message)) {
           currentMessage = result.message
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'toolResultPersist hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'toolResultPersist hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.toolResultPersist', err, true)
+        this.markExtensionFailure(id, 'hook.toolResultPersist', err, true)
       }
     }
 
@@ -1370,7 +1388,7 @@ class PluginManager {
     let currentMessage = params.message
     let block = false
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks.beforeMessageWrite
       if (!hook) continue
@@ -1387,18 +1405,18 @@ class PluginManager {
           if (isMessageLike(result.message)) currentMessage = result.message
           if (result.block === true) {
             block = true
-            this.markPluginSuccess(id)
+            this.markExtensionSuccess(id)
             break
           }
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'beforeMessageWrite hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'beforeMessageWrite hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.beforeMessageWrite', err, true)
+        this.markExtensionFailure(id, 'hook.beforeMessageWrite', err, true)
       }
     }
 
@@ -1416,33 +1434,33 @@ class PluginManager {
       threadRequested: boolean
     },
     options?: HookExecutionOptions,
-  ): Promise<PluginSubagentSpawningResult> {
+  ): Promise<ExtensionSubagentSpawningResult> {
     this.load()
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks.subagentSpawning
       if (!hook) continue
       try {
         const result = await hook(params)
         if (isSubagentSpawningResult(result) && result.status === 'error') {
-          this.markPluginSuccess(id)
+          this.markExtensionSuccess(id)
           return {
             status: 'error',
             error: typeof result.error === 'string' && result.error.trim()
               ? result.error.trim()
-              : 'Subagent spawn blocked by plugin hook',
+              : 'Subagent spawn blocked by extension hook',
           }
         }
-        this.markPluginSuccess(id)
+        this.markExtensionSuccess(id)
       } catch (err: unknown) {
-        log.error('plugins', 'subagentSpawning hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'subagentSpawning hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.subagentSpawning', err, true)
+        this.markExtensionFailure(id, 'hook.subagentSpawning', err, true)
       }
     }
 
@@ -1456,8 +1474,8 @@ class PluginManager {
     const result = await this.runBeforeToolCall(
       {
         session: {
-          id: 'plugin-hook-session',
-          name: 'Plugin Hook Session',
+          id: 'extension-hook-session',
+          name: 'Extension Hook Session',
           cwd: process.cwd(),
           user: 'system',
           // Synthetic fallback used only when no real session context is available.
@@ -1485,63 +1503,63 @@ class PluginManager {
     const filterIds = this.resolveEnabledFilter(options?.enabledIds, options?.includeAllWhenEmpty === true)
     let currentText = params.text
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (filterIds !== null && !filterIds.has(id)) continue
       const hook = p.hooks[hookName]
       if (hook) {
         try {
           const result = await (hook as (ctx: typeof params) => Promise<string> | string)({ ...params, text: currentText })
           if (typeof result === 'string') currentText = result
-          this.markPluginSuccess(id)
+          this.markExtensionSuccess(id)
         } catch (err: unknown) {
-          log.error('plugins', 'Plugin transform hook failed', {
-            pluginId: id,
-            pluginName: p.meta.name,
+          log.error('extensions', 'Extension transform hook failed', {
+            extensionId: id,
+            extensionName: p.meta.name,
             hookName,
             error: errorMessage(err),
           })
-          this.markPluginFailure(id, `hook.${String(hookName)}`, err, true)
+          this.markExtensionFailure(id, `hook.${String(hookName)}`, err, true)
         }
       }
     }
     return currentText
   }
 
-  async collectAgentContext(session: import('@/types').Session, enabledPlugins: string[], message: string, history: import('@/types').Message[]): Promise<string[]> {
+  async collectAgentContext(session: import('@/types').Session, enabledExtensions: string[], message: string, history: import('@/types').Message[]): Promise<string[]> {
     this.load()
-    const enabledSet = new Set(expandPluginIds(enabledPlugins))
+    const enabledSet = new Set(expandExtensionIds(enabledExtensions))
     const parts: string[] = []
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (!enabledSet.has(id)) continue
       const hook = p.hooks.getAgentContext
       if (!hook) continue
       try {
-        const result = await hook({ session, enabledPlugins, message, history })
+        const result = await hook({ session, enabledExtensions, message, history })
         if (typeof result === 'string' && result.trim()) {
           parts.push(result)
-          this.markPluginSuccess(id)
+          this.markExtensionSuccess(id)
         }
       } catch (err: unknown) {
-        log.error('plugins', 'getAgentContext hook failed', {
-          pluginId: id,
-          pluginName: p.meta.name,
+        log.error('extensions', 'getAgentContext hook failed', {
+          extensionId: id,
+          extensionName: p.meta.name,
           error: errorMessage(err),
         })
-        this.markPluginFailure(id, 'hook.getAgentContext', err, true)
+        this.markExtensionFailure(id, 'hook.getAgentContext', err, true)
       }
     }
 
     return parts
   }
 
-  /** Collect capability descriptions from all enabled plugins for system prompt */
-  collectCapabilityDescriptions(enabledPlugins: string[]): string[] {
+  /** Collect capability descriptions from all enabled extensions for system prompt */
+  collectCapabilityDescriptions(enabledExtensions: string[]): string[] {
     this.load()
-    const enabledSet = new Set(expandPluginIds(enabledPlugins))
+    const enabledSet = new Set(expandExtensionIds(enabledExtensions))
     const lines: string[] = []
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (!enabledSet.has(id)) continue
       const hook = p.hooks.getCapabilityDescription
       if (!hook) continue
@@ -1551,20 +1569,20 @@ class PluginManager {
           lines.push(`- ${result}`)
         }
       } catch (err: unknown) {
-        log.error('plugins', 'getCapabilityDescription hook failed', { pluginId: id, error: errorMessage(err) })
+        log.error('extensions', 'getCapabilityDescription hook failed', { extensionId: id, error: errorMessage(err) })
       }
     }
 
     return lines
   }
 
-  /** Collect operating guidance from all enabled plugins */
-  collectOperatingGuidance(enabledPlugins: string[]): string[] {
+  /** Collect operating guidance from all enabled extensions */
+  collectOperatingGuidance(enabledExtensions: string[]): string[] {
     this.load()
-    const enabledSet = new Set(expandPluginIds(enabledPlugins))
+    const enabledSet = new Set(expandExtensionIds(enabledExtensions))
     const lines: string[] = []
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (!enabledSet.has(id)) continue
       const hook = p.hooks.getOperatingGuidance
       if (!hook) continue
@@ -1579,16 +1597,16 @@ class PluginManager {
           }
         }
       } catch (err: unknown) {
-        log.error('plugins', 'getOperatingGuidance hook failed', { pluginId: id, error: errorMessage(err) })
+        log.error('extensions', 'getOperatingGuidance hook failed', { extensionId: id, error: errorMessage(err) })
       }
     }
 
     return lines
   }
 
-  /** Collect approval guidance from all enabled plugins for a specific approval event */
+  /** Collect approval guidance from all enabled extensions for a specific approval event */
   collectApprovalGuidance(
-    enabledPlugins: string[],
+    enabledExtensions: string[],
     ctx: {
       approval: import('@/types').ApprovalRequest
       phase: 'request' | 'resume' | 'connector_reminder'
@@ -1596,10 +1614,10 @@ class PluginManager {
     },
   ): string[] {
     this.load()
-    const enabledSet = new Set(expandPluginIds(enabledPlugins))
+    const enabledSet = new Set(expandExtensionIds(enabledExtensions))
     const lines: string[] = []
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (!enabledSet.has(id)) continue
       const hook = p.hooks.getApprovalGuidance
       if (!hook) continue
@@ -1614,8 +1632,8 @@ class PluginManager {
           }
         }
       } catch (err: unknown) {
-        log.error('plugins', 'getApprovalGuidance hook failed', {
-          pluginId: id,
+        log.error('extensions', 'getApprovalGuidance hook failed', {
+          extensionId: id,
           error: errorMessage(err),
         })
       }
@@ -1624,46 +1642,46 @@ class PluginManager {
     return lines
   }
 
-  /** Collect all settings fields declared by enabled plugins */
-  collectSettingsFields(enabledPlugins: string[]): Array<{ pluginId: string; pluginName: string; fields: import('@/types').PluginSettingsField[] }> {
+  /** Collect all settings fields declared by enabled extensions */
+  collectSettingsFields(enabledExtensions: string[]): Array<{ extensionId: string; extensionName: string; fields: import('@/types').ExtensionSettingsField[] }> {
     this.load()
-    const enabledSet = new Set(expandPluginIds(enabledPlugins))
-    const result: Array<{ pluginId: string; pluginName: string; fields: import('@/types').PluginSettingsField[] }> = []
+    const enabledSet = new Set(expandExtensionIds(enabledExtensions))
+    const result: Array<{ extensionId: string; extensionName: string; fields: import('@/types').ExtensionSettingsField[] }> = []
 
-    for (const [id, p] of this.plugins.entries()) {
+    for (const [id, p] of this.extensions.entries()) {
       if (!enabledSet.has(id)) continue
       const fields = p.ui?.settingsFields
       if (fields?.length) {
-        result.push({ pluginId: id, pluginName: p.meta.name, fields })
+        result.push({ extensionId: id, extensionName: p.meta.name, fields })
       }
     }
 
     return result
   }
 
-  getSettingsFields(pluginId: string): import('@/types').PluginSettingsField[] {
+  getSettingsFields(extensionId: string): import('@/types').ExtensionSettingsField[] {
     this.load()
-    const candidateIds = expandPluginIds([pluginId])
+    const candidateIds = expandExtensionIds([extensionId])
     for (const id of candidateIds) {
-      const plugin = this.plugins.get(id) || (this.builtins.has(id) ? {
+      const ext = this.extensions.get(id) || (this.builtins.has(id) ? {
         ui: this.builtins.get(id)?.ui,
-      } as LoadedPlugin : null)
-      const fields = plugin?.ui?.settingsFields
+      } as LoadedExtension : null)
+      const fields = ext?.ui?.settingsFields
       if (fields?.length) return fields
     }
     return []
   }
 
-  getPluginSettings(pluginId: string): Record<string, unknown> {
+  getExtensionSettings(extensionId: string): Record<string, unknown> {
     const settings = loadSettings()
-    const allSettings = (settings.pluginSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
+    const allSettings = (settings.extensionSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
     const result: Record<string, unknown> = {}
 
-    for (const key of this.configIdsFor(pluginId)) {
+    for (const key of this.configIdsFor(extensionId)) {
       const values = allSettings[key]
       if (!values || typeof values !== 'object') continue
       for (const [fieldKey, fieldValue] of Object.entries(values)) {
-        if (isPluginSecretSettingValue(fieldValue)) {
+        if (isExtensionSecretSettingValue(fieldValue)) {
           try {
             result[fieldKey] = decryptKey(fieldValue.encrypted)
           } catch {
@@ -1675,7 +1693,7 @@ class PluginManager {
       }
     }
 
-    for (const field of this.getSettingsFields(pluginId)) {
+    for (const field of this.getSettingsFields(extensionId)) {
       if (result[field.key] === undefined && field.defaultValue !== undefined) {
         result[field.key] = field.defaultValue
       }
@@ -1684,11 +1702,11 @@ class PluginManager {
     return result
   }
 
-  getPublicPluginSettings(pluginId: string): { values: Record<string, unknown>; configuredSecretFields: string[] } {
-    const values = this.getPluginSettings(pluginId)
+  getPublicExtensionSettings(extensionId: string): { values: Record<string, unknown>; configuredSecretFields: string[] } {
+    const values = this.getExtensionSettings(extensionId)
     const configuredSecretFields: string[] = []
 
-    for (const field of this.getSettingsFields(pluginId)) {
+    for (const field of this.getSettingsFields(extensionId)) {
       if (field.type !== 'secret') continue
       const current = values[field.key]
       if (typeof current === 'string' && current.trim()) {
@@ -1700,10 +1718,10 @@ class PluginManager {
     return { values, configuredSecretFields }
   }
 
-  setPluginSettings(pluginId: string, values: Record<string, unknown>): Record<string, unknown> {
-    const fields = this.getSettingsFields(pluginId)
+  setExtensionSettings(extensionId: string, values: Record<string, unknown>): Record<string, unknown> {
+    const fields = this.getSettingsFields(extensionId)
     if (fields.length === 0 && Object.keys(values || {}).length > 0) {
-      throw new Error(`Plugin "${pluginId}" does not declare configurable settings`)
+      throw new Error(`Extension "${extensionId}" does not declare configurable settings`)
     }
     const fieldMap = new Map(fields.map((field) => [field.key, field]))
     const nextValues: Record<string, unknown> = {}
@@ -1736,11 +1754,11 @@ class PluginManager {
     }
 
     const currentSettings = loadSettings()
-    const pluginSettings = (currentSettings.pluginSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
-    const canonicalId = this.canonicalPluginId(pluginId)
+    const settingsMap = (currentSettings.extensionSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
+    const canonicalId = this.canonicalExtensionId(extensionId)
     const existingStored: Record<string, unknown> = {}
     for (const alias of this.configIdsFor(canonicalId)) {
-      const existing = pluginSettings[alias]
+      const existing = settingsMap[alias]
       if (!existing || typeof existing !== 'object') continue
       Object.assign(existingStored, existing)
     }
@@ -1767,36 +1785,36 @@ class PluginManager {
       }
       if (field.type === 'secret') {
         stored[field.key] = {
-          __pluginSecret: true,
+          __extensionSecret: true,
           encrypted: encryptKey(String(nextValues[field.key] ?? '')),
-        } satisfies PluginSecretSettingValue
+        } satisfies ExtensionSecretSettingValue
       } else {
         stored[field.key] = nextValues[field.key]
       }
     }
 
     for (const alias of this.configIdsFor(canonicalId)) {
-      delete pluginSettings[alias]
+      delete settingsMap[alias]
     }
-    pluginSettings[canonicalId] = stored
-    currentSettings.pluginSettings = pluginSettings
+    settingsMap[canonicalId] = stored
+    currentSettings.extensionSettings = settingsMap
     saveSettings(currentSettings)
 
-    return this.getPublicPluginSettings(canonicalId).values
+    return this.getPublicExtensionSettings(canonicalId).values
   }
 
-  recordExternalToolFailure(pluginId: string, toolName: string, err: unknown): void {
-    this.markPluginFailure(pluginId, `tool.${toolName}`, err, true)
+  recordExternalToolFailure(extensionId: string, toolName: string, err: unknown): void {
+    this.markExtensionFailure(extensionId, `tool.${toolName}`, err, true)
   }
 
-  recordExternalToolSuccess(pluginId: string): void {
-    this.markPluginSuccess(pluginId)
+  recordExternalToolSuccess(extensionId: string): void {
+    this.markExtensionSuccess(extensionId)
   }
 
   isEnabled(filename: string): boolean {
     const explicit = this.readConfigEntry(filename)
     if (explicit != null) return explicit.enabled !== false
-    const builtin = this.builtins.get(this.canonicalPluginId(filename))
+    const builtin = this.builtins.get(this.canonicalExtensionId(filename))
     if (builtin) return builtin.enabledByDefault !== false
     return true
   }
@@ -1806,14 +1824,14 @@ class PluginManager {
     return explicit?.enabled === false
   }
 
-  listPlugins(): PluginMeta[] {
+  listExtensions(): ExtensionMeta[] {
     try {
       this.load()
       const config = this.loadConfig()
       const failures = this.readFailureState()
-      const metas: PluginMeta[] = []
+      const metas: ExtensionMeta[] = []
 
-      const describeCapabilities = (loaded?: LoadedPlugin, fallback?: Plugin): Pick<PluginMeta, 'toolCount' | 'hookCount' | 'hasUI' | 'providerCount' | 'connectorCount' | 'settingsFields'> => {
+      const describeCapabilities = (loaded?: LoadedExtension, fallback?: Extension): Pick<ExtensionMeta, 'toolCount' | 'hookCount' | 'hasUI' | 'providerCount' | 'connectorCount' | 'settingsFields'> => {
         const tools = loaded?.tools || fallback?.tools || []
         const hooks = loaded?.hooks || fallback?.hooks || {}
         const providers = loaded?.providers || fallback?.providers || []
@@ -1832,10 +1850,10 @@ class PluginManager {
 
       // Add all builtins
       for (const [id, p] of this.builtins.entries()) {
-        const loaded = this.plugins.get(id)
+        const loaded = this.extensions.get(id)
         const explicitCfg = this.readConfigEntry(id, config)
         const enabled = explicitCfg != null ? explicitCfg.enabled !== false : p.enabledByDefault !== false
-        const failure = failures[this.canonicalPluginId(id)]
+        const failure = failures[this.canonicalExtensionId(id)]
         const caps = describeCapabilities(loaded, p)
         metas.push({
           name: p.name,
@@ -1854,17 +1872,17 @@ class PluginManager {
           lastFailureAt: failure?.lastFailedAt,
           lastFailureStage: failure?.lastStage,
           lastFailureError: failure?.lastError,
-          autoDisabled: !enabled && !!failure && failure.count >= MAX_CONSECUTIVE_PLUGIN_FAILURES,
+          autoDisabled: !enabled && !!failure && failure.count >= MAX_CONSECUTIVE_EXTENSION_FAILURES,
           ...caps,
         })
       }
 
       // Add external files
       try {
-        const files = fs.readdirSync(PLUGINS_DIR).filter(f => f.endsWith('.js') || f.endsWith('.mjs'))
+        const files = fs.readdirSync(EXTENSIONS_DIR).filter(f => f.endsWith('.js') || f.endsWith('.mjs'))
         for (const f of files) {
           if (!metas.find(m => m.filename === f)) {
-            const loaded = this.plugins.get(f)
+            const loaded = this.extensions.get(f)
             const explicitCfg = this.readConfigEntry(f, config)
             const enabled = explicitCfg?.enabled !== false
             const failure = failures[f]
@@ -1877,7 +1895,7 @@ class PluginManager {
               isBuiltin: false,
               author: loaded?.meta.author,
               version: loaded?.meta.version || '0.0.1',
-              source: loaded?.meta.source || inferStoredPluginSource(explicitCfg),
+              source: loaded?.meta.source || inferStoredExtensionSource(explicitCfg),
               sourceLabel: loaded?.meta.sourceLabel || inferStoredPublisherSource(explicitCfg),
               installSource: loaded?.meta.installSource || inferStoredInstallSource(explicitCfg),
               sourceUrl: loaded?.meta.sourceUrl || explicitCfg?.sourceUrl,
@@ -1887,7 +1905,7 @@ class PluginManager {
               lastFailureAt: failure?.lastFailedAt,
               lastFailureStage: failure?.lastStage,
               lastFailureError: failure?.lastError,
-              autoDisabled: !enabled && !!failure && failure.count >= MAX_CONSECUTIVE_PLUGIN_FAILURES,
+              autoDisabled: !enabled && !!failure && failure.count >= MAX_CONSECUTIVE_EXTENSION_FAILURES,
               hasDependencyManifest: dependencyInfo.hasManifest,
               dependencyCount: dependencyInfo.dependencyCount,
               devDependencyCount: dependencyInfo.devDependencyCount,
@@ -1903,25 +1921,25 @@ class PluginManager {
 
       return metas
     } catch (err: unknown) {
-      log.error('plugins', 'listPlugins failed', { error: errorMessage(err) })
+      log.error('extensions', 'listExtensions failed', { error: errorMessage(err) })
       return []
     }
   }
 
-  readPluginSource(filename: string): string {
-    const fullPath = this.resolvePluginSourcePath(filename)
-    if (!fs.existsSync(fullPath)) throw new Error(`Plugin not found: ${filename}`)
+  readExtensionSource(filename: string): string {
+    const fullPath = this.resolveExtensionSourcePath(filename)
+    if (!fs.existsSync(fullPath)) throw new Error(`Extension not found: ${filename}`)
     return fs.readFileSync(fullPath, 'utf8')
   }
 
-  async savePluginSource(filename: string, code: string, options?: UpsertPluginOptions): Promise<void> {
-    const sanitizedFilename = sanitizePluginFilename(filename)
-    this.ensurePluginDirs()
+  async saveExtensionSource(filename: string, code: string, options?: UpsertExtensionOptions): Promise<void> {
+    const sanitizedFilename = sanitizeExtensionFilename(filename)
+    this.ensureExtensionDirs()
 
     const shouldUseWorkspace = this.hasWorkspace(sanitizedFilename) || options?.packageJson !== undefined
     const sourcePath = shouldUseWorkspace
       ? this.getWorkspaceEntryPath(sanitizedFilename)
-      : path.join(PLUGINS_DIR, sanitizedFilename)
+      : path.join(EXTENSIONS_DIR, sanitizedFilename)
 
     if (shouldUseWorkspace) {
       fs.mkdirSync(this.getWorkspaceDir(sanitizedFilename), { recursive: true })
@@ -1931,17 +1949,17 @@ class PluginManager {
       fs.writeFileSync(sourcePath, code, 'utf8')
     }
 
-    const normalizedPackageManager = normalizePluginPackageManager(options?.packageManager)
+    const normalizedPackageManager = normalizeExtensionPackageManager(options?.packageManager)
 
     if (options?.packageJson !== undefined) {
       if (!shouldUseWorkspace) {
-        throw new Error('Plugin workspace is required for package.json support')
+        throw new Error('Extension workspace is required for package.json support')
       }
-      const manifest = normalizePluginManifest(options.packageJson, sanitizedFilename, normalizedPackageManager)
+      const manifest = normalizeExtensionManifest(options.packageJson, sanitizedFilename, normalizedPackageManager)
       fs.writeFileSync(this.getWorkspaceManifestPath(sanitizedFilename), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
       this.setMeta(sanitizedFilename, {
         ...(options?.meta || {}),
-        packageManager: normalizedPackageManager || normalizePluginPackageManager(manifest.packageManager) || undefined,
+        packageManager: normalizedPackageManager || normalizeExtensionPackageManager(manifest.packageManager) || undefined,
         dependencyInstallStatus: 'ready',
         dependencyInstallError: undefined,
         dependencyInstalledAt: undefined,
@@ -1951,7 +1969,7 @@ class PluginManager {
     }
 
     if (options?.installDependencies) {
-      await this.installPluginDependencies(sanitizedFilename, {
+      await this.installExtensionDependencies(sanitizedFilename, {
         packageManager: normalizedPackageManager || undefined,
       })
     }
@@ -1959,16 +1977,16 @@ class PluginManager {
     this.reload()
   }
 
-  async installPluginDependencies(filename: string, options?: { packageManager?: PluginPackageManager }): Promise<PluginDependencyInfo> {
-    const sanitizedFilename = sanitizePluginFilename(filename)
-    const fullPath = path.join(PLUGINS_DIR, sanitizedFilename)
+  async installExtensionDependencies(filename: string, options?: { packageManager?: ExtensionPackageManager }): Promise<ExtensionDependencyInfo> {
+    const sanitizedFilename = sanitizeExtensionFilename(filename)
+    const fullPath = path.join(EXTENSIONS_DIR, sanitizedFilename)
     if (!fs.existsSync(fullPath) && !this.hasWorkspace(sanitizedFilename)) {
-      throw new Error(`Plugin not found: ${sanitizedFilename}`)
+      throw new Error(`Extension not found: ${sanitizedFilename}`)
     }
 
-    this.ensurePluginDirs()
+    this.ensureExtensionDirs()
     const workspaceDir = this.getWorkspaceDir(sanitizedFilename)
-    const sourcePath = this.resolvePluginSourcePath(sanitizedFilename)
+    const sourcePath = this.resolveExtensionSourcePath(sanitizedFilename)
     const currentCode = fs.existsSync(sourcePath) ? fs.readFileSync(sourcePath, 'utf8') : ''
 
     if (!this.hasWorkspace(sanitizedFilename)) {
@@ -1978,11 +1996,11 @@ class PluginManager {
     }
 
     const manifest = this.readWorkspaceManifest(sanitizedFilename)
-    if (!manifest) throw new Error(`Plugin "${sanitizedFilename}" does not have a package.json manifest`)
+    if (!manifest) throw new Error(`Extension "${sanitizedFilename}" does not have a package.json manifest`)
 
     const packageManager = options?.packageManager
-      || normalizePluginPackageManager(this.readConfigEntry(sanitizedFilename)?.packageManager)
-      || normalizePluginPackageManager(manifest.packageManager)
+      || normalizeExtensionPackageManager(this.readConfigEntry(sanitizedFilename)?.packageManager)
+      || normalizeExtensionPackageManager(manifest.packageManager)
       || 'npm'
 
     this.setMeta(sanitizedFilename, {
@@ -2021,29 +2039,29 @@ class PluginManager {
     this.reload()
   }
 
-  deletePlugin(filename: string): boolean {
-    // Only allow deleting external plugins, not builtins
-    if (this.builtins.has(this.canonicalPluginId(filename))) return false
-    const fullPath = path.join(PLUGINS_DIR, filename)
+  deleteExtension(filename: string): boolean {
+    // Only allow deleting external extensions, not builtins
+    if (this.builtins.has(this.canonicalExtensionId(filename))) return false
+    const fullPath = path.join(EXTENSIONS_DIR, filename)
     if (!fs.existsSync(fullPath)) return false
     fs.unlinkSync(fullPath)
     const workspaceDir = this.getWorkspaceDir(filename)
     if (fs.existsSync(workspaceDir)) fs.rmSync(workspaceDir, { recursive: true, force: true })
     this.updateConfigEntry(filename, null)
     const settings = loadSettings()
-    const pluginSettings = (settings.pluginSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
-    for (const key of this.configIdsFor(filename)) delete pluginSettings[key]
-    settings.pluginSettings = pluginSettings
+    const settingsMap = (settings.extensionSettings as Record<string, Record<string, unknown>> | undefined) ?? {}
+    for (const key of this.configIdsFor(filename)) delete settingsMap[key]
+    settings.extensionSettings = settingsMap
     saveSettings(settings)
     this.clearFailureState(filename)
     this.reload()
     return true
   }
 
-  async installPluginFromUrl(url: string, filename: string, meta?: Record<string, unknown>): Promise<InstalledPluginSource> {
-    const sanitizedFilename = sanitizePluginFilename(filename)
-    const download = await downloadPluginSource(url)
-    await this.savePluginSource(sanitizedFilename, download.code, {
+  async installExtensionFromUrl(url: string, filename: string, meta?: Record<string, unknown>): Promise<InstalledExtensionSource> {
+    const sanitizedFilename = sanitizeExtensionFilename(filename)
+    const download = await downloadExtensionSource(url)
+    await this.saveExtensionSource(sanitizedFilename, download.code, {
       meta: {
         ...(meta || {}),
         sourceUrl: download.normalizedUrl,
@@ -2061,19 +2079,19 @@ class PluginManager {
     }
   }
 
-  async updatePlugin(id: string) {
+  async updateExtension(id: string) {
     this.load()
-    const p = this.plugins.get(id)
-    if (!p) throw new Error('Plugin not found')
-    if (p.isBuiltin) throw new Error('Built-in plugins are updated via application releases')
+    const p = this.extensions.get(id)
+    if (!p) throw new Error('Extension not found')
+    if (p.isBuiltin) throw new Error('Built-in extensions are updated via application releases')
 
-    log.info('plugins', 'Updating plugin', { pluginId: id, pluginName: p.meta.name })
+    log.info('extensions', 'Updating extension', { extensionId: id, extensionName: p.meta.name })
     const current = this.readConfigEntry(id)
     const sourceUrl = current?.sourceUrl?.trim()
-    if (!sourceUrl) throw new Error(`Plugin "${id}" has no recorded source URL and cannot be updated automatically`)
+    if (!sourceUrl) throw new Error(`Extension "${id}" has no recorded source URL and cannot be updated automatically`)
 
-    const download = await downloadPluginSource(sourceUrl)
-    const fullPath = path.join(PLUGINS_DIR, id)
+    const download = await downloadExtensionSource(sourceUrl)
+    const fullPath = path.join(EXTENSIONS_DIR, id)
     fs.writeFileSync(fullPath, download.code, 'utf8')
     this.setMeta(id, {
       sourceUrl: download.normalizedUrl,
@@ -2085,14 +2103,14 @@ class PluginManager {
     return true
   }
 
-  async updateAllPlugins() {
+  async updateAllExtensions() {
     this.load()
-    const ids = Array.from(this.plugins.entries())
-      .filter(([, plugin]) => !plugin.isBuiltin)
+    const ids = Array.from(this.extensions.entries())
+      .filter(([, entry]) => !entry.isBuiltin)
       .map(([id]) => id)
     for (const id of ids) {
       try {
-        await this.updatePlugin(id)
+        await this.updateExtension(id)
       } catch { /* ignore individual failures */ }
     }
     return true
@@ -2100,25 +2118,25 @@ class PluginManager {
 
   setMeta(filename: string, meta: Record<string, unknown>) {
     const current = this.readConfigEntry(filename)
-    this.updateConfigEntry(filename, { ...(current || {}), ...(meta as PluginConfigEntry) })
+    this.updateConfigEntry(filename, { ...(current || {}), ...(meta as ExtensionConfigEntry) })
   }
 
-  private loadConfig(): Record<string, PluginConfigEntry> {
-    try { return JSON.parse(fs.readFileSync(PLUGINS_CONFIG, 'utf8')) } catch { return {} }
+  private loadConfig(): Record<string, ExtensionConfigEntry> {
+    try { return JSON.parse(fs.readFileSync(EXTENSIONS_CONFIG, 'utf8')) } catch { return {} }
   }
 
   reload() { this.loaded = false; this.load() }
 }
 
-let _manager: PluginManager | null = null
-export function getPluginManager(): PluginManager {
+let _manager: ExtensionManager | null = null
+export function getExtensionManager(): ExtensionManager {
   try {
     if (!_manager) {
-      _manager = new PluginManager()
+      _manager = new ExtensionManager()
     }
     return _manager
   } catch (err: unknown) {
-    log.error('plugins', 'getPluginManager critical failure', { error: errorMessage(err) })
+    log.error('extensions', 'getExtensionManager critical failure', { error: errorMessage(err) })
     throw err
   }
 }

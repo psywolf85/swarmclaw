@@ -371,34 +371,34 @@ export function pushCredentialsToOpenClaw(): { written: boolean } {
   return { written: true }
 }
 
-// --- Plugin Sync (Feature 11) ---
+// --- Extension Sync (Feature 11) ---
 
-export function syncPluginsFromOpenClaw(): { imported: number } {
+export function syncExtensionsFromOpenClaw(): { imported: number } {
   const config = loadSyncConfig()
-  const openclawPluginDir = path.join(config.workspacePath, 'plugins')
-  if (!fs.existsSync(openclawPluginDir)) return { imported: 0 }
+  const openclawExtensionDir = path.join(config.workspacePath, 'plugins')
+  if (!fs.existsSync(openclawExtensionDir)) return { imported: 0 }
 
-  const localPluginDir = path.join(DATA_DIR, 'plugins')
-  ensureDir(localPluginDir)
+  const localExtensionDir = path.join(DATA_DIR, 'plugins')
+  ensureDir(localExtensionDir)
 
-  const files = fs.readdirSync(openclawPluginDir).filter((f) => f.endsWith('.js'))
+  const files = fs.readdirSync(openclawExtensionDir).filter((f) => f.endsWith('.js'))
   const existingHashes = new Set<string>()
-  // Hash existing local plugins
-  if (fs.existsSync(localPluginDir)) {
-    for (const f of fs.readdirSync(localPluginDir).filter((f) => f.endsWith('.js'))) {
-      const content = fs.readFileSync(path.join(localPluginDir, f), 'utf8')
+  // Hash existing local extensions
+  if (fs.existsSync(localExtensionDir)) {
+    for (const f of fs.readdirSync(localExtensionDir).filter((f) => f.endsWith('.js'))) {
+      const content = fs.readFileSync(path.join(localExtensionDir, f), 'utf8')
       existingHashes.add(contentHash(content))
     }
   }
 
   let imported = 0
   for (const file of files) {
-    const content = fs.readFileSync(path.join(openclawPluginDir, file), 'utf8')
+    const content = fs.readFileSync(path.join(openclawExtensionDir, file), 'utf8')
     const hash = contentHash(content)
     if (existingHashes.has(hash)) continue
 
     const destName = `openclaw-${file}`
-    fs.writeFileSync(path.join(localPluginDir, destName), content)
+    fs.writeFileSync(path.join(localExtensionDir, destName), content)
     existingHashes.add(hash)
     imported++
   }
@@ -465,7 +465,7 @@ export async function runSync(params: {
           results.push({ type, action: 'push', result: pushCredentialsToOpenClaw() })
           break
         case 'plugins':
-          // Plugins only pull from OpenClaw
+          // Extensions only pull from OpenClaw
           break
       }
     }
@@ -490,7 +490,7 @@ export async function runSync(params: {
           results.push({ type, action: 'pull', result: await pullCredentialsFromOpenClaw() })
           break
         case 'plugins':
-          results.push({ type, action: 'pull', result: syncPluginsFromOpenClaw() })
+          results.push({ type, action: 'pull', result: syncExtensionsFromOpenClaw() })
           break
       }
     }

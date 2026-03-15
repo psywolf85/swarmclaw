@@ -16,6 +16,7 @@ export const OPENAI_COMPAT_MODEL_MAX_RETRIES = 0
 export interface GenerationModelPreference {
   provider?: string | null
   model?: string | null
+  ollamaMode?: 'local' | 'cloud' | null
   credentialId?: string | null
   apiEndpoint?: string | null
   gatewayProfileId?: string | null
@@ -25,6 +26,7 @@ export interface GenerationModelPreference {
 interface ResolvedGenerationModelConfig {
   provider: string
   model: string
+  ollamaMode?: 'local' | 'cloud'
   apiKey: string | null
   apiEndpoint: string | null
   thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
@@ -54,12 +56,13 @@ function toOpenAiCompatibleBaseUrl(endpoint: string | null | undefined, fallback
 export function buildChatModel(opts: {
   provider: string
   model: string
+  ollamaMode?: 'local' | 'cloud' | null
   apiKey: string | null
   credentialId?: string | null
   apiEndpoint?: string | null
   thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
 }) {
-  const { provider, model, apiKey, credentialId, apiEndpoint, thinkingLevel } = opts
+  const { provider, model, ollamaMode, apiKey, credentialId, apiEndpoint, thinkingLevel } = opts
   const resolvedCredentialId = resolveProviderCredentialId({ provider, credentialId })
   const resolvedApiKey = apiKey ?? resolveApiKeyFromCredential(resolvedCredentialId)
   const providers = getProviderList()
@@ -85,7 +88,7 @@ export function buildChatModel(opts: {
   }
 
   if (provider === 'ollama') {
-    const runtime = resolveOllamaRuntimeConfig({ model, apiKey: resolvedApiKey, apiEndpoint })
+    const runtime = resolveOllamaRuntimeConfig({ model, ollamaMode, apiKey: resolvedApiKey, apiEndpoint })
     if (runtime.useCloud && !runtime.apiKey) {
       throw new Error('Ollama Cloud model requires an API key. Set OLLAMA_API_KEY or attach an Ollama credential.')
     }
@@ -94,7 +97,7 @@ export function buildChatModel(opts: {
       : toOpenAiCompatibleBaseUrl(runtime.endpoint, OLLAMA_LOCAL_URL)
     return new ChatOpenAI({
       model: runtime.model || 'qwen3.5',
-      apiKey: runtime.useCloud ? runtime.apiKey || undefined : runtime.apiKey || 'ollama',
+      apiKey: runtime.useCloud ? runtime.apiKey || undefined : 'ollama',
       timeout: OPENAI_COMPAT_MODEL_TIMEOUT_MS,
       maxRetries: OPENAI_COMPAT_MODEL_MAX_RETRIES,
       configuration: { baseURL },
@@ -151,6 +154,7 @@ function getAgentGenerationPreferences(agent: Agent | null | undefined): Generat
   const preferences: GenerationModelPreference[] = [{
     provider: agent.provider,
     model: agent.model,
+    ollamaMode: agent.ollamaMode || null,
     credentialId: agent.credentialId || null,
     apiEndpoint: agent.apiEndpoint || null,
     gatewayProfileId: agent.gatewayProfileId || null,
@@ -163,6 +167,7 @@ function getAgentGenerationPreferences(agent: Agent | null | undefined): Generat
     preferences.push({
       provider: target.provider,
       model: target.model,
+      ollamaMode: target.ollamaMode || null,
       credentialId: target.credentialId || null,
       apiEndpoint: target.apiEndpoint || null,
       gatewayProfileId: target.gatewayProfileId || null,
@@ -188,6 +193,7 @@ function resolvePreferredGenerationConfig(
     const apiEndpoint = resolveProviderApiEndpoint({
       provider,
       model,
+      ollamaMode: candidate.ollamaMode || null,
       credentialId,
       apiEndpoint: normalizePreferenceValue(candidate.apiEndpoint) || null,
     })
@@ -195,6 +201,7 @@ function resolvePreferredGenerationConfig(
     return {
       provider,
       model,
+      ollamaMode: candidate.ollamaMode || undefined,
       apiKey,
       apiEndpoint,
       thinkingLevel: candidate.thinkingLevel || undefined,
@@ -221,6 +228,7 @@ export function resolveGenerationModelConfig(options?: {
     ...(session ? [{
       provider: session.provider,
       model: session.model,
+      ollamaMode: session.ollamaMode || null,
       credentialId: session.credentialId || null,
       apiEndpoint: session.apiEndpoint || null,
       gatewayProfileId: session.gatewayProfileId || null,

@@ -618,9 +618,9 @@ export async function observeLearnedSkillRunOutcome(
     next.lastUsedAt = Date.now()
     const qualityScore = typeof input.reflection?.qualityScore === 'number' ? input.reflection.qualityScore : null
     if (observation.kind === 'success_pattern') {
-      const increment = qualityScore !== null && qualityScore >= 0.8 ? 2 : 1
-      next.successCount = (next.successCount || 0) + increment
-      next.consecutiveSuccessCount = (next.consecutiveSuccessCount || 0) + increment
+      const cumulativeIncrement = qualityScore !== null && qualityScore >= 0.8 ? 2 : 1
+      next.successCount = (next.successCount || 0) + cumulativeIncrement
+      next.consecutiveSuccessCount = (next.consecutiveSuccessCount || 0) + 1
       next.consecutiveFailureCount = 0
       next.lastSucceededAt = Date.now()
       next.lastSourceHash = observation.sourceHash
@@ -634,9 +634,9 @@ export async function observeLearnedSkillRunOutcome(
         onNextIdleWindow(() => refineSkillContent(skillSnapshot, capturedAgentId))
       }
     } else {
-      const increment = qualityScore !== null && qualityScore <= 0.3 ? 2 : 1
-      next.failureCount = (next.failureCount || 0) + increment
-      next.consecutiveFailureCount = (next.consecutiveFailureCount || 0) + increment
+      const cumulativeIncrement = qualityScore !== null && qualityScore <= 0.3 ? 2 : 1
+      next.failureCount = (next.failureCount || 0) + cumulativeIncrement
+      next.consecutiveFailureCount = (next.consecutiveFailureCount || 0) + 1
       next.consecutiveSuccessCount = 0
       next.lastFailedAt = Date.now()
       if ((next.consecutiveFailureCount || 0) >= DEMOTION_FAILURE_THRESHOLD) {

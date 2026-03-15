@@ -18,7 +18,7 @@ test('dedupes concurrent GET requests for the same path', async () => {
       headers: { 'content-type': 'application/json' },
       status: 200,
     })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
 
   const [first, second] = await Promise.all([
     api<{ ok: boolean }>('GET', '/dedupe-check'),
@@ -38,7 +38,7 @@ test('does not dedupe non-GET requests', async () => {
       headers: { 'content-type': 'application/json' },
       status: 200,
     })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
 
   await Promise.all([
     api<{ ok: boolean }>('POST', '/dedupe-check', { hello: 'one' }),
@@ -61,7 +61,7 @@ test('retries GET requests that fail with TimeoutError', async () => {
       headers: { 'content-type': 'application/json' },
       status: 200,
     })
-  }) as typeof fetch
+  }) as unknown as typeof fetch
 
   const result = await api<{ ok: boolean }>('GET', '/timeout-retry')
 

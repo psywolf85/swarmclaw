@@ -1,5 +1,5 @@
 import type { MessageToolEvent } from '@/types'
-import { canonicalizePluginId } from '@/lib/server/tool-aliases'
+import { canonicalizeExtensionId } from '@/lib/server/tool-aliases'
 import { extractSuggestions } from '@/lib/server/suggestions'
 import { renderMemoryContent } from '@/lib/server/chat-execution/direct-memory-intent'
 
@@ -104,7 +104,7 @@ export function shouldTerminateOnSuccessfulMemoryMutation(params: {
   toolInput: unknown
   toolOutput: string
 }): boolean {
-  const canonicalToolName = canonicalizePluginId(params.toolName) || params.toolName
+  const canonicalToolName = canonicalizeExtensionId(params.toolName) || params.toolName
   if (canonicalToolName !== 'memory') return false
   const exactToolName = String(params.toolName || '').trim().toLowerCase()
   const action = exactToolName === 'memory_store'

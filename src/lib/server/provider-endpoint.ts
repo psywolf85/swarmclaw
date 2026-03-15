@@ -44,6 +44,7 @@ function resolveCredentialApiKey(credentialId?: string | null): string | null {
 export function resolveProviderApiEndpoint(input: {
   provider?: string | null
   model?: string | null
+  ollamaMode?: string | null
   credentialId?: string | null
   apiEndpoint?: string | null
 }): string | null {
@@ -57,6 +58,7 @@ export function resolveProviderApiEndpoint(input: {
     const credentialId = resolveProviderCredentialId(input)
     const runtime = resolveOllamaRuntimeConfig({
       model: input.model,
+      ollamaMode: input.ollamaMode ?? null,
       apiKey: resolveCredentialApiKey(credentialId),
       apiEndpoint: null,
     })

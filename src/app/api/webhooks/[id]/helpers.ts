@@ -15,7 +15,7 @@ import { guardUntrustedText, getUntrustedContentGuardMode } from '@/lib/server/u
 export type WebhookPostDeps = {
   enqueueRun: typeof enqueueSessionRun
   enqueueEvent: typeof enqueueSystemEvent
-  requestHeartbeat: (opts: Omit<WakeModeRequest, 'mode'> & { mode?: WakeModeRequest['mode'] }) => void
+  requestHeartbeat: (opts: Omit<WakeModeRequest, 'mode'>) => void
 }
 
 export const defaultWebhookPostDeps: WebhookPostDeps = {

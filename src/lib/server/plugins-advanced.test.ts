@@ -1,123 +1,123 @@
 import { describe, it } from 'node:test'
 import assert from 'node:assert/strict'
 import {
-  canonicalizePluginId,
-  expandPluginIds,
-  getPluginAliases,
-  normalizePluginId,
-  pluginIdMatches,
+  canonicalizeExtensionId,
+  expandExtensionIds,
+  getExtensionAliases,
+  normalizeExtensionId,
+  extensionIdMatches,
 } from './tool-aliases'
 
 // ---------------------------------------------------------------------------
-// normalizePluginId
+// normalizeExtensionId
 // ---------------------------------------------------------------------------
-describe('normalizePluginId', () => {
+describe('normalizeExtensionId', () => {
   it('converts uppercase to lowercase', () => {
-    assert.equal(normalizePluginId('WEB_SEARCH'), 'web_search')
+    assert.equal(normalizeExtensionId('WEB_SEARCH'), 'web_search')
   })
 
   it('trims leading and trailing whitespace', () => {
-    assert.equal(normalizePluginId('  shell  '), 'shell')
+    assert.equal(normalizeExtensionId('  shell  '), 'shell')
   })
 
   it('handles combined upper + whitespace', () => {
-    assert.equal(normalizePluginId('  WEB_SEARCH  '), 'web_search')
+    assert.equal(normalizeExtensionId('  WEB_SEARCH  '), 'web_search')
   })
 
   it('returns empty string for empty input', () => {
-    assert.equal(normalizePluginId(''), '')
+    assert.equal(normalizeExtensionId(''), '')
   })
 
   it('returns already normalized value unchanged', () => {
-    assert.equal(normalizePluginId('files'), 'files')
+    assert.equal(normalizeExtensionId('files'), 'files')
   })
 
   it('returns empty string for non-string input (number)', () => {
-    assert.equal(normalizePluginId(42), '')
+    assert.equal(normalizeExtensionId(42), '')
   })
 
   it('returns empty string for null', () => {
-    assert.equal(normalizePluginId(null), '')
+    assert.equal(normalizeExtensionId(null), '')
   })
 
   it('returns empty string for undefined', () => {
-    assert.equal(normalizePluginId(undefined), '')
+    assert.equal(normalizeExtensionId(undefined), '')
   })
 })
 
 // ---------------------------------------------------------------------------
-// canonicalizePluginId
+// canonicalizeExtensionId
 // ---------------------------------------------------------------------------
-describe('canonicalizePluginId', () => {
+describe('canonicalizeExtensionId', () => {
   it('resolves web_search → web', () => {
-    assert.equal(canonicalizePluginId('web_search'), 'web')
+    assert.equal(canonicalizeExtensionId('web_search'), 'web')
   })
 
   it('resolves web_fetch → web', () => {
-    assert.equal(canonicalizePluginId('web_fetch'), 'web')
+    assert.equal(canonicalizeExtensionId('web_fetch'), 'web')
   })
 
   it('keeps web (already canonical)', () => {
-    assert.equal(canonicalizePluginId('web'), 'web')
+    assert.equal(canonicalizeExtensionId('web'), 'web')
   })
 
   it('resolves execute_command → shell', () => {
-    assert.equal(canonicalizePluginId('execute_command'), 'shell')
+    assert.equal(canonicalizeExtensionId('execute_command'), 'shell')
   })
 
   it('resolves memory_tool → memory', () => {
-    assert.equal(canonicalizePluginId('memory_tool'), 'memory')
+    assert.equal(canonicalizeExtensionId('memory_tool'), 'memory')
   })
 
   it('resolves narrow memory tools → memory', () => {
-    assert.equal(canonicalizePluginId('memory_search'), 'memory')
-    assert.equal(canonicalizePluginId('memory_get'), 'memory')
-    assert.equal(canonicalizePluginId('memory_store'), 'memory')
-    assert.equal(canonicalizePluginId('memory_update'), 'memory')
+    assert.equal(canonicalizeExtensionId('memory_search'), 'memory')
+    assert.equal(canonicalizeExtensionId('memory_get'), 'memory')
+    assert.equal(canonicalizeExtensionId('memory_store'), 'memory')
+    assert.equal(canonicalizeExtensionId('memory_update'), 'memory')
   })
 
   it('keeps files (already canonical)', () => {
-    assert.equal(canonicalizePluginId('files'), 'files')
+    assert.equal(canonicalizeExtensionId('files'), 'files')
   })
 
-  it('returns unknown plugin as-is', () => {
-    assert.equal(canonicalizePluginId('totally_unknown'), 'totally_unknown')
+  it('returns unknown extension as-is', () => {
+    assert.equal(canonicalizeExtensionId('totally_unknown'), 'totally_unknown')
   })
 
   it('resolves delegate_to_claude_code → delegate', () => {
-    assert.equal(canonicalizePluginId('delegate_to_claude_code'), 'delegate')
+    assert.equal(canonicalizeExtensionId('delegate_to_claude_code'), 'delegate')
   })
 
   it('resolves claude_code → delegate', () => {
-    assert.equal(canonicalizePluginId('claude_code'), 'delegate')
+    assert.equal(canonicalizeExtensionId('claude_code'), 'delegate')
   })
 
   it('resolves process_tool → shell', () => {
-    assert.equal(canonicalizePluginId('process_tool'), 'shell')
+    assert.equal(canonicalizeExtensionId('process_tool'), 'shell')
   })
 
   it('resolves openclaw_browser → browser', () => {
-    assert.equal(canonicalizePluginId('openclaw_browser'), 'browser')
+    assert.equal(canonicalizeExtensionId('openclaw_browser'), 'browser')
   })
 
   it('returns raw string (preserving case) for empty normalized result', () => {
-    // non-string input → normalizePluginId returns ''
-    assert.equal(canonicalizePluginId(123), '')
+    // non-string input → normalizeExtensionId returns ''
+    assert.equal(canonicalizeExtensionId(123), '')
   })
 })
 
 // ---------------------------------------------------------------------------
-// expandPluginIds
+// expandExtensionIds
 // ---------------------------------------------------------------------------
-describe('expandPluginIds', () => {
+describe('expandExtensionIds', () => {
   it('shell implies process', () => {
-    const result = expandPluginIds(['shell'])
+    const result = expandExtensionIds(['shell'])
     assert.ok(result.includes('shell'))
     assert.ok(result.includes('process'))
   })
 
-  it('manage_platform expands to 10 sub-plugins', () => {
-    const result = expandPluginIds(['manage_platform'])
+  it('manage_platform expands to sub-extensions', () => {
+    const result = expandExtensionIds(['manage_platform'])
     const expected = [
       'manage_platform',
       'manage_agents',
@@ -125,7 +125,6 @@ describe('expandPluginIds', () => {
       'manage_tasks',
       'manage_schedules',
       'manage_skills',
-      'manage_documents',
       'manage_webhooks',
       'manage_connectors',
       'manage_sessions',
@@ -137,29 +136,29 @@ describe('expandPluginIds', () => {
   })
 
   it('web expands to include web_search and web_fetch', () => {
-    const result = expandPluginIds(['web'])
+    const result = expandExtensionIds(['web'])
     assert.ok(result.includes('web'))
     assert.ok(result.includes('web_search'))
     assert.ok(result.includes('web_fetch'))
   })
 
   it('removes duplicates after expansion', () => {
-    const result = expandPluginIds(['web', 'web_search', 'web_fetch'])
+    const result = expandExtensionIds(['web', 'web_search', 'web_fetch'])
     const unique = new Set(result)
     assert.equal(result.length, unique.size)
   })
 
   it('returns empty array for empty input', () => {
-    assert.deepEqual(expandPluginIds([]), [])
+    assert.deepEqual(expandExtensionIds([]), [])
   })
 
-  it('keeps unknown plugin as-is', () => {
-    const result = expandPluginIds(['my_custom_plugin'])
-    assert.ok(result.includes('my_custom_plugin'))
+  it('keeps unknown extension as-is', () => {
+    const result = expandExtensionIds(['my_custom_extension'])
+    assert.ok(result.includes('my_custom_extension'))
   })
 
   it('deduplicates overlapping expansions from multiple inputs', () => {
-    const result = expandPluginIds(['web', 'web_search'])
+    const result = expandExtensionIds(['web', 'web_search'])
     const counts = result.reduce<Record<string, number>>((acc, id) => {
       acc[id] = (acc[id] || 0) + 1
       return acc
@@ -170,71 +169,71 @@ describe('expandPluginIds', () => {
   })
 
   it('returns empty array for null', () => {
-    assert.deepEqual(expandPluginIds(null), [])
+    assert.deepEqual(expandExtensionIds(null), [])
   })
 
   it('returns empty array for undefined', () => {
-    assert.deepEqual(expandPluginIds(undefined), [])
+    assert.deepEqual(expandExtensionIds(undefined), [])
   })
 
   it('shell also expands aliases (execute_command, process_tool)', () => {
-    const result = expandPluginIds(['shell'])
+    const result = expandExtensionIds(['shell'])
     assert.ok(result.includes('execute_command'))
     assert.ok(result.includes('process_tool'))
   })
 
   it('manage_platform + shell has no duplicates', () => {
-    const result = expandPluginIds(['manage_platform', 'shell'])
+    const result = expandExtensionIds(['manage_platform', 'shell'])
     const unique = new Set(result)
     assert.equal(result.length, unique.size)
   })
 
-  it('handles same plugin requested multiple times', () => {
-    const result = expandPluginIds(['web', 'web', 'web'])
+  it('handles same extension requested multiple times', () => {
+    const result = expandExtensionIds(['web', 'web', 'web'])
     const webCount = result.filter((id) => id === 'web').length
     assert.equal(webCount, 1)
   })
 })
 
 // ---------------------------------------------------------------------------
-// getPluginAliases
+// getExtensionAliases
 // ---------------------------------------------------------------------------
-describe('getPluginAliases', () => {
+describe('getExtensionAliases', () => {
   it('web returns [web, web_search, web_fetch]', () => {
-    const result = getPluginAliases('web')
+    const result = getExtensionAliases('web')
     assert.ok(result.includes('web'))
     assert.ok(result.includes('web_search'))
     assert.ok(result.includes('web_fetch'))
-    assert.equal(result.length, 3)
+    assert.equal(result.length, 5) // web, web_search, web_fetch, http_request, http
   })
 
   it('web_search returns the same group as web', () => {
-    const fromWeb = getPluginAliases('web').sort()
-    const fromAlias = getPluginAliases('web_search').sort()
+    const fromWeb = getExtensionAliases('web').sort()
+    const fromAlias = getExtensionAliases('web_search').sort()
     assert.deepEqual(fromWeb, fromAlias)
   })
 
-  it('unknown plugin returns array with just the input', () => {
-    assert.deepEqual(getPluginAliases('unknown_thing'), ['unknown_thing'])
+  it('unknown extension returns array with just the input', () => {
+    assert.deepEqual(getExtensionAliases('unknown_thing'), ['unknown_thing'])
   })
 
   it('shell includes execute_command and process_tool', () => {
-    const result = getPluginAliases('shell')
+    const result = getExtensionAliases('shell')
     assert.ok(result.includes('shell'))
     assert.ok(result.includes('execute_command'))
     assert.ok(result.includes('process_tool'))
   })
 
   it('returns empty array for empty string', () => {
-    assert.deepEqual(getPluginAliases(''), [])
+    assert.deepEqual(getExtensionAliases(''), [])
   })
 
   it('returns empty array for null', () => {
-    assert.deepEqual(getPluginAliases(null), [])
+    assert.deepEqual(getExtensionAliases(null), [])
   })
 
   it('delegate group includes all delegate variants', () => {
-    const result = getPluginAliases('delegate')
+    const result = getExtensionAliases('delegate')
     assert.ok(result.includes('claude_code'))
     assert.ok(result.includes('delegate_to_claude_code'))
     assert.ok(result.includes('codex_cli'))
@@ -243,47 +242,47 @@ describe('getPluginAliases', () => {
 })
 
 // ---------------------------------------------------------------------------
-// pluginIdMatches
+// extensionIdMatches
 // ---------------------------------------------------------------------------
-describe('pluginIdMatches', () => {
+describe('extensionIdMatches', () => {
   it('web enabled, web_search matches (alias)', () => {
-    assert.equal(pluginIdMatches(['web'], 'web_search'), true)
+    assert.equal(extensionIdMatches(['web'], 'web_search'), true)
   })
 
   it('web_search enabled, web matches (reverse alias)', () => {
-    assert.equal(pluginIdMatches(['web_search'], 'web'), true)
+    assert.equal(extensionIdMatches(['web_search'], 'web'), true)
   })
 
   it('files enabled, shell does not match (different families)', () => {
-    assert.equal(pluginIdMatches(['files'], 'shell'), false)
+    assert.equal(extensionIdMatches(['files'], 'shell'), false)
   })
 
   it('manage_platform enabled, manage_tasks matches (implication)', () => {
-    assert.equal(pluginIdMatches(['manage_platform'], 'manage_tasks'), true)
+    assert.equal(extensionIdMatches(['manage_platform'], 'manage_tasks'), true)
   })
 
   it('empty enabled list, nothing matches', () => {
-    assert.equal(pluginIdMatches([], 'web'), false)
+    assert.equal(extensionIdMatches([], 'web'), false)
   })
 
   it('case insensitive match', () => {
-    assert.equal(pluginIdMatches(['WEB'], 'web_search'), true)
+    assert.equal(extensionIdMatches(['WEB'], 'web_search'), true)
   })
 
   it('shell enabled, process matches (implication)', () => {
-    assert.equal(pluginIdMatches(['shell'], 'process'), true)
+    assert.equal(extensionIdMatches(['shell'], 'process'), true)
   })
 
   it('manage_platform enabled, manage_secrets matches', () => {
-    assert.equal(pluginIdMatches(['manage_platform'], 'manage_secrets'), true)
+    assert.equal(extensionIdMatches(['manage_platform'], 'manage_secrets'), true)
   })
 
   it('null enabled list returns false', () => {
-    assert.equal(pluginIdMatches(null, 'web'), false)
+    assert.equal(extensionIdMatches(null, 'web'), false)
   })
 
   it('undefined enabled list returns false', () => {
-    assert.equal(pluginIdMatches(undefined, 'web'), false)
+    assert.equal(extensionIdMatches(undefined, 'web'), false)
   })
 })
 
@@ -292,7 +291,7 @@ describe('pluginIdMatches', () => {
 // ---------------------------------------------------------------------------
 describe('complex expansion scenarios', () => {
   it('shell + web + memory fully expands', () => {
-    const result = expandPluginIds(['shell', 'web', 'memory'])
+    const result = expandExtensionIds(['shell', 'web', 'memory'])
     // shell family
     assert.ok(result.includes('shell'))
     assert.ok(result.includes('execute_command'))
@@ -307,13 +306,13 @@ describe('complex expansion scenarios', () => {
     assert.ok(result.includes('memory_tool'))
   })
 
-  it('large plugin list (50+ items) all expanded correctly', () => {
-    const ids = Array.from({ length: 50 }, (_, i) => `custom_plugin_${i}`)
+  it('large extension list (50+ items) all expanded correctly', () => {
+    const ids = Array.from({ length: 50 }, (_, i) => `custom_extension_${i}`)
     ids.push('shell', 'web')
-    const result = expandPluginIds(ids)
+    const result = expandExtensionIds(ids)
     // All custom ones present
     for (let i = 0; i < 50; i++) {
-      assert.ok(result.includes(`custom_plugin_${i}`))
+      assert.ok(result.includes(`custom_extension_${i}`))
     }
     // Shell expansion present
     assert.ok(result.includes('process'))
@@ -323,7 +322,7 @@ describe('complex expansion scenarios', () => {
 
   it('alias chains do not cause infinite loops', () => {
     // delegate has many aliases; expansion should terminate
-    const result = expandPluginIds(['delegate'])
+    const result = expandExtensionIds(['delegate'])
     assert.ok(result.includes('delegate'))
     assert.ok(result.includes('claude_code'))
     assert.ok(result.includes('delegate_to_claude_code'))
@@ -332,21 +331,21 @@ describe('complex expansion scenarios', () => {
   })
 
   it('connector aliases expand correctly', () => {
-    const result = expandPluginIds(['manage_connectors'])
+    const result = expandExtensionIds(['manage_connectors'])
     assert.ok(result.includes('manage_connectors'))
     assert.ok(result.includes('connectors'))
     assert.ok(result.includes('connector_message_tool'))
   })
 
   it('sandbox aliases expand', () => {
-    const result = expandPluginIds(['sandbox'])
+    const result = expandExtensionIds(['sandbox'])
     assert.ok(result.includes('sandbox'))
     assert.ok(result.includes('sandbox_exec'))
     assert.ok(result.includes('sandbox_list_runtimes'))
   })
 
   it('files expands to include read_file, write_file, etc.', () => {
-    const result = expandPluginIds(['files'])
+    const result = expandExtensionIds(['files'])
     assert.ok(result.includes('read_file'))
     assert.ok(result.includes('write_file'))
     assert.ok(result.includes('list_files'))

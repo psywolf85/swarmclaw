@@ -23,14 +23,14 @@ function normalizeOrigin(raw: string | null | undefined): string {
   }
 }
 
-export function resolvePluginInstallCorsOrigin(rawOrigin: string | null | undefined): string | null {
+export function resolveExtensionInstallCorsOrigin(rawOrigin: string | null | undefined): string | null {
   const origin = normalizeOrigin(rawOrigin)
   if (!origin) return null
-  const allowed = parseAllowedOrigins(process.env.SWARMCLAW_PLUGIN_INSTALL_ORIGINS)
+  const allowed = parseAllowedOrigins(process.env.SWARMCLAW_EXTENSION_INSTALL_ORIGINS)
   return allowed.includes(origin) ? origin : null
 }
 
-export function buildPluginInstallCorsHeaders(origin: string | null): HeadersInit {
+export function buildExtensionInstallCorsHeaders(origin: string | null): HeadersInit {
   const headers = new Headers()
   headers.set('Vary', 'Origin')
   if (!origin) return headers
@@ -41,6 +41,6 @@ export function buildPluginInstallCorsHeaders(origin: string | null): HeadersIni
   return headers
 }
 
-export function isPluginInstallCorsPath(pathname: string): boolean {
+export function isExtensionInstallCorsPath(pathname: string): boolean {
   return pathname === '/api/extensions/install'
 }

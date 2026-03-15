@@ -21,7 +21,7 @@ describe('browser tool connection config', () => {
     assert.equal(params.args.includes('--headless'), true)
     assert.equal(params.args.includes('--shared-browser-context'), false)
     assert.equal(params.args.includes('/tmp/swarmclaw-browser-profile'), true)
-    assert.equal(params.env.PLAYWRIGHT_MCP_USER_DATA_DIR, '/tmp/swarmclaw-browser-profile')
+    assert.equal((params.env as Record<string, string | undefined>).PLAYWRIGHT_MCP_USER_DATA_DIR, '/tmp/swarmclaw-browser-profile')
     assert.equal(params.env.PLAYWRIGHT_MCP_OUTPUT_MODE, 'file')
     assert.equal(params.env.PLAYWRIGHT_MCP_TIMEOUT_ACTION, '60000')
     assert.equal(params.env.PLAYWRIGHT_MCP_TIMEOUT_NAVIGATION, '90000')
@@ -40,9 +40,10 @@ describe('browser tool connection config', () => {
     assert.equal(params.args.includes('Authorization: Bearer token-123'), true)
     assert.equal(params.args.includes('--allow-unrestricted-file-access'), true)
     assert.equal(params.args.includes('--user-data-dir'), false)
-    assert.equal(params.env.PLAYWRIGHT_MCP_CDP_ENDPOINT, 'http://127.0.0.1:44001')
+    const env = params.env as Record<string, string | undefined>
+    assert.equal(env.PLAYWRIGHT_MCP_CDP_ENDPOINT, 'http://127.0.0.1:44001')
     assert.equal(params.env.PLAYWRIGHT_MCP_ALLOW_UNRESTRICTED_FILE_ACCESS, '1')
-    assert.equal(params.env.PLAYWRIGHT_MCP_USER_DATA_DIR, undefined)
+    assert.equal(env.PLAYWRIGHT_MCP_USER_DATA_DIR, undefined)
   })
 
   it('strips host Playwright MCP env overrides before applying the local browser config', () => {

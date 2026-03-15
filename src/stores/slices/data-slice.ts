@@ -1,6 +1,6 @@
 import { StateCreator } from 'zustand'
 import type { AppState } from '../use-app-store'
-import type { NetworkInfo, Directory, ProviderInfo, Credentials, Schedule, AppSettings, StoredSecret, ProviderConfig, Skill, Connector, Webhook, McpServerConfig, PluginMeta, Project, ActivityEntry, AppNotification, GatewayProfile } from '../../types'
+import type { NetworkInfo, Directory, ProviderInfo, Credentials, Schedule, AppSettings, StoredSecret, ProviderConfig, Skill, Connector, Webhook, McpServerConfig, ExtensionMeta, Project, ActivityEntry, AppNotification, GatewayProfile } from '../../types'
 import { api } from '@/lib/app/api-client'
 import { safeStorageGetJson, safeStorageSet } from '@/lib/app/safe-storage'
 import { fetchDirs, fetchProviders, fetchCredentials } from '@/lib/chat/chats'
@@ -35,7 +35,7 @@ export interface DataSlice {
   loadWebhooks: () => Promise<void>
   mcpServers: Record<string, McpServerConfig>
   loadMcpServers: () => Promise<void>
-  extensions: Record<string, PluginMeta>
+  extensions: Record<string, ExtensionMeta>
   loadExtensions: () => Promise<void>
   projects: Record<string, Project>
   loadProjects: () => Promise<void>
@@ -192,8 +192,8 @@ export const createDataSlice: StateCreator<AppState, [], [], DataSlice> = (set, 
   extensions: {},
   loadExtensions: async () => {
     try {
-      const list = await api<PluginMeta[]>('GET', '/extensions')
-      const extensions: Record<string, PluginMeta> = {}
+      const list = await api<ExtensionMeta[]>('GET', '/extensions')
+      const extensions: Record<string, ExtensionMeta> = {}
       for (const p of list) extensions[p.filename] = p
       setIfChanged<AppState>(set, 'extensions', extensions)
     } catch (err) {

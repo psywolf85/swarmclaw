@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getPluginManager } from '@/lib/server/plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
 import { errorMessage } from '@/lib/shared-utils'
 
 export async function POST(req: Request) {
@@ -12,8 +12,8 @@ export async function POST(req: Request) {
   }
 
   try {
-    const result = await getPluginManager().installPluginDependencies(filename, {
-      packageManager: packageManager as import('@/types').PluginPackageManager | undefined,
+    const result = await getExtensionManager().installExtensionDependencies(filename, {
+      packageManager: packageManager as import('@/types').ExtensionPackageManager | undefined,
     })
     return NextResponse.json({ ok: true, dependencyInfo: result })
   } catch (err: unknown) {

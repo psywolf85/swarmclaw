@@ -1,5 +1,5 @@
 import type { Skill } from '@/types'
-import { expandPluginIds } from '@/lib/server/tool-aliases'
+import { expandExtensionIds } from '@/lib/server/tool-aliases'
 import type { DiscoveredSkill } from './skill-discovery'
 
 function normalizeKey(value: string): string {
@@ -10,14 +10,14 @@ function normalizeKey(value: string): string {
     .replace(/^_+|_+$/g, '')
 }
 
-export function collectPluginMatchedDiscoveredSkills(
+export function collectExtensionMatchedDiscoveredSkills(
   discoveredSkills: DiscoveredSkill[],
-  enabledPlugins: string[],
+  enabledExtensions: string[],
   storedSkills: Record<string, Skill>,
 ): { matched: DiscoveredSkill[]; remaining: DiscoveredSkill[] } {
-  const pluginKeys = new Set(
-    expandPluginIds(enabledPlugins)
-      .map((pluginId) => normalizeKey(pluginId))
+  const extensionKeys = new Set(
+    expandExtensionIds(enabledExtensions)
+      .map((extensionId) => normalizeKey(extensionId))
       .filter(Boolean),
   )
   const storedSkillKeys = new Set(
@@ -31,7 +31,7 @@ export function collectPluginMatchedDiscoveredSkills(
 
   for (const skill of discoveredSkills) {
     const key = normalizeKey(skill.name)
-    if (pluginKeys.has(key) && !storedSkillKeys.has(key)) matched.push(skill)
+    if (extensionKeys.has(key) && !storedSkillKeys.has(key)) matched.push(skill)
     else remaining.push(skill)
   }
 
@@ -47,9 +47,9 @@ export function buildDiscoveredSkillPromptText(skills: Pick<DiscoveredSkill, 'na
     .join('\n\n')
 
   return [
-    '## Plugin Skills',
-    'When a plugin-specific skill is present below, follow it before falling back to generic tool use.',
-    'Prefer the exact command patterns and safety rules in the skill when using the matching plugin.',
+    '## Extension Skills',
+    'When an extension-specific skill is present below, follow it before falling back to generic tool use.',
+    'Prefer the exact command patterns and safety rules in the skill when using the matching extension.',
     '',
     body,
   ].join('\n')

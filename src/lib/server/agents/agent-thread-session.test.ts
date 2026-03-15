@@ -61,7 +61,7 @@ describe('ensureAgentThreadSession', () => {
           projectId: 'proj-1',
           createdAt: now,
           updatedAt: now,
-          plugins: ['memory', 'web_search'],
+          extensions: ['memory', 'web_search'],
         },
       })
 
@@ -113,7 +113,7 @@ describe('ensureAgentThreadSession', () => {
           heartbeatIntervalSec: 600,
           createdAt: now,
           updatedAt: now,
-          plugins: ['memory'],
+          extensions: ['memory'],
         },
       })
 
@@ -159,7 +159,7 @@ describe('ensureAgentThreadSession', () => {
           heartbeatIntervalSec: 600,
           createdAt: now,
           updatedAt: now,
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -198,7 +198,7 @@ describe('ensureAgentThreadSession', () => {
           threadSessionId: 'agent-chat-molly-existing',
           createdAt: now,
           updatedAt: now,
-          plugins: ['memory'],
+          extensions: ['memory'],
         },
       })
       storage.saveSessions({
@@ -218,7 +218,7 @@ describe('ensureAgentThreadSession', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'molly',
-          plugins: ['memory'],
+          extensions: ['memory'],
           connectorContext: {
             connectorId: 'conn-1',
             channelId: 'wrong-chat',
@@ -263,6 +263,7 @@ describe('ensureAgentThreadSession', () => {
           name: 'Hal2k',
           provider: 'ollama',
           model: 'glm-5:cloud',
+          ollamaMode: 'cloud',
           credentialId: 'cred-ollama-cloud',
           apiEndpoint: null,
           fallbackCredentialIds: [],
@@ -281,6 +282,7 @@ describe('ensureAgentThreadSession', () => {
           user: 'default',
           provider: 'ollama',
           model: 'glm-5:cloud',
+          ollamaMode: 'cloud',
           credentialId: 'cred-ollama-cloud',
           apiEndpoint: 'http://localhost:11434',
           claudeSessionId: null,
@@ -302,6 +304,7 @@ describe('ensureAgentThreadSession', () => {
 
       console.log(JSON.stringify({
         sessionId: session.id,
+        ollamaMode: persisted.ollamaMode || null,
         apiEndpoint: persisted.apiEndpoint || null,
         credentialId: persisted.credentialId || null,
         agentCredentialId: healedAgent?.credentialId || null,
@@ -309,6 +312,7 @@ describe('ensureAgentThreadSession', () => {
     `)
 
     assert.equal(output.sessionId, 'agent-chat-hal-existing')
+    assert.equal(output.ollamaMode, 'cloud')
     assert.equal(output.credentialId, 'cred-ollama-cloud')
     assert.equal(output.agentCredentialId, 'cred-ollama-cloud')
     assert.equal(output.apiEndpoint, 'https://ollama.com')

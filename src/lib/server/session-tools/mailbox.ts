@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import type { ToolBuildContext } from './context'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import {
@@ -196,14 +196,14 @@ async function executeMailboxAction(args: Record<string, unknown>, bctx: { cwd: 
   }
 }
 
-const MailboxPlugin: Plugin = {
+const MailboxExtension: Extension = {
   name: 'Mailbox',
   enabledByDefault: false,
   description: 'Read/search/reply to inbox messages over IMAP/SMTP, download attachments, and wait for matching inbound email.',
   hooks: {
     getCapabilityDescription: () =>
       'I can inspect inboxes with `mailbox`, read and search messages, download attachments, reply to emails, and wait for specific inbound messages.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'mailbox',
@@ -256,10 +256,10 @@ const MailboxPlugin: Plugin = {
   },
 }
 
-getPluginManager().registerBuiltin('mailbox', MailboxPlugin)
+getExtensionManager().registerBuiltin('mailbox', MailboxExtension)
 
 export function buildMailboxTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('mailbox')) return []
+  if (!bctx.hasExtension('mailbox')) return []
   return [
     tool(
       async (args) => executeMailboxAction(args, {
@@ -269,7 +269,7 @@ export function buildMailboxTools(bctx: ToolBuildContext): StructuredToolInterfa
       }),
       {
         name: 'mailbox',
-        description: MailboxPlugin.tools![0].description,
+        description: MailboxExtension.tools![0].description,
         schema: z.object({}).passthrough(),
       },
     ),

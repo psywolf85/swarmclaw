@@ -3,7 +3,7 @@ import path from 'path'
 import type { Message, MessageToolEvent } from '@/types'
 import { dedup } from '@/lib/shared-utils'
 import { getUsageSpendSince } from '@/lib/server/storage'
-import { pluginIdMatches } from '@/lib/server/tool-aliases'
+import { extensionIdMatches } from '@/lib/server/tool-aliases'
 import { buildToolEventAssistantSummary } from '@/lib/chat/tool-event-summary'
 import { looksLikePositiveConnectorDeliveryText } from '@/lib/server/chat-execution/chat-execution-connector-delivery'
 import { hasOnlySuccessfulMemoryMutationToolEvents } from '@/lib/server/chat-execution/memory-mutation-tools'
@@ -314,7 +314,7 @@ export function requestedToolNamesFromMessage(message: string): string[] {
     'manage_chatrooms',
     'search_marketplace',
     'monitor_tool',
-    'plugin_creator_tool',
+    'extension_creator_tool',
     'memory_tool',
     'memory_search',
     'memory_get',
@@ -339,13 +339,8 @@ export function requestedToolNamesFromMessage(message: string): string[] {
     'shell',
     'files',
     'edit_file',
-    'git',
     'canvas',
     'mailbox',
-    'document',
-    'extract',
-    'table',
-    'crawl',
     'email',
   ]
   const requested = explicitCandidates.filter((name) => hasExplicitToolMention(message, name))
@@ -359,7 +354,7 @@ export function requestedToolNamesFromMessage(message: string): string[] {
 }
 
 export function hasToolEnabled(session: SessionWithTools, toolName: string): boolean {
-  return pluginIdMatches(getEnabledCapabilityIds(session), toolName)
+  return extensionIdMatches(getEnabledCapabilityIds(session), toolName)
 }
 
 export function enabledDelegationTools(session: SessionWithTools): DelegateTool[] {
@@ -378,7 +373,6 @@ export function hasDirectLocalCodingTools(session: SessionWithTools): boolean {
     'files',
     'edit_file',
     'openclaw_workspace',
-    'sandbox',
   ].some((toolName) => hasToolEnabled(session, toolName))
 }
 

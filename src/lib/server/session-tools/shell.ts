@@ -16,11 +16,12 @@ import { ensureSessionSandbox, resolveSandboxWorkdir, type AgentSandboxConfig } 
 import type { ToolBuildContext } from './context'
 import { safePath, truncate, coerceEnvMap, MAX_OUTPUT } from './context'
 import { checkFileAccess } from './file-access-policy'
-import type { Plugin, PluginHooks, Session } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks, Session } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { safeJsonParseObject } from '../json-utils'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
+import { executeSandboxExec, executeListRuntimes, type SandboxContext } from './sandbox'
 
 function resolveShellWorkdir(baseCwd: string, requestedWorkdir?: string, scope?: 'workspace' | 'machine'): string {
   const raw = typeof requestedWorkdir === 'string' ? requestedWorkdir.trim() : ''
@@ -311,6 +312,27 @@ async function executeShellAction(
         return killManagedProcess(processId!, killSignal).ok ? `Killed ${processId}` : `Error`
       }
       case 'remove': return removeManagedProcess(processId!).ok ? `Removed ${processId}` : `Error`
+      case 'sandbox_exec': {
+        const sandboxCtx: SandboxContext = {
+          sessionId: bctx.sessionId || undefined,
+          agentId: bctx.agentId || null,
+          cwd: bctx.cwd,
+          config: bctx.sandboxConfig,
+          resolveCurrentSession: bctx.resolveCurrentSession,
+        }
+        return executeSandboxExec(normalized, sandboxCtx)
+      }
+      case 'sandbox_list_runtimes':
+      case 'list_runtimes': {
+        const sandboxCtx: SandboxContext = {
+          sessionId: bctx.sessionId || undefined,
+          agentId: bctx.agentId || null,
+          cwd: bctx.cwd,
+          config: bctx.sandboxConfig,
+          resolveCurrentSession: bctx.resolveCurrentSession,
+        }
+        return executeListRuntimes(sandboxCtx)
+      }
       default: return `Error: Unknown action "${action}"`
     }
   } catch (err: unknown) {
@@ -319,26 +341,28 @@ async function executeShellAction(
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const ShellPlugin: Plugin = {
+const ShellExtension: Extension = {
   name: 'Core Shell',
-  description: 'Execute shell commands and manage background processes.',
+  description: 'Execute shell commands and manage background processes. Use for git, curl, and other CLI tools.',
   hooks: {
-    getCapabilityDescription: () => 'I can run shell commands with the unified `shell` tool. Use action `execute` for commands, and `list` / `status` / `poll` / `log` for long-lived processes.',
-    getOperatingGuidance: () => ['Shell: use `shell` with `{"action":"execute","command":"..."}` for servers, installs, scripts, and git. Use `background=true` for long-lived processes.', 'Verify servers with `shell` status/log actions and liveness probes before claiming success.', 'Resolve IPs/URLs via shell — never use placeholders. Retry path errors without workdir override.'],
-  } as PluginHooks,
+    getCapabilityDescription: () => 'I can run shell commands with the unified `shell` tool. Use action `execute` for commands (including git, curl, and other CLI tools), `sandbox_exec` to run JS/TS in a sandboxed environment, and `list` / `status` / `poll` / `log` for long-lived processes.',
+    getOperatingGuidance: () => ['Shell: use `shell` with `{"action":"execute","command":"..."}` for servers, installs, scripts, git, and curl. Use `background=true` for long-lived processes.', 'Use `shell` with `{"action":"sandbox_exec","language":"javascript","code":"..."}` to run JS/TS in a Docker sandbox when available.', 'Verify servers with `shell` status/log actions and liveness probes before claiming success.', 'Resolve IPs/URLs via shell — never use placeholders. Retry path errors without workdir override.'],
+  } as ExtensionHooks,
   tools: [
     {
       name: 'shell',
-      description: 'Execute commands and manage processes.',
+      description: 'Execute commands and manage processes. Use for git, curl, and other CLI tools. Includes sandbox_exec for running JS/TS in Docker.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['execute', 'list', 'status', 'poll', 'log', 'write', 'kill', 'remove'] },
+          action: { type: 'string', enum: ['execute', 'list', 'status', 'poll', 'log', 'write', 'kill', 'remove', 'sandbox_exec', 'sandbox_list_runtimes'] },
           command: { type: 'string' },
           processId: { type: 'string' },
           background: { type: 'boolean' },
+          language: { type: 'string', enum: ['javascript', 'typescript'], description: 'Language for sandbox_exec action' },
+          code: { type: 'string', description: 'Code to execute for sandbox_exec action' },
         },
         required: ['action']
       },
@@ -347,10 +371,10 @@ const ShellPlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('shell', ShellPlugin)
+registerNativeCapability('shell', ShellExtension)
 
 export function buildShellTools(bctx: ToolBuildContext) {
-  if (!bctx.hasPlugin('shell')) return []
+  if (!bctx.hasExtension('shell')) return []
   return [
     tool(
       async (args) => executeShellAction(args, {
@@ -363,7 +387,7 @@ export function buildShellTools(bctx: ToolBuildContext) {
       }),
       {
         name: 'shell',
-        description: ShellPlugin.tools![0].description,
+        description: ShellExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

@@ -9,6 +9,7 @@ import { selectActiveSessionId } from '@/stores/slices/session-slice'
 import { api } from '@/lib/app/api-client'
 import { buildStreamingAwareMessageList } from '@/lib/chat/chat-streaming-state'
 import { dedupeMessagesForDisplay } from '@/lib/chat/chat-display'
+import { shouldShowDateSeparator } from '@/lib/chat/message-list-utils'
 import { errorMessage } from '@/lib/shared-utils'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { MessageBubble } from './message-bubble'
@@ -63,6 +64,105 @@ function getLatestAssistantToolMoment(messages: Message[]): { key: string; name:
   return null
 }
 
+type ChatState = ReturnType<typeof useChatStore.getState>
+
+const selectHasLiveArtifacts = (s: ChatState) =>
+  s.displayText.trim().length > 0 || s.toolEvents.length > 0 || s.thinkingText.trim().length > 0
+
+interface LiveStreamBubbleProps {
+  message: Message
+  assistantName?: string
+  agentAvatarSeed?: string
+  agentAvatarUrl?: string | null
+  agentName?: string
+  isLast?: boolean
+  onRetry?: () => void
+  messageIndex?: number
+  onToggleBookmark?: (index: number) => void
+  onEditResend?: (index: number, newText: string) => void
+  momentOverlay?: React.ReactNode
+}
+
+const LiveStreamBubble = memo(function LiveStreamBubble(props: LiveStreamBubbleProps) {
+  const displayText = useChatStore((s) => s.displayText)
+  const thinkingText = useChatStore((s) => s.thinkingText)
+  const streamPhase = useChatStore((s) => s.streamPhase)
+  const streamToolName = useChatStore((s) => s.streamToolName)
+  const liveToolEvents = useChatStore((s) => s.toolEvents)
+
+  const liveStream = useMemo(() => ({
+    active: true as const,
+    phase: streamPhase,
+    toolName: streamToolName,
+    text: displayText,
+    thinking: thinkingText,
+    toolEvents: liveToolEvents,
+  }), [displayText, thinkingText, streamPhase, streamToolName, liveToolEvents])
+
+  return <MessageBubble {...props} liveStream={liveStream} />
+})
+
+interface LastMessageMomentOverlayProps {
+  messages: Message[]
+  sessionId: string | null
+  agentId?: string | null
+  streaming: boolean
+  children: (momentOverlay: React.ReactNode, currentMoment: { kind: string } | null) => React.ReactNode
+}
+
+function useLastMessageMoment(messages: Message[], sessionId: string | null, agentId: string | null | undefined, streaming: boolean) {
+  type MomentType = { kind: 'heartbeat' } | { kind: 'tool'; key: string; name: string; input: string }
+  const [currentMoment, setCurrentMoment] = useState<MomentType | null>(null)
+
+  const heartbeatTopic = agentId ? `heartbeat:agent:${agentId}` : ''
+  useWs(heartbeatTopic, () => {
+    setCurrentMoment({ kind: 'heartbeat' })
+  })
+
+  const prevToolKeyRef = useRef<string | null>(null)
+  const seededMomentSessionRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (!sessionId) {
+      seededMomentSessionRef.current = null
+      prevToolKeyRef.current = null
+      setCurrentMoment(null)
+      return
+    }
+
+    if (seededMomentSessionRef.current === sessionId) return
+    seededMomentSessionRef.current = sessionId
+    prevToolKeyRef.current = getLatestAssistantToolMoment(messages)?.key || null
+    setCurrentMoment(null)
+  }, [messages, sessionId])
+
+  useEffect(() => {
+    if (!sessionId || seededMomentSessionRef.current !== sessionId) return
+    const moment = getLatestAssistantToolMoment(messages)
+    if (!moment) return
+    if (moment.key === prevToolKeyRef.current) return
+    prevToolKeyRef.current = moment.key
+    setCurrentMoment({ kind: 'tool', key: moment.key, name: moment.name, input: moment.input })
+  }, [messages, sessionId])
+
+  const momentOverlay = useMemo(() => {
+    if (streaming || !currentMoment) return null
+    if (currentMoment.kind === 'heartbeat') {
+      return <HeartbeatMoment onDismiss={() => setCurrentMoment(null)} />
+    }
+    return (
+      <ActivityMoment
+        key={currentMoment.key}
+        toolName={currentMoment.name}
+        toolInput={currentMoment.input}
+        onDismiss={() => setCurrentMoment(null)}
+      />
+    )
+  }, [streaming, currentMoment])
+
+  return { currentMoment, momentOverlay }
+}
+
 interface Props {
   messages: Message[]
   streaming: boolean
@@ -103,17 +203,8 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const settledCountRef = useRef(0)
   const snapUntilRef = useRef(0)
   const prevSessionIdRef = useRef<string | null>(null)
-  const displayText = useChatStore((s) => s.displayText)
-  const thinkingText = useChatStore((s) => s.thinkingText)
-  const liveToolEvents = useChatStore((s) => s.toolEvents)
   const assistantRenderId = useChatStore((s) => s.assistantRenderId)
-  const streamPhase = useChatStore((s) => s.streamPhase)
-  const streamToolName = useChatStore((s) => s.streamToolName)
-  const hasLiveArtifacts = useChatStore((s) => (
-    s.displayText.trim().length > 0
-    || s.toolEvents.length > 0
-    || s.thinkingText.trim().length > 0
-  ))
+  const hasLiveArtifacts = useChatStore(selectHasLiveArtifacts)
   const setMessages = useChatStore((s) => s.setMessages)
   const retryLastMessage = useChatStore((s) => s.retryLastMessage)
   const editAndResend = useChatStore((s) => s.editAndResend)
@@ -143,40 +234,7 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const showGatewayOverlay = isOpenClaw && gatewayStatus === 'disconnected'
 
   // Moment overlay for last assistant message (heartbeat or tool events)
-  type MomentType = { kind: 'heartbeat' } | { kind: 'tool'; key: string; name: string; input: string }
-  const [currentMoment, setCurrentMoment] = useState<MomentType | null>(null)
-
-  const heartbeatTopic = agent?.id ? `heartbeat:agent:${agent.id}` : ''
-  useWs(heartbeatTopic, () => {
-    setCurrentMoment({ kind: 'heartbeat' })
-  })
-
-  const prevToolKeyRef = useRef<string | null>(null)
-  const seededMomentSessionRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (!sessionId) {
-      seededMomentSessionRef.current = null
-      prevToolKeyRef.current = null
-      setCurrentMoment(null)
-      return
-    }
-
-    if (seededMomentSessionRef.current === sessionId) return
-    seededMomentSessionRef.current = sessionId
-    prevToolKeyRef.current = getLatestAssistantToolMoment(messages)?.key || null
-    setCurrentMoment(null)
-  }, [messages, sessionId])
-
-  // Detect notable tool events on the latest assistant message after the session has been seeded.
-  useEffect(() => {
-    if (!sessionId || seededMomentSessionRef.current !== sessionId) return
-    const moment = getLatestAssistantToolMoment(messages)
-    if (!moment) return
-    if (moment.key === prevToolKeyRef.current) return
-    prevToolKeyRef.current = moment.key
-    setCurrentMoment({ kind: 'tool', key: moment.key, name: moment.name, input: moment.input })
-  }, [messages, sessionId])
+  const { currentMoment, momentOverlay: lastMomentOverlay } = useLastMessageMoment(messages, sessionId, agent?.id, streaming)
 
   // Unread count tracking
   const unreadRef = useRef(0)
@@ -260,10 +318,8 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
       localStreaming: streaming,
       hasLiveArtifacts,
       assistantRenderId,
-      displayText,
-      thinkingText,
     })
-  ), [assistantRenderId, baseDisplayedMessages, displayText, hasLiveArtifacts, streaming, thinkingText])
+  ), [assistantRenderId, baseDisplayedMessages, hasLiveArtifacts, streaming])
 
   const filteredMessages = useMemo(() => {
     let nextMessages = bookmarkFilter
@@ -362,23 +418,7 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
       const isSearchMatch = !!searchQuery && searchMatchSet.has(i)
       const isCurrentMatch = currentSearchMatchIndex === i
       const prevMsg = i > 0 ? filteredMessages[i - 1] : null
-      const showDateSep = msg.time && (!prevMsg?.time || new Date(msg.time).toDateString() !== new Date(prevMsg.time).toDateString())
-
-      let momentOverlay: React.ReactNode = null
-      if (isLastAssistant && currentMoment && !streaming) {
-        if (currentMoment.kind === 'heartbeat') {
-          momentOverlay = <HeartbeatMoment onDismiss={() => setCurrentMoment(null)} />
-        } else {
-          momentOverlay = (
-            <ActivityMoment
-              key={currentMoment.key}
-              toolName={currentMoment.name}
-              toolInput={currentMoment.input}
-              onDismiss={() => setCurrentMoment(null)}
-            />
-          )
-        }
-      }
+      const showDateSep = shouldShowDateSeparator(msg.time, prevMsg?.time)
 
       // Only animate genuinely new messages (arrived after the batch load).
       // Settled messages (loaded on session switch) appear instantly.
@@ -390,9 +430,13 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
             animationDelay: `${Math.min((i - settledSnapshot) * 0.05, 0.4)}s`,
           }
 
+      const momentOverlay = isLastAssistant ? lastMomentOverlay : null
+
+      const BubbleComponent = isLiveStreamRow ? LiveStreamBubble : MessageBubble
+
       return (
         <div
-          key={msg.clientRenderId ? `${sessionId}-${msg.clientRenderId}` : `${sessionId}-${msg.role}-${originalIndex >= 0 ? originalIndex : i}`}
+          key={msg.clientRenderId ? `${sessionId}-${msg.clientRenderId}-${i}` : `${sessionId}-${msg.role}-${originalIndex >= 0 ? originalIndex : i}`}
           data-message-index={i}
           style={animStyle}
         >
@@ -406,20 +450,12 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
             </div>
           )}
           <div className={isCurrentMatch ? 'ring-1 ring-amber-400/50 rounded-[16px] bg-amber-400/[0.04]' : isSearchMatch ? 'bg-white/[0.02] rounded-[16px]' : ''}>
-            <MessageBubble
+            <BubbleComponent
               message={msg}
               assistantName={assistantName}
               agentAvatarSeed={agent?.avatarSeed}
               agentAvatarUrl={agent?.avatarUrl}
               agentName={agent?.name}
-              liveStream={isLiveStreamRow ? {
-                active: true,
-                phase: streamPhase,
-                toolName: streamToolName,
-                text: displayText,
-                thinking: thinkingText,
-                toolEvents: liveToolEvents,
-              } : undefined}
               isLast={isLastAssistant}
               onRetry={isLastAssistant ? retryLastMessage : undefined}
               messageIndex={originalIndex >= 0 ? originalIndex : undefined}
@@ -438,21 +474,16 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
     agent?.name,
     assistantRenderId,
     assistantName,
-    currentMoment,
     currentSearchMatchIndex,
-    displayText,
     filteredMessages,
-    liveToolEvents,
+    lastMomentOverlay,
     originalIndexMap,
     retryLastMessage,
     searchMatchSet,
     searchQuery,
     sessionId,
     settledSnapshot,
-    streamPhase,
-    streamToolName,
     streaming,
-    thinkingText,
   ])
 
   // Track whether user is at/near bottom so we know whether to auto-scroll on new content

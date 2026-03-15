@@ -57,7 +57,7 @@ before(async () => {
       description: 'Tests runtime skill execution.',
       provider: 'openai',
       model: 'gpt-test',
-      plugins: ['manage_skills'],
+      extensions: ['manage_skills'],
       tools: ['manage_skills'],
       skillIds: [],
       delegationEnabled: false,
@@ -65,7 +65,7 @@ before(async () => {
       delegationTargetAgentIds: [],
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    } satisfies Agent,
+    } as unknown as Agent,
   })
 
   saveSessions({
@@ -81,7 +81,7 @@ before(async () => {
       lastActiveAt: Date.now(),
       sessionType: 'human',
       agentId: 'skill-runtime-agent',
-      plugins: ['manage_skills'],
+      extensions: ['manage_skills'],
       heartbeatEnabled: false,
     },
   })

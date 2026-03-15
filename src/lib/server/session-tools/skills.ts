@@ -208,7 +208,7 @@ function buildSkillSnapshot(bctx: ToolBuildContext) {
   const session = bctx.resolveCurrentSession?.()
   return resolveRuntimeSkills({
     cwd: bctx.cwd,
-    enabledPlugins: bctx.activePlugins,
+    enabledExtensions: bctx.activeExtensions,
     agentId: activeAgent?.id || null,
     sessionId: session?.id || null,
     userId: session?.user || null,
@@ -387,7 +387,7 @@ export async function executeManageSkillsAction(
         const snapshot = buildSkillSnapshot(bctx)
         const query = typeof normalized.query === 'string' ? normalized.query.trim() : ''
         const ranked = query
-          ? (await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activePlugins, {
+          ? (await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activeExtensions, {
             limit: parseSearchLimit(normalized.limit, 12),
           })).map((entry) => entry.skill)
           : snapshot.skills
@@ -399,7 +399,7 @@ export async function executeManageSkillsAction(
         const query = typeof normalized.query === 'string' ? normalized.query.trim() : ''
         const limit = parseSearchLimit(normalized.limit, 8)
         const local = query
-          ? await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activePlugins, { limit })
+          ? await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activeExtensions, { limit })
           : snapshot.skills.slice(0, limit).map((skill) => ({ skill, score: skill.score, reasons: skill.matchReasons }))
         const marketplace = query ? await searchClawHub(query, 1, limit) : { skills: [], total: 0, page: 1 }
         return JSON.stringify({
@@ -417,7 +417,7 @@ export async function executeManageSkillsAction(
           : typeof normalized.query === 'string' ? normalized.query.trim() : ''
         if (!task) return 'Error: "task" or "query" is required for recommend_for_task.'
         const snapshot = buildSkillSnapshot(bctx)
-        const local = await recommendRuntimeSkillsForTask(snapshot.skills, task, bctx.activePlugins, { limit: 8 })
+        const local = await recommendRuntimeSkillsForTask(snapshot.skills, task, bctx.activeExtensions, { limit: 8 })
         const remote = local.length >= 3 ? { skills: [] } : await searchClawHub(task, 1, 5)
         return JSON.stringify({
           local: local.map((entry) => ({

@@ -2,13 +2,13 @@ import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { buildCrudTools } from './crud'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks, Session } from '@/types'
+import type { Extension, ExtensionHooks, Session } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { loadSettings } from '../storage'
 import { resolveSessionToolPolicy } from '../tool-capability-policy'
 import { loadRuntimeSettings } from '@/lib/server/runtime/runtime-settings'
-import { expandPluginIds } from '../tool-aliases'
+import { expandExtensionIds } from '../tool-aliases'
 import { dedup } from '@/lib/shared-utils'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 
@@ -152,20 +152,20 @@ function uniqueStrings(values: Array<string | undefined>): string[] {
 }
 
 function resolvePlatformResourceAccess(toolId: string, bctx: ToolBuildContext): { allowed: boolean; reason: string | null } {
-  if (bctx.hasPlugin(toolId)) return { allowed: true, reason: null }
-  if (!bctx.hasPlugin('manage_platform')) return { allowed: false, reason: null }
+  if (bctx.hasExtension(toolId)) return { allowed: true, reason: null }
+  if (!bctx.hasExtension('manage_platform')) return { allowed: false, reason: null }
   const settings = loadSettings()
   const decision = resolveSessionToolPolicy(['manage_platform', toolId], settings)
-  const allowed = decision.enabledPlugins.includes(toolId)
-  const blocked = decision.blockedPlugins.find((entry) => entry.tool === toolId)
+  const allowed = decision.enabledExtensions.includes(toolId)
+  const blocked = decision.blockedExtensions.find((entry) => entry.tool === toolId)
   return { allowed, reason: blocked?.reason || null }
 }
 
 function buildPlatformContextFromSession(session: Session): ToolBuildContext {
   const runtime = loadRuntimeSettings()
-  const activePlugins = expandPluginIds([...getEnabledCapabilityIds(session), 'manage_platform'])
-  const activePluginSet = new Set(activePlugins)
-  const hasPlugin = (name: string) => activePluginSet.has(name)
+  const activeExtensions = expandExtensionIds([...getEnabledCapabilityIds(session), 'manage_platform'])
+  const activeExtensionSet = new Set(activeExtensions)
+  const hasExtension = (name: string) => activeExtensionSet.has(name)
 
   return {
     cwd: session.cwd || process.cwd(),
@@ -173,8 +173,8 @@ function buildPlatformContextFromSession(session: Session): ToolBuildContext {
       sessionId: session.id,
       agentId: session.agentId ?? null,
     },
-    hasPlugin,
-    hasTool: hasPlugin,
+    hasExtension,
+    hasTool: hasExtension,
     cleanupFns: [],
     commandTimeoutMs: runtime.shellCommandTimeoutMs,
     claudeTimeoutMs: runtime.claudeCodeTimeoutMs,
@@ -182,7 +182,7 @@ function buildPlatformContextFromSession(session: Session): ToolBuildContext {
     persistDelegateResumeId: () => {},
     readStoredDelegateResumeId: () => null,
     resolveCurrentSession: () => session,
-    activePlugins,
+    activeExtensions,
   }
 }
 
@@ -197,7 +197,7 @@ async function executePlatformAction(args: any, bctx: ToolBuildContext) {
   // We reuse the existing CRUD tool logic but expose it via a single tool
   const crudTools = buildCrudTools({
     ...bctx,
-    hasPlugin: (toolId: string) => resolvePlatformResourceAccess(toolId, bctx).allowed,
+    hasExtension: (toolId: string) => resolvePlatformResourceAccess(toolId, bctx).allowed,
   })
 
   const targetToolName = `manage_${resourceName}`
@@ -219,15 +219,15 @@ async function executePlatformAction(args: any, bctx: ToolBuildContext) {
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const PlatformPlugin: Plugin = {
+const PlatformExtension: Extension = {
   name: 'Core Platform',
   description: 'Unified management of agents, projects, tasks, schedules, skills, documents, and secrets.',
   hooks: {
     getCapabilityDescription: () => 'I can manage durable execution context across agents, projects, tasks, schedules, documents, skills, webhooks, connectors, sessions, and encrypted secrets.',
     getOperatingGuidance: () => ['Use projects to hold longer-lived goals, objectives, and credential requirements.', 'Create/update tasks for long-lived goals to track progress.', 'Use schedules for follow-ups and heartbeat-style check-ins. Check existing schedules before creating new ones.', 'Inspect existing chats before creating duplicates.'],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'manage_platform',
@@ -247,20 +247,20 @@ const PlatformPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('manage_platform', PlatformPlugin)
+registerNativeCapability('manage_platform', PlatformExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildPlatformTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('manage_platform')) return []
+  if (!bctx.hasExtension('manage_platform')) return []
 
   return [
     tool(
       async (args) => executePlatformAction(args, bctx),
       {
         name: 'manage_platform',
-        description: PlatformPlugin.tools![0].description,
+        description: PlatformExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

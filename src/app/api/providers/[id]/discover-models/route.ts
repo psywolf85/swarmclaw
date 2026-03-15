@@ -13,6 +13,7 @@ export async function GET(
     providerId: id,
     credentialId: searchParams.get('credentialId'),
     endpoint: searchParams.get('endpoint'),
+    ollamaMode: searchParams.get('ollamaMode'),
     force: searchParams.get('force') === '1',
     requiresApiKey: searchParams.has('requiresApiKey')
       ? searchParams.get('requiresApiKey') !== '0'

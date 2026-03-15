@@ -366,7 +366,7 @@ export function McpServerList({ inSidebar }: { inSidebar?: boolean }) {
                       className="px-3 py-1.5 rounded-[9px] bg-accent-soft text-accent-bright text-[12px] font-600 disabled:opacity-60 disabled:cursor-not-allowed"
                       style={{ fontFamily: 'inherit' }}
                     >
-                      {invokeLoading ? 'Running...' : 'Invoke Plugin'}                    </button>
+                      {invokeLoading ? 'Running...' : 'Invoke Extension'}                    </button>
                     <span className="text-[11px] text-text-3/60">Result is captured below with raw payload.</span>
                   </div>
 

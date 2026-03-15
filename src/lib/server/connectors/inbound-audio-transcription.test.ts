@@ -21,7 +21,7 @@ const ENV_KEYS = [
 type EnvSnapshot = Record<(typeof ENV_KEYS)[number], string | undefined>
 
 let originalFetch: typeof fetch
-let originalSettings: Record<string, unknown>
+let originalSettings: ReturnType<typeof loadSettings>
 let originalEnv: EnvSnapshot
 let tempFiles: string[] = []
 
@@ -87,7 +87,7 @@ describe('enrichInboundMessageWithAudioTranscript', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const inbound = buildInboundMessage(audioPath)
     const enriched = await enrichInboundMessageWithAudioTranscript({ msg: inbound })
@@ -122,7 +122,7 @@ describe('enrichInboundMessageWithAudioTranscript', () => {
         })
       }
       return new Response('unexpected url', { status: 404 })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const inbound = buildInboundMessage(audioPath)
     const enriched = await enrichInboundMessageWithAudioTranscript({ msg: inbound })
@@ -144,7 +144,7 @@ describe('enrichInboundMessageWithAudioTranscript', () => {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const inbound = buildInboundMessage(audioPath, 'Already typed this manually')
     const enriched = await enrichInboundMessageWithAudioTranscript({ msg: inbound })
@@ -167,7 +167,7 @@ describe('enrichInboundMessageWithAudioTranscript', () => {
         status: 500,
         headers: { 'Content-Type': 'application/json' },
       })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
 
     const inbound = buildInboundMessage(audioPath)
     const enriched = await enrichInboundMessageWithAudioTranscript({ msg: inbound })

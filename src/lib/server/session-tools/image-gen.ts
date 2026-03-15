@@ -2,8 +2,8 @@ import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import fs from 'fs'
 import path from 'path'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { UPLOAD_DIR } from '../storage'
 import type { ToolBuildContext } from './context'
@@ -11,7 +11,7 @@ import { errorMessage, sleep } from '@/lib/shared-utils'
 
 type ImageProvider = 'openai' | 'stability' | 'replicate' | 'fal' | 'together' | 'fireworks' | 'bfl' | 'custom'
 
-interface PluginConfig {
+interface ExtensionConfig {
   provider: ImageProvider
   apiKey: string
   model: string
@@ -19,8 +19,8 @@ interface PluginConfig {
   customEndpoint: string
 }
 
-function getConfig(): PluginConfig {
-  const ps = getPluginManager().getPluginSettings('image_gen')
+function getConfig(): ExtensionConfig {
+  const ps = getExtensionManager().getExtensionSettings('image_gen')
   return {
     provider: (ps.provider as ImageProvider) || 'openai',
     apiKey: (ps.apiKey as string) || '',
@@ -34,7 +34,7 @@ type GenResult = { b64?: string; url?: string; error?: string }
 
 // --- Provider Implementations ---
 
-async function generateOpenAI(prompt: string, size: string, quality: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateOpenAI(prompt: string, size: string, quality: string, cfg: ExtensionConfig): Promise<GenResult> {
   const model = cfg.model || 'gpt-image-1'
   const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST',
@@ -47,7 +47,7 @@ async function generateOpenAI(prompt: string, size: string, quality: string, cfg
   return { b64: data?.data?.[0]?.b64_json }
 }
 
-async function generateStability(prompt: string, size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateStability(prompt: string, size: string, cfg: ExtensionConfig): Promise<GenResult> {
   // Stability v2beta uses multipart/form-data and returns raw image bytes
   const model = cfg.model || 'sd3'
   const formData = new FormData()
@@ -71,7 +71,7 @@ async function generateStability(prompt: string, size: string, cfg: PluginConfig
   return { b64: buf.toString('base64') }
 }
 
-async function generateReplicate(prompt: string, size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateReplicate(prompt: string, size: string, cfg: ExtensionConfig): Promise<GenResult> {
   const model = cfg.model || 'black-forest-labs/flux-schnell'
   const [w, h] = size.split('x').map(Number)
   // Try sync mode first (Prefer: wait blocks up to 60s)
@@ -102,7 +102,7 @@ async function generateReplicate(prompt: string, size: string, cfg: PluginConfig
   return { error: 'No image in Replicate response.' }
 }
 
-async function generateFal(prompt: string, size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateFal(prompt: string, size: string, cfg: ExtensionConfig): Promise<GenResult> {
   const model = cfg.model || 'fal-ai/flux/schnell'
   const [w, h] = size.split('x').map(Number)
   const res = await fetch(`https://fal.run/${model}`, {
@@ -118,7 +118,7 @@ async function generateFal(prompt: string, size: string, cfg: PluginConfig): Pro
   return { error: 'No image in fal.ai response.' }
 }
 
-async function generateTogether(prompt: string, size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateTogether(prompt: string, size: string, cfg: ExtensionConfig): Promise<GenResult> {
   const model = cfg.model || 'black-forest-labs/FLUX.1-schnell-Free'
   const [w, h] = size.split('x').map(Number)
   const res = await fetch('https://api.together.xyz/v1/images/generations', {
@@ -136,7 +136,7 @@ async function generateTogether(prompt: string, size: string, cfg: PluginConfig)
   return { error: 'No image in Together response.' }
 }
 
-async function generateFireworks(prompt: string, _size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateFireworks(prompt: string, _size: string, cfg: ExtensionConfig): Promise<GenResult> {
   const model = cfg.model || 'flux-1-schnell-fp8'
   const res = await fetch(`https://api.fireworks.ai/inference/v1/workflows/accounts/fireworks/models/${model}/text_to_image`, {
     method: 'POST',
@@ -158,7 +158,7 @@ async function generateFireworks(prompt: string, _size: string, cfg: PluginConfi
   return { b64: buf.toString('base64') }
 }
 
-async function generateBFL(prompt: string, size: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateBFL(prompt: string, size: string, cfg: ExtensionConfig): Promise<GenResult> {
   const [w, h] = size.split('x').map(Number)
   const model = cfg.model || 'flux-pro-1.1'
   const createRes = await fetch(`https://api.bfl.ai/v1/${model}`, {
@@ -187,7 +187,7 @@ async function generateBFL(prompt: string, size: string, cfg: PluginConfig): Pro
   return { error: 'BFL generation timed out.' }
 }
 
-async function generateCustom(prompt: string, size: string, quality: string, cfg: PluginConfig): Promise<GenResult> {
+async function generateCustom(prompt: string, size: string, quality: string, cfg: ExtensionConfig): Promise<GenResult> {
   if (!cfg.customEndpoint) return { error: 'Custom endpoint URL not configured.' }
   // Assumes OpenAI-compatible image generation API
   const [w, h] = size.split('x').map(Number)
@@ -208,7 +208,7 @@ async function generateCustom(prompt: string, size: string, quality: string, cfg
 
 // --- Dispatcher ---
 
-const PROVIDERS: Record<ImageProvider, (prompt: string, size: string, quality: string, cfg: PluginConfig) => Promise<GenResult>> = {
+const PROVIDERS: Record<ImageProvider, (prompt: string, size: string, quality: string, cfg: ExtensionConfig) => Promise<GenResult>> = {
   openai: generateOpenAI,
   stability: (p, s, _q, c) => generateStability(p, s, c),
   replicate: (p, s, _q, c) => generateReplicate(p, s, c),
@@ -258,7 +258,7 @@ async function executeImageGen(args: Record<string, unknown>): Promise<string> {
   if (!prompt) return 'Error: prompt is required.'
 
   const cfg = getConfig()
-  if (!cfg.apiKey) return 'Error: Image generation API key not configured. Ask the user to add one in Plugin Settings > Image Generation.'
+  if (!cfg.apiKey) return 'Error: Image generation API key not configured. Ask the user to add one in Extension Settings > Image Generation.'
 
   const size = String(normalized.size || cfg.defaultSize)
   const quality = String(normalized.quality || 'standard')
@@ -275,14 +275,14 @@ async function executeImageGen(args: Record<string, unknown>): Promise<string> {
   }
 }
 
-const ImageGenPlugin: Plugin = {
+const ImageGenExtension: Extension = {
   name: 'Image Generation',
   enabledByDefault: false,
   description: 'Generate images from text prompts. Supports OpenAI, Stability AI, Replicate, fal.ai, Together AI, Fireworks AI, BFL (Flux), or any OpenAI-compatible API.',
   hooks: {
     getCapabilityDescription: () =>
       'I can generate images from text descriptions using `generate_image`. Supports different sizes, quality levels, and providers.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'generate_image',
@@ -358,17 +358,17 @@ const ImageGenPlugin: Plugin = {
   },
 }
 
-getPluginManager().registerBuiltin('image_gen', ImageGenPlugin)
+getExtensionManager().registerBuiltin('image_gen', ImageGenExtension)
 
 export function buildImageGenTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('image_gen')) return []
+  if (!bctx.hasExtension('image_gen')) return []
 
   return [
     tool(
       async (args) => executeImageGen(args),
       {
         name: 'generate_image',
-        description: ImageGenPlugin.tools![0].description,
+        description: ImageGenExtension.tools![0].description,
         schema: z.object({
           prompt: z.string().describe('Detailed text description of the image to generate'),
           size: z.enum(['1024x1024', '1536x1024', '1024x1536', '512x512', '768x768', '1280x720', '720x1280']).optional().describe('Image dimensions (default: 1024x1024)'),

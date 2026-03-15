@@ -3,8 +3,8 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import fs from 'fs'
 import type { ToolBuildContext } from './context'
 import { safePath } from './context'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 
 /**
@@ -38,14 +38,14 @@ async function executeEditFile(args: { filePath: string; oldString: string; newS
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const EditFilePlugin: Plugin = {
+const EditFileExtension: Extension = {
   name: 'Core Edit File',
   description: 'Surgical search-and-replace within existing files.',
   hooks: {
     getCapabilityDescription: () => 'I can make precise edits to files (`edit_file`) — surgical find-and-replace without rewriting the whole file.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'edit_file',
@@ -64,19 +64,19 @@ const EditFilePlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('edit_file', EditFilePlugin)
+registerNativeCapability('edit_file', EditFileExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildEditFileTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('edit_file')) return []
+  if (!bctx.hasExtension('edit_file')) return []
   return [
     tool(
       async (args) => executeEditFile(args as any, { cwd: bctx.cwd, filesystemScope: bctx.filesystemScope }),
       {
         name: 'edit_file',
-        description: EditFilePlugin.tools![0].description,
+        description: EditFileExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

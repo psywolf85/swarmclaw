@@ -1,5 +1,5 @@
 import type { MessageToolEvent } from '@/types'
-import { canonicalizePluginId } from '@/lib/server/tool-aliases'
+import { canonicalizeExtensionId } from '@/lib/server/tool-aliases'
 import { extractSuggestions } from '@/lib/server/suggestions'
 import {
   looksLikeExternalWalletTask,
@@ -34,10 +34,10 @@ export function isLikelyToolErrorOutput(output: string): boolean {
   return false
 }
 
-export function getExplicitRequiredToolNames(userMessage: string, enabledPlugins: string[]): string[] {
+export function getExplicitRequiredToolNames(userMessage: string, enabledExtensions: string[]): string[] {
   const normalized = userMessage.toLowerCase()
   const required: string[] = []
-  const hasEnabledTool = (toolId: string) => enabledPlugins.some((enabled) => (canonicalizePluginId(enabled) || enabled) === toolId)
+  const hasEnabledTool = (toolId: string) => enabledExtensions.some((enabled) => (canonicalizeExtensionId(enabled) || enabled) === toolId)
   const explicitEmailDeliveryRequest = /\b(?:send|deliver|forward)\b[\s\S]{0,40}\b(?:email|message|reply|draft|note|summary|update|sequence|newsletter)\b/.test(normalized)
     || /\bsend (?:an?|the) email\b/.test(normalized)
     || /\bemail (?:it|this|them|the draft|the summary)\b/.test(normalized)
@@ -121,7 +121,7 @@ export function resolveSuccessfulTerminalToolBoundary(params: {
     }
   }
 
-  const canonicalToolName = canonicalizePluginId(params.toolName) || params.toolName
+  const canonicalToolName = canonicalizeExtensionId(params.toolName) || params.toolName
   const exactToolName = String(params.toolName || '').trim().toLowerCase()
   const action = resolveToolAction(params.toolInput)
   const parsedOutput = tryParseJsonObject(extractSuggestions(params.toolOutput || '').clean)
@@ -146,8 +146,8 @@ export function resolveSuccessfulTerminalToolBoundary(params: {
 }
 
 export function getWalletApprovalBoundaryAction(output: string): string | null {
-  if (!output.includes('plugin_wallet_')) return null
-  if (/"type":"plugin_wallet_transfer_request"/.test(output)) return 'send'
+  if (!output.includes('extension_wallet_')) return null
+  if (/"type":"extension_wallet_transfer_request"/.test(output)) return 'send'
   const actionMatch = output.match(/"action":"([^"]+)"/)
   const action = actionMatch?.[1] || ''
   if (!action) return null

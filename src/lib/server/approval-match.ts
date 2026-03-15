@@ -114,18 +114,18 @@ export function buildApprovalComparablePayload(
 ): Record<string, unknown> | null {
   switch (category) {
     case 'tool_access': {
-      const targetId = trimString(data.toolId) || trimString(data.pluginId)
+      const targetId = trimString(data.toolId) || trimString(data.extensionId)
       return targetId ? { targetId } : null
     }
-    case 'plugin_scaffold':
+    case 'extension_scaffold':
       return {
         filename: trimString(data.filename),
         code: trimString(data.code),
       }
-    case 'plugin_install':
+    case 'extension_install':
       return {
         url: trimString(data.url),
-        pluginId: trimString(data.pluginId),
+        extensionId: trimString(data.extensionId),
         filename: trimString(data.filename),
       }
     case 'wallet_transfer': {

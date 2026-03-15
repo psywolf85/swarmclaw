@@ -1,11 +1,9 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import fs from 'fs'
-import * as os from 'os'
 import type { ToolBuildContext } from './context'
 import { registerNativeCapability } from '../native-capabilities'
-import type { Plugin, PluginHooks } from '@/types'
-import { safePath, truncate } from './context'
+import type { Extension, ExtensionHooks } from '@/types'
+import { safePath } from './context'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { cancelWatchJob, createWatchJob, getWatchJob, listWatchJobs } from '@/lib/server/runtime/watch-jobs'
 import { ensureSessionBrowserProfileId, loadBrowserSessionRecord } from '../browser-state'
@@ -102,70 +100,9 @@ async function executeMonitorAction(
 ) {
   const normalized = normalizeToolInputArgs((args ?? {}) as Record<string, unknown>)
   const action = normalized.action as string | undefined
-  const target = (normalized.target ?? normalized.url ?? normalized.path) as string | undefined
-  const limit = normalized.limit as number | undefined
-  const threshold = normalized.threshold as number | undefined
-  const sessionId = typeof normalized.sessionId === 'string' ? normalized.sessionId : bctx.sessionId
-  void limit
-  void sessionId
 
   try {
     switch (action) {
-      case 'sys_info': {
-        const freeMem = os.freemem()
-        const totalMem = os.totalmem()
-        const load = os.loadavg()
-        const uptime = os.uptime()
-        return JSON.stringify({
-          platform: os.platform(),
-          arch: os.arch(),
-          cpus: os.cpus().length,
-          memory: {
-            free: `${Math.round(freeMem / 1024 / 1024)}MB`,
-            total: `${Math.round(totalMem / 1024 / 1024)}MB`,
-            usage: `${Math.round(((totalMem - freeMem) / totalMem) * 100)}%`
-          },
-          loadAvg: load,
-          uptime: `${Math.round(uptime / 3600)} hours`
-        }, null, 2)
-      }
-
-      case 'watch_log': {
-        const resolved = safePath(bctx.cwd, target!, bctx.filesystemScope)
-        if (!fs.existsSync(resolved)) return `Error: File not found ${target}`
-        
-        const stats = fs.statSync(resolved)
-        const size = stats.size
-        const bufferSize = Math.min(size, 5000) // Read last 5KB
-        const fd = fs.openSync(resolved, 'r')
-        const buffer = Buffer.alloc(bufferSize)
-        fs.readSync(fd, buffer, 0, bufferSize, size - bufferSize)
-        fs.closeSync(fd)
-        
-        return truncate(buffer.toString('utf8'), 2000)
-      }
-
-      case 'ping': {
-        const url = target?.startsWith('http') ? target : `http://${target}`
-        const start = Date.now()
-        try {
-          const res = await fetch(url, { signal: AbortSignal.timeout(5000) })
-          const latency = Date.now() - start
-          return JSON.stringify({
-            status: res.status,
-            ok: res.ok,
-            latency: `${latency}ms`,
-            thresholdExceeded: typeof threshold === 'number' ? latency >= threshold : undefined,
-            url
-          }, null, 2)
-        } catch (err: unknown) {
-          return JSON.stringify({
-            status: 'error',
-            error: getErrorMessage(err),
-            url
-          }, null, 2)
-        }
-      }
 
       case 'create_watch': {
         return createDurableWatch(normalized, bctx)
@@ -196,7 +133,8 @@ async function executeMonitorAction(
       }
 
       case 'list_watches': {
-        const filterSessionId = normalized.all === true ? undefined : sessionId
+        const listSessionId = typeof normalized.sessionId === 'string' ? normalized.sessionId : bctx.sessionId
+        const filterSessionId = normalized.all === true ? undefined : listSessionId
         return JSON.stringify(listWatchJobs({ sessionId: filterSessionId || null }), null, 2)
       }
 
@@ -225,22 +163,21 @@ async function executeMonitorAction(
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const MonitorPlugin: Plugin = {
+const MonitorExtension: Extension = {
   name: 'Core Monitor',
-  description: 'System observability and durable watch jobs: inspect system state, monitor files/endpoints/tasks, and resume agents when conditions trigger.',
-  hooks: {} as PluginHooks,
+  description: 'Durable watch jobs: monitor files/endpoints/tasks and resume agents when conditions trigger.',
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'monitor_tool',
-      description: 'Observe system health, inspect logs/endpoints, or create durable waits like wait_for_http, wait_for_file, wait_for_webhook, and wait_for_page_change.',
+      description: 'Create durable waits that resume the agent when conditions trigger. Actions: create_watch, wait_until, wait_for_http, wait_for_file, wait_for_task, wait_for_webhook, wait_for_page_change, list_watches, get_watch, cancel_watch. For sys_info/ping/log tailing, use shell instead.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['sys_info', 'watch_log', 'ping', 'create_watch', 'wait_until', 'wait_for_http', 'wait_for_file', 'wait_for_task', 'wait_for_webhook', 'wait_for_page_change', 'list_watches', 'get_watch', 'cancel_watch'] },
-          target: { type: 'string', description: 'Log file path (for watch_log) or URL (for ping)' },
-          limit: { type: 'number', description: 'Number of lines or bytes to retrieve' },
+          action: { type: 'string', enum: ['create_watch', 'wait_until', 'wait_for_http', 'wait_for_file', 'wait_for_task', 'wait_for_webhook', 'wait_for_page_change', 'list_watches', 'get_watch', 'cancel_watch'] },
+          target: { type: 'string', description: 'URL (for http/page) or file path (for file watcher)' },
           watchType: { type: 'string', enum: ['time', 'http', 'file', 'task', 'webhook', 'page'] },
           resumeMessage: { type: 'string', description: 'Message injected when the watch triggers and the agent wakes up.' },
           regex: { type: 'string', description: 'Regex pattern used by file/page/http watchers.' },
@@ -256,10 +193,10 @@ const MonitorPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('monitor', MonitorPlugin)
+registerNativeCapability('monitor', MonitorExtension)
 
 export function buildMonitorTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('monitor')) return []
+  if (!bctx.hasExtension('monitor')) return []
   return [
     tool(
       async (args) => executeMonitorAction(args, {
@@ -270,7 +207,7 @@ export function buildMonitorTools(bctx: ToolBuildContext): StructuredToolInterfa
       }),
       {
         name: 'monitor_tool',
-        description: MonitorPlugin.tools![0].description,
+        description: MonitorExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

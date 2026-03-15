@@ -37,7 +37,7 @@ export async function register() {
       console.log(`[server] ${signal} received, shutting down gracefully...`)
       try {
         const { stopDaemon } = await import('@/lib/server/runtime/daemon-state')
-        stopDaemon({ source: signal })
+        await stopDaemon({ source: signal })
       } catch (err) {
         console.error('[instrumentation] Failed to stop daemon during shutdown:', err)
       }

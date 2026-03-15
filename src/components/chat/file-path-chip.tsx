@@ -5,12 +5,13 @@ import { api } from '@/lib/app/api-client'
 
 export const FILE_PATH_RE = /^(\/[\w./-]+\.\w{1,10})$/
 export const DIR_PATH_RE = /^(\/[\w./-]+)\/?$/
-const PREVIEWABLE_EXT = /\.(html?|svg|css|js|jsx|ts|tsx|json|md|txt|py|sh)$/i
-const SERVEABLE_EXT = /\.(html?|svg|css|js|jsx|ts|tsx)$/i
+const PREVIEWABLE_EXT = /\.(html?|svg|json|md|txt)$/i
+const SERVEABLE_EXT = /\.(html?)$/i
+const SERVEABLE_PROJECT = /(^|\/)package\.json$/
 
 export function FilePathChip({ filePath }: { filePath: string }) {
   const canPreview = PREVIEWABLE_EXT.test(filePath)
-  const canServe = SERVEABLE_EXT.test(filePath)
+  const canServe = SERVEABLE_EXT.test(filePath) || SERVEABLE_PROJECT.test(filePath)
   const serveUrl = `/api/files/serve?path=${encodeURIComponent(filePath)}`
 
   const [serverState, setServerState] = useState<{

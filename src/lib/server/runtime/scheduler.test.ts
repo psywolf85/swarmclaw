@@ -48,6 +48,7 @@ describe('scheduler wake targeting', () => {
       scheduleType: 'once',
       status: 'active',
       createdInSessionId: 'session-owner',
+      createdAt: Date.now(),
     }, {
       'agent-1': {
         id: 'agent-1',
@@ -66,6 +67,7 @@ describe('scheduler wake targeting', () => {
       taskPrompt: 'Remind me',
       scheduleType: 'once',
       status: 'active',
+      createdAt: Date.now(),
     }, {
       'agent-1': {
         id: 'agent-1',
@@ -86,6 +88,7 @@ describe('scheduler wake targeting', () => {
         scheduleType: 'once',
         status: 'active',
         taskMode: 'task',
+        createdAt: Date.now(),
       }),
       false,
     )
@@ -99,6 +102,7 @@ describe('scheduler wake targeting', () => {
         scheduleType: 'once',
         status: 'active',
         taskMode: 'wake_only',
+        createdAt: Date.now(),
       }),
       true,
     )

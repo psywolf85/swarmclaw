@@ -21,19 +21,19 @@ export function ToolRequestBanner({ text, toolOutputs = [] }: Props) {
   const [denied, setDenied] = useState<Set<string>>(new Set())
   const continueSentRef = useRef(false)
 
-  const pluginRequests: { pluginId: string; reason: string }[] = []
+  const extensionRequests: { extensionId: string; reason: string }[] = []
   const seen = new Set<string>()
 
   function extractFromText(t: string) {
     try {
-      const jsonMatches = t.match(/\{"type"\s*:\s*"(?:tool_request|plugin_request)"[^}]*\}/g)
+      const jsonMatches = t.match(/\{"type"\s*:\s*"(?:tool_request|extension_request)"[^}]*\}/g)
       if (jsonMatches) {
         for (const jm of jsonMatches) {
           const parsed = JSON.parse(jm)
-          const pluginId = parsed.pluginId || parsed.toolId
-          if ((parsed.type === 'tool_request' || parsed.type === 'plugin_request') && pluginId && !seen.has(pluginId)) {
-            seen.add(pluginId)
-            pluginRequests.push({ pluginId, reason: parsed.reason || '' })
+          const extensionId = parsed.extensionId || parsed.toolId
+          if ((parsed.type === 'tool_request' || parsed.type === 'extension_request') && extensionId && !seen.has(extensionId)) {
+            seen.add(extensionId)
+            extensionRequests.push({ extensionId, reason: parsed.reason || '' })
           }
         }
       }
@@ -44,7 +44,7 @@ export function ToolRequestBanner({ text, toolOutputs = [] }: Props) {
   extractFromText(text)
   for (const output of toolOutputs) extractFromText(output)
 
-  if (pluginRequests.length === 0) return null
+  if (extensionRequests.length === 0) return null
 
   const sid = currentSessionId
   const session = sid ? sessions[sid] : null
@@ -63,12 +63,12 @@ export function ToolRequestBanner({ text, toolOutputs = [] }: Props) {
     setGranted(newGranted)
 
     // Notify agent that access was granted with a precise message (not a vague "Continue")
-    const allGranted = pluginRequests.every(
-      (r) => newGranted.has(r.pluginId) || updated.includes(r.pluginId),
+    const allGranted = extensionRequests.every(
+      (r) => newGranted.has(r.extensionId) || updated.includes(r.extensionId),
     )
     if (allGranted && !continueSentRef.current) {
       continueSentRef.current = true
-      const grantedNames = pluginRequests.map((r) => TOOL_LABELS[r.pluginId] || r.pluginId).join(', ')
+      const grantedNames = extensionRequests.map((r) => TOOL_LABELS[r.extensionId] || r.extensionId).join(', ')
       setTimeout(() => {
         const { streaming, sendMessage } = useChatStore.getState()
         if (!streaming) {
@@ -91,13 +91,13 @@ export function ToolRequestBanner({ text, toolOutputs = [] }: Props) {
 
   return (
     <div className="max-w-[85%] md:max-w-[72%] flex flex-col gap-2 mt-2">
-      {pluginRequests.map(({ pluginId, reason }) => {
-        const isGranted = granted.has(pluginId) || getEnabledToolIds(session).includes(pluginId)
-        const isDenied = denied.has(pluginId)
-        const label = TOOL_LABELS[pluginId] || pluginId
+      {extensionRequests.map(({ extensionId, reason }) => {
+        const isGranted = granted.has(extensionId) || getEnabledToolIds(session).includes(extensionId)
+        const isDenied = denied.has(extensionId)
+        const label = TOOL_LABELS[extensionId] || extensionId
         return (
           <div
-            key={pluginId}
+            key={extensionId}
             className="flex items-center gap-3 px-4 py-3 rounded-[12px] border border-amber-500/20 bg-amber-500/[0.06]"
             style={{ animation: 'fade-in 0.2s ease' }}
           >
@@ -117,14 +117,14 @@ export function ToolRequestBanner({ text, toolOutputs = [] }: Props) {
             ) : (
               <div className="flex gap-1.5 shrink-0">
                 <button
-                  onClick={() => handleGrant(pluginId)}
+                  onClick={() => handleGrant(extensionId)}
                   className="px-3 py-1.5 rounded-[8px] bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 text-[11px] font-600 border-none cursor-pointer transition-colors"
                   style={{ fontFamily: 'inherit' }}
                 >
                   Grant
                 </button>
                 <button
-                  onClick={() => handleDeny(pluginId)}
+                  onClick={() => handleDeny(extensionId)}
                   className="px-3 py-1.5 rounded-[8px] bg-red-500/15 hover:bg-red-500/25 text-red-400 text-[11px] font-600 border-none cursor-pointer transition-colors"
                   style={{ fontFamily: 'inherit' }}
                 >

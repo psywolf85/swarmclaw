@@ -53,15 +53,13 @@ describe('durable wait surface', () => {
 })
 
 describe('sandbox surface', () => {
-  it('advertises a Docker-preferred Node sandbox and steers simple APIs to http_request', () => {
+  it('sandbox execution functions remain for shell integration', () => {
     const src = readToolSource('sandbox')
-    assert.equal(src.includes("enum: ['javascript', 'typescript']"), true)
-    assert.equal(src.includes('Docker-backed Node.js sandbox'), true)
-    assert.equal(src.includes('host Node'), true)
-    assert.equal(src.includes('http_request'), true)
-    assert.equal(src.includes('plugin_creator'), true)
-    assert.equal(src.includes('manage_schedules'), true)
-    assert.equal(src.includes('openclaw_sandbox'), false)
+    assert.equal(src.includes('executeSandboxExec'), true)
+    assert.equal(src.includes('executeListRuntimes'), true)
+    assert.equal(src.includes('executeHostNode'), true)
+    // Extension registration removed — sandbox_exec is now provided by shell
+    assert.equal(src.includes('registerBuiltin'), false)
   })
 })
 
@@ -89,7 +87,7 @@ describe('delegation job handles', () => {
   })
 })
 
-describe('primitive plugin surfaces', () => {
+describe('primitive extension surfaces', () => {
   it('advertises mailbox and human-loop actions', () => {
     const mailboxSrc = readToolSource('mailbox')
     const humanSrc = readToolSource('human-loop')
@@ -101,30 +99,10 @@ describe('primitive plugin surfaces', () => {
     }
   })
 
-  it('advertises document, extract, table, and crawl actions', () => {
-    const documentSrc = readToolSource('document')
-    const extractSrc = readToolSource('extract')
-    const tableSrc = readToolSource('table')
-    const crawlSrc = readToolSource('crawl')
-
-    for (const action of ['read', 'metadata', 'ocr', 'extract_tables', 'store', 'list', 'search', 'get', 'delete']) {
-      assert.equal(documentSrc.includes(`'${action}'`), true, `document.ts should expose ${action}`)
-    }
-    for (const action of ['extract_structured', 'summarize', 'status']) {
-      assert.equal(extractSrc.includes(`'${action}'`), true, `extract.ts should expose ${action}`)
-    }
-    for (const action of ['read', 'load_csv', 'load_xlsx', 'summarize', 'filter', 'sort', 'group', 'pivot', 'dedupe', 'join', 'write']) {
-      assert.equal(tableSrc.includes(`'${action}'`), true, `table.ts should expose ${action}`)
-    }
-    for (const action of ['crawl_site', 'follow_pagination', 'extract_sitemap', 'dedupe_pages', 'batch_extract']) {
-      assert.equal(crawlSrc.includes(`'${action}'`), true, `crawl.ts should expose ${action}`)
-    }
-  })
-
-  it('registers the primitive plugins in builtin-plugins', () => {
-    const src = readServerSource('builtin-plugins')
-    for (const moduleName of ['mailbox', 'human-loop', 'document', 'extract', 'table', 'crawl']) {
-      assert.equal(src.includes(`session-tools/${moduleName}`), true, `builtin-plugins.ts should import ${moduleName}`)
+  it('registers the primitive extensions in builtin-extensions', () => {
+    const src = readServerSource('builtin-extensions')
+    for (const moduleName of ['mailbox', 'human-loop']) {
+      assert.equal(src.includes(`session-tools/${moduleName}`), true, `builtin-extensions.ts should import ${moduleName}`)
     }
   })
 })

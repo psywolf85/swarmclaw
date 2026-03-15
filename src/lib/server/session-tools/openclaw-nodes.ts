@@ -2,8 +2,8 @@ import { z } from 'zod'
 import { randomUUID } from 'crypto'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { ensureGatewayConnected } from '../openclaw/gateway'
 
@@ -109,12 +109,12 @@ export async function executeNodesAction(args: any, deps: OpenClawNodesDeps = {}
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const NodesPlugin: Plugin = {
+const NodesExtension: Extension = {
   name: 'OpenClaw Nodes',
   description: 'Integrate with mobile apps and IoT devices via the OpenClaw gateway.',
-  hooks: {} as PluginHooks,
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'openclaw_nodes',
@@ -141,19 +141,19 @@ const NodesPlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('openclaw_nodes', NodesPlugin)
+registerNativeCapability('openclaw_nodes', NodesExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildOpenClawNodeTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('openclaw_nodes')) return []
+  if (!bctx.hasExtension('openclaw_nodes')) return []
   return [
     tool(
       async (args) => executeNodesAction(args),
       {
         name: 'openclaw_nodes',
-        description: NodesPlugin.tools![0].description,
+        description: NodesExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

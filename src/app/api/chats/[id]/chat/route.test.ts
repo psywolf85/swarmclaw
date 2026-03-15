@@ -48,7 +48,7 @@ test('chat route keeps long-lived user runs alive after stream disconnect and re
         name: 'Workbench Agent',
         provider: 'workbench-provider',
         model: 'wb-model',
-        plugins: [],
+        extensions: [],
         createdAt: now,
         updatedAt: now,
       },
@@ -67,7 +67,7 @@ test('chat route keeps long-lived user runs alive after stream disconnect and re
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'agent_1',
-        plugins: [],
+        extensions: [],
       },
     })
 
@@ -159,7 +159,7 @@ test('chat route heartbeat runs stay internal and do not persist terminal ack te
         name: 'Heartbeat Agent',
         provider: 'heartbeat-provider',
         model: 'hb-model',
-        plugins: [],
+        extensions: [],
         heartbeatEnabled: true,
         createdAt: now,
         updatedAt: now,
@@ -180,7 +180,7 @@ test('chat route heartbeat runs stay internal and do not persist terminal ack te
         sessionType: 'human',
         agentId: 'agent_1',
         heartbeatEnabled: true,
-        plugins: [],
+        extensions: [],
       },
     })
 
@@ -279,7 +279,7 @@ test('chat route queues a second user message behind the first run and completes
         name: 'Queue Agent',
         provider: 'queue-provider',
         model: 'queue-model',
-        plugins: [],
+        extensions: [],
         createdAt: now,
         updatedAt: now,
       },
@@ -298,7 +298,7 @@ test('chat route queues a second user message behind the first run and completes
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'agent_1',
-        plugins: [],
+        extensions: [],
       },
     })
 
@@ -356,7 +356,7 @@ test('chat route queues a second user message behind the first run and completes
       assistantReplies,
       runStatuses: runs.listRuns({ sessionId: 'sess_1' }).map((entry) => entry.status),
     }))
-  `, { prefix: 'swarmclaw-chat-route-plugins-' })
+  `, { prefix: 'swarmclaw-chat-route-extensions-' })
 
   assert.match(output.firstRunMeta, /"position":0/)
   assert.match(output.secondRunMeta, /"position":1/)
@@ -367,7 +367,7 @@ test('chat route queues a second user message behind the first run and completes
   assert.deepEqual(output.runStatuses, ['completed', 'completed'])
 })
 
-test('chat route forwards plugin-path tool activity when a plugin-enabled run uses streamAgentChat', () => {
+test('chat route forwards extension-path tool activity when an extension-enabled run uses streamAgentChat', () => {
   const output = runWithTempDataDir<{
     toolCalls: string[]
     toolResults: string[]
@@ -382,10 +382,10 @@ test('chat route forwards plugin-path tool activity when a plugin-enabled run us
     const route = routeMod.default || routeMod
     const stream = streamMod.default || streamMod
 
-    providers.PROVIDERS['plugin-provider'] = {
-      id: 'plugin-provider',
-      name: 'Plugin Provider',
-      models: ['plugin-model'],
+    providers.PROVIDERS['extension-provider'] = {
+      id: 'extension-provider',
+      name: 'Extension Provider',
+      models: ['extension-model'],
       requiresApiKey: false,
       requiresEndpoint: false,
       handler: { streamChat: async () => '' },
@@ -395,10 +395,10 @@ test('chat route forwards plugin-path tool activity when a plugin-enabled run us
     storage.saveAgents({
       agent_1: {
         id: 'agent_1',
-        name: 'Plugin Agent',
-        provider: 'plugin-provider',
-        model: 'plugin-model',
-        plugins: ['web'],
+        name: 'Extension Agent',
+        provider: 'extension-provider',
+        model: 'extension-model',
+        extensions: ['web'],
         createdAt: now,
         updatedAt: now,
       },
@@ -406,18 +406,18 @@ test('chat route forwards plugin-path tool activity when a plugin-enabled run us
     storage.saveSessions({
       sess_1: {
         id: 'sess_1',
-        name: 'Plugin Session',
+        name: 'Extension Session',
         cwd: process.env.WORKSPACE_DIR,
         user: 'workbench',
-        provider: 'plugin-provider',
-        model: 'plugin-model',
+        provider: 'extension-provider',
+        model: 'extension-model',
         claudeSessionId: null,
         messages: [],
         createdAt: now,
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'agent_1',
-        plugins: ['web'],
+        extensions: ['web'],
       },
     })
 
@@ -460,7 +460,7 @@ test('chat route forwards plugin-path tool activity when a plugin-enabled run us
         toolOutput: 'Fetched queue health summary',
         toolCallId: 'tool-1',
       }) + '\\n')
-      const reply = 'Queue looks healthy and no plugin errors were observed.'
+      const reply = 'Queue looks healthy and no extension errors were observed.'
       opts.write('data: ' + JSON.stringify({ t: 'r', text: reply }) + '\\n')
       return { fullText: reply, finalResponse: reply }
     })
@@ -488,9 +488,9 @@ test('chat route forwards plugin-path tool activity when a plugin-enabled run us
     } finally {
       stream.setStreamAgentChatForTest(null)
     }
-  `, { prefix: 'swarmclaw-chat-route-plugin-events-' })
+  `, { prefix: 'swarmclaw-chat-route-extension-events-' })
 
   assert.deepEqual(output.toolCalls, ['web'])
   assert.deepEqual(output.toolResults, ['Fetched queue health summary'])
-  assert.deepEqual(output.assistantReplies, ['Queue looks healthy and no plugin errors were observed.'])
+  assert.deepEqual(output.assistantReplies, ['Queue looks healthy and no extension errors were observed.'])
 })

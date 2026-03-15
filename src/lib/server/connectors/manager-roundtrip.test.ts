@@ -9,12 +9,12 @@ describe('connector manager roundtrip routing', () => {
       const managerMod = await import('./src/lib/server/connectors/manager')
       const connectorTypesMod = await import('./src/lib/server/connectors/types')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const connectorTypes = connectorTypesMod.default || connectorTypesMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const now = Date.now()
       const sent = []
@@ -34,8 +34,8 @@ describe('connector manager roundtrip routing', () => {
         },
       }
 
-      plugins.getPluginManager().registerBuiltin('test-bidi-connector-plugin', {
-        name: 'Test Bidi Connector Plugin',
+      ext.getExtensionManager().registerBuiltin('test-bidi-connector-extension', {
+        name: 'Test Bidi Connector Extension',
         connectors: [{
           id: 'test-bidi',
           name: 'Test Bidi',
@@ -69,7 +69,7 @@ describe('connector manager roundtrip routing', () => {
           name: 'Molly',
           provider: 'test-provider',
           model: 'test-model',
-          plugins: [],
+          extensions: [],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -103,7 +103,7 @@ describe('connector manager roundtrip routing', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent_1',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -127,7 +127,7 @@ describe('connector manager roundtrip routing', () => {
       } finally {
         await manager.stopConnector('conn_1')
       }
-    `, { prefix: 'swarmclaw-manager-roundtrip-test-' })
+    `, { prefix: 'swarmclaw-manager-roundtrip-test-' }) as any
 
     assert.deepEqual(output.sent, [{ channelId: 'connector-channel', text: 'Reply over connector' }])
     assert.equal(output.routeResult.messageId, 'bidi-out-1')
@@ -143,12 +143,12 @@ describe('connector manager roundtrip routing', () => {
       const managerMod = await import('./src/lib/server/connectors/manager')
       const connectorTypesMod = await import('./src/lib/server/connectors/types')
       const providersMod = await import('./src/lib/providers/index')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const connectorTypes = connectorTypesMod.default || connectorTypesMod
       const providers = providersMod.default || providersMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const now = Date.now()
       const sent = []
@@ -165,8 +165,8 @@ describe('connector manager roundtrip routing', () => {
         },
       }
 
-      plugins.getPluginManager().registerBuiltin('test-bidi-connector-plugin-dedupe', {
-        name: 'Test Bidi Connector Plugin Dedupe',
+      ext.getExtensionManager().registerBuiltin('test-bidi-connector-extension-dedupe', {
+        name: 'Test Bidi Connector Extension Dedupe',
         connectors: [{
           id: 'test-bidi-dedupe',
           name: 'Test Bidi Dedupe',
@@ -201,7 +201,7 @@ describe('connector manager roundtrip routing', () => {
           provider: 'test-provider',
           model: 'test-model',
           tools: ['connector_message_tool'],
-          plugins: ['connector_message_tool'],
+          extensions: ['connector_message_tool'],
           threadSessionId: 'agent_thread',
           createdAt: now,
           updatedAt: now,
@@ -236,7 +236,7 @@ describe('connector manager roundtrip routing', () => {
           sessionType: 'human',
           agentId: 'agent_1',
           tools: ['connector_message_tool'],
-          plugins: ['connector_message_tool'],
+          extensions: ['connector_message_tool'],
         },
       })
 
@@ -288,7 +288,7 @@ describe('connector manager roundtrip routing', () => {
         manager.setStreamAgentChatForTest(null)
         await manager.stopConnector('conn_1')
       }
-    `, { prefix: 'swarmclaw-manager-roundtrip-dup-' })
+    `, { prefix: 'swarmclaw-manager-roundtrip-dup-' }) as any
 
     assert.deepEqual(output.sent, [])
     assert.equal(output.routeResult.delivery, 'silent')

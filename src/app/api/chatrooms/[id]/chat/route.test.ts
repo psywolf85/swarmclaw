@@ -35,7 +35,7 @@ test('chatroom route prevents duplicate chained replies when an already-queued a
         name: 'Alpha',
         provider: 'chatroom-provider',
         model: 'room-model',
-        plugins: [],
+        extensions: [],
         createdAt: now,
         updatedAt: now,
       },
@@ -44,7 +44,7 @@ test('chatroom route prevents duplicate chained replies when an already-queued a
         name: 'Beta',
         provider: 'chatroom-provider',
         model: 'room-model',
-        plugins: [],
+        extensions: [],
         createdAt: now,
         updatedAt: now,
       },
@@ -183,7 +183,7 @@ test('chatroom route forwards tool activity and records one reply per participat
         name: 'Alpha',
         provider: 'chatroom-tool-provider',
         model: 'room-tool-model',
-        plugins: ['shell'],
+        extensions: ['shell'],
         createdAt: now,
         updatedAt: now,
       },
@@ -192,7 +192,7 @@ test('chatroom route forwards tool activity and records one reply per participat
         name: 'Beta',
         provider: 'chatroom-tool-provider',
         model: 'room-tool-model',
-        plugins: ['shell'],
+        extensions: ['shell'],
         createdAt: now,
         updatedAt: now,
       },
@@ -256,7 +256,7 @@ test('chatroom route forwards tool activity and records one reply per participat
         return { fullText: reply, finalResponse: reply }
       }
       if (agentId === 'beta') {
-        const reply = 'Beta reviewed the plugin path and agrees with Alpha.'
+        const reply = 'Beta reviewed the extension path and agrees with Alpha.'
         opts.write('data: ' + JSON.stringify({ t: 'r', text: reply }) + '\\n')
         return { fullText: reply, finalResponse: reply }
       }
@@ -268,7 +268,7 @@ test('chatroom route forwards tool activity and records one reply per participat
         new Request('http://local/api/chatrooms/room_1/chat', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ senderId: 'user', text: 'Please inspect the workspace and plugin path.' }),
+          body: JSON.stringify({ senderId: 'user', text: 'Please inspect the workspace and extension path.' }),
         }),
         { params: Promise.resolve({ id: 'room_1' }) },
       )

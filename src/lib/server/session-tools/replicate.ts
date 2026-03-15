@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { ToolBuildContext } from './context'
 import { errorMessage, sleep } from '@/lib/shared-utils'
@@ -14,7 +14,7 @@ interface ReplicateConfig {
 }
 
 function getConfig(): ReplicateConfig {
-  const ps = getPluginManager().getPluginSettings('replicate')
+  const ps = getExtensionManager().getExtensionSettings('replicate')
   return {
     apiToken: (ps.apiToken as string) || '',
     defaultModel: (ps.defaultModel as string) || '',
@@ -89,7 +89,7 @@ async function executeReplicate(args: Record<string, unknown>): Promise<string> 
   const cfg = getConfig()
 
   if (!cfg.apiToken) {
-    return 'Error: Replicate API token not configured. Ask the user to add it in Plugin Settings > Replicate.'
+    return 'Error: Replicate API token not configured. Ask the user to add it in Extension Settings > Replicate.'
   }
 
   try {
@@ -211,14 +211,14 @@ async function executeReplicate(args: Record<string, unknown>): Promise<string> 
   }
 }
 
-const ReplicatePlugin: Plugin = {
+const ReplicateExtension: Extension = {
   name: 'Replicate',
   enabledByDefault: false,
   description: 'Run any AI model on Replicate — image generation, LLMs, audio, video, and more. Search models, create predictions, check status.',
   hooks: {
     getCapabilityDescription: () =>
       'I can run any AI model on Replicate using `replicate`. This includes image generation (SDXL, Flux), language models, audio/video processing, and thousands more. I can search for models, run predictions, and check their status.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'replicate',
@@ -275,17 +275,17 @@ const ReplicatePlugin: Plugin = {
   },
 }
 
-getPluginManager().registerBuiltin('replicate', ReplicatePlugin)
+getExtensionManager().registerBuiltin('replicate', ReplicateExtension)
 
 export function buildReplicateTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('replicate')) return []
+  if (!bctx.hasExtension('replicate')) return []
 
   return [
     tool(
       async (args) => executeReplicate(args),
       {
         name: 'replicate',
-        description: ReplicatePlugin.tools![0].description,
+        description: ReplicateExtension.tools![0].description,
         schema: z.object({
           action: z.enum(['run', 'get', 'cancel', 'get_model', 'search', 'status']).describe('Action to perform'),
           model: z.string().optional().describe('Model identifier (e.g. "stability-ai/sdxl")'),

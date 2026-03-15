@@ -44,8 +44,8 @@ export interface AbortSignalRef {
 export interface SessionToolsResult {
   tools: StructuredToolInterface[]
   cleanup: () => Promise<void>
-  /** Maps tool name → plugin ID for attribution in usage tracking */
-  toolToPluginMap: Record<string, string>
+  /** Maps tool name → extension ID for attribution in usage tracking */
+  toolToExtensionMap: Record<string, string>
   /** Set after build to propagate abort from the chat loop to tool executions */
   abortSignalRef: AbortSignalRef
 }
@@ -79,8 +79,8 @@ export function composeAbortSignals(parentSignal: AbortSignal | undefined, timeo
 export interface ToolBuildContext {
   cwd: string
   ctx: ToolContext | undefined
-  hasPlugin: (name: string) => boolean
-  /** @deprecated Use hasPlugin */
+  hasExtension: (name: string) => boolean
+  /** @deprecated Use hasExtension */
   hasTool: (name: string) => boolean
   cleanupFns: (() => Promise<void>)[]
   commandTimeoutMs: number
@@ -89,7 +89,7 @@ export interface ToolBuildContext {
   persistDelegateResumeId: (key: 'claudeCode' | 'codex' | 'opencode' | 'gemini', id: string | null | undefined) => void
   readStoredDelegateResumeId: (key: 'claudeCode' | 'codex' | 'opencode' | 'gemini') => string | null
   resolveCurrentSession: () => any | null
-  activePlugins: string[]
+  activeExtensions: string[]
   /** Agent's file access policy — passed to shell for command-level enforcement */
   fileAccessPolicy?: { allowedPaths?: string[]; blockedPaths?: string[] } | null
   /** Agent's sandbox config — passed to shell for session-scoped container execution */

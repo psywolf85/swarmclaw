@@ -43,7 +43,7 @@ describe('manage_connectors tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-1', agentId: 'agent-1', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_connectors',
+        hasExtension: (name) => name === 'manage_connectors',
       })
       const tool = tools.find((entry) => entry.name === 'manage_connectors')
       await tool.invoke({
@@ -110,7 +110,7 @@ describe('manage_connectors tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-1', agentId: 'e355bf7a', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_connectors',
+        hasExtension: (name) => name === 'manage_connectors',
       })
       const tool = tools.find((entry) => entry.name === 'manage_connectors')
       const raw = await tool.invoke({

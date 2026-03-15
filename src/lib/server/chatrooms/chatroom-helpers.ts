@@ -47,6 +47,7 @@ export function resolveAgentApiEndpoint(agent: Agent): string | null {
   return resolveProviderApiEndpoint({
     provider: agent.provider,
     model: agent.model,
+    ollamaMode: agent.ollamaMode ?? null,
     credentialId: agent.credentialId ?? null,
     apiEndpoint: agent.apiEndpoint ?? null,
   })
@@ -245,6 +246,7 @@ export function buildSyntheticSession(agent: Agent, chatroomId: string): Session
     user: 'chatroom',
     provider: agent.provider,
     model: agent.model,
+    ollamaMode: agent.ollamaMode ?? null,
     credentialId: agent.credentialId ?? null,
     fallbackCredentialIds: agent.fallbackCredentialIds,
     apiEndpoint: resolveAgentApiEndpoint(agent),
@@ -366,7 +368,7 @@ export function buildAgentSystemPromptForChatroom(agent: Agent, cwd?: string | n
   try {
     const runtimeSkills = resolveRuntimeSkills({
       cwd,
-      enabledPlugins: getEnabledCapabilityIds(agent),
+      enabledExtensions: getEnabledCapabilityIds(agent),
       agentId: agent.id,
       agentSkillIds: agent.skillIds || [],
       storedSkills: loadSkills(),

@@ -50,7 +50,7 @@ Prefer the project workflow.
 
     const snapshot = resolveRuntimeSkills({
       cwd,
-      enabledPlugins: ['shell'],
+      enabledExtensions: ['shell'],
       storedSkills,
       agentSkillIds: ['stored_github_sync'],
     })
@@ -76,7 +76,7 @@ test('resolveRuntimeSkills auto-matches skills from explicit tool metadata and r
   }
 
   const snapshot = resolveRuntimeSkills({
-    enabledPlugins: ['google_workspace'],
+    enabledExtensions: ['google_workspace'],
     storedSkills,
   })
   const skill = snapshot.skills.find((entry) => entry.name === 'weather-helper')
@@ -102,7 +102,7 @@ test('recommendRuntimeSkillsForTask ranks matching local skills and prompt block
   }
 
   const snapshot = resolveRuntimeSkills({
-    enabledPlugins: ['google_workspace'],
+    enabledExtensions: ['google_workspace'],
     storedSkills,
   })
   const recommended = await recommendRuntimeSkillsForTask(snapshot.skills, 'Update the Google Docs and Sheets workspace report', ['google_workspace'])

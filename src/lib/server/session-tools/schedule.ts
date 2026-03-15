@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { dispatchWake } from '@/lib/server/runtime/wake-dispatcher'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { createWatchJob } from '@/lib/server/runtime/watch-jobs'
@@ -51,14 +51,14 @@ async function executeScheduleWake(args: { delayMinutes: number; message: string
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const SchedulePlugin: Plugin = {
+const ScheduleExtension: Extension = {
   name: 'Core Scheduler',
   description: 'Schedule durable wake events and reminders for agents.',
   hooks: {
     getCapabilityDescription: () => 'I can set a conversational timer (`schedule_wake`) to remind myself to check back on something later in this chat.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'schedule_wake',
@@ -76,19 +76,19 @@ const SchedulePlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('schedule', SchedulePlugin)
+registerNativeCapability('schedule', ScheduleExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildScheduleTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('schedule_wake')) return []
+  if (!bctx.hasExtension('schedule_wake')) return []
   return [
     tool(
       async (args) => executeScheduleWake(args as any, { sessionId: bctx.ctx?.sessionId || undefined }),
       {
         name: 'schedule_wake',
-        description: SchedulePlugin.tools![0].description,
+        description: ScheduleExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

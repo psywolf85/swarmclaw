@@ -64,6 +64,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   else if (agentIdUpdateProvided && linkedRoute?.model) session.model = linkedRoute.model
   else if (agentIdUpdateProvided && linkedAgent?.model !== undefined) session.model = linkedAgent.model
 
+  if (updates.ollamaMode !== undefined) session.ollamaMode = updates.ollamaMode
+  else if (updates.provider !== undefined && updates.provider !== 'ollama') session.ollamaMode = null
+  else if (agentIdUpdateProvided && linkedRoute) session.ollamaMode = linkedRoute.ollamaMode ?? null
+  else if (agentIdUpdateProvided && linkedAgent) session.ollamaMode = linkedAgent.ollamaMode ?? null
+
   if (updates.credentialId !== undefined) session.credentialId = updates.credentialId
   else if (agentIdUpdateProvided && linkedRoute) session.credentialId = linkedRoute.credentialId ?? null
   else if (agentIdUpdateProvided && linkedAgent) session.credentialId = linkedAgent.credentialId ?? null

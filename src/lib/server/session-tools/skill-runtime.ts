@@ -38,7 +38,7 @@ function buildRuntimeSnapshot(bctx: ToolBuildContext): RuntimeSkillSnapshot {
   const activeAgent = resolveActiveAgent(bctx)
   return resolveRuntimeSkills({
     cwd: bctx.cwd,
-    enabledPlugins: bctx.activePlugins,
+    enabledExtensions: bctx.activeExtensions,
     agentId: activeAgent?.id || null,
     sessionId: session?.id || null,
     userId: session?.user || null,
@@ -90,7 +90,7 @@ function resolveSkillSelector(rawArgs: Record<string, unknown>): string {
 async function resolveTargetSkill(params: {
   rawArgs: Record<string, unknown>
   snapshot: RuntimeSkillSnapshot
-  activePlugins?: string[] | null
+  activeExtensions?: string[] | null
   requireExplicit?: boolean
 }): Promise<ResolvedRuntimeSkill | null> {
   const selector = resolveSkillSelector(params.rawArgs)
@@ -101,7 +101,7 @@ async function resolveTargetSkill(params: {
     const ranked = await recommendRuntimeSkillsForTask(
       params.snapshot.skills,
       query,
-      params.activePlugins,
+      params.activeExtensions,
       { limit: parseSearchLimit(params.rawArgs.limit, 8) },
     )
     const top = ranked.find((entry) => entry.skill.eligible || entry.skill.runnable)
@@ -265,7 +265,7 @@ async function dispatchSkillRun(params: {
 
   const toolArgs = normalizeDispatchArgs(params.rawArgs)
   const { buildSessionTools } = await import('./index')
-  const built = await buildSessionTools(params.bctx.cwd, params.bctx.activePlugins, params.bctx.ctx)
+  const built = await buildSessionTools(params.bctx.cwd, params.bctx.activeExtensions, params.bctx.ctx)
   try {
     const targetTool = built.tools.find((entry) => entry.name === dispatch.toolName)
     if (!targetTool) {
@@ -316,7 +316,7 @@ export function buildSkillRuntimeTools(bctx: ToolBuildContext): StructuredToolIn
               const query = typeof normalized.query === 'string' ? normalized.query.trim() : ''
               const limit = parseSearchLimit(normalized.limit, 12)
               const ranked: RuntimeSkillRecommendation[] = query
-                ? await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activePlugins, { limit })
+                ? await recommendRuntimeSkillsForTask(snapshot.skills, query, bctx.activeExtensions, { limit })
                 : snapshot.skills.map((skill) => ({ skill, score: skill.score, reasons: skill.matchReasons }))
               return JSON.stringify({
                 selectedSkillId: snapshot.selectedSkill?.id || null,
@@ -328,7 +328,7 @@ export function buildSkillRuntimeTools(bctx: ToolBuildContext): StructuredToolIn
               })
             }
             case 'select': {
-              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activePlugins: bctx.activePlugins, requireExplicit: true })
+              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activeExtensions: bctx.activeExtensions, requireExplicit: true })
               if (!target) return JSON.stringify({ ok: false, blocker: 'No matching skill found to select.' })
               persistSkillRuntimeState({ bctx, skill: target, action: 'select' })
               return JSON.stringify({
@@ -338,7 +338,7 @@ export function buildSkillRuntimeTools(bctx: ToolBuildContext): StructuredToolIn
               })
             }
             case 'load': {
-              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activePlugins: bctx.activePlugins })
+              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activeExtensions: bctx.activeExtensions })
               if (!target) return JSON.stringify({ ok: false, blocker: 'No selected or matching skill found to load.' })
               persistSkillRuntimeState({ bctx, skill: target, action: 'load' })
               return JSON.stringify({
@@ -349,13 +349,13 @@ export function buildSkillRuntimeTools(bctx: ToolBuildContext): StructuredToolIn
               })
             }
             case 'run': {
-              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activePlugins: bctx.activePlugins })
+              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activeExtensions: bctx.activeExtensions })
               if (!target) return JSON.stringify({ ok: false, blocker: 'No selected or matching skill found to run.' })
               persistSkillRuntimeState({ bctx, skill: target, action: 'select' })
               return dispatchSkillRun({ bctx, skill: target, rawArgs: normalized })
             }
             case 'explain_blocker': {
-              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activePlugins: bctx.activePlugins })
+              const target = await resolveTargetSkill({ rawArgs: normalized, snapshot, activeExtensions: bctx.activeExtensions })
               return JSON.stringify(explainSkillBlocker(target))
             }
             default:

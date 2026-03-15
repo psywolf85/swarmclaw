@@ -60,7 +60,7 @@ test('executeSessionChatTurn persists a visible error for disabled agents', () =
         disabled: false,
         createdAt: now,
         updatedAt: now,
-        plugins: ['memory'],
+        extensions: ['memory'],
       },
     })
 

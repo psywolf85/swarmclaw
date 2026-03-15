@@ -17,6 +17,14 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
 
 ## Release Notes
 
+### v1.1.2 Highlights
+
+- **Structured Sessions expanded into richer orchestration**: ProtocolRun-based sessions now support dependency-aware step graphs, reusable step outputs, and a broader advanced execution model on the same durable runtime instead of bringing back a separate orchestrator.
+- **Explicit Ollama local/cloud routing**: agents and sessions now persist the user-selected Ollama mode directly, so local Ollama no longer flips to cloud because of model naming or leftover credentials.
+- **Chat and runtime regression hardening**: live-streamed inline media, stale streaming cleanup, exact-output handling, and chat rendering bugs were tightened again, including the recent message-row and avatar rendering regressions.
+- **Nebius and DeepInfra as built-in providers**: both are now first-class providers with setup wizard entries, model discovery, and pre-configured defaults instead of requiring the custom provider workaround.
+- **`stream_options` resilience**: the OpenAI-compatible streaming handler now retries without `stream_options` if a provider rejects it with 400, fixing connectivity for strict endpoints.
+
 ### v1.1.1 Highlights
 
 - **Structured Sessions are now contextual**: start bounded structured runs from direct chats, chatrooms, tasks, missions, or schedules, including a new chatroom `/breakout` command that spins up a focused session from the current room with auto-filled participants and kickoff context.
@@ -40,7 +48,7 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
 ## What SwarmClaw Focuses On
 
 - **Delegation and background execution**: delegated work, subagents, durable jobs, checkpointing, and background task execution.
-- **Structured Sessions**: temporary bounded runs for one agent or many, launched from context and backed by durable templates, transcripts, outputs, operator controls, and chatroom breakout flows.
+- **Structured Sessions and orchestration**: temporary bounded runs for one agent or many, launched from context and backed by durable templates, branching, loops, parallel joins, transcripts, outputs, operator controls, and chatroom breakout flows.
 - **Autonomy and memory**: heartbeats, schedules, long-running execution, durable memory, reflection memory, human-context learning, document recall, and project-aware context.
 - **OpenClaw integration**: named gateway profiles, external runtimes, deploy helpers, config sync, approval handling, and OpenClaw agent file editing.
 - **Runtime skills**: pinned skills, OpenClaw-compatible `SKILL.md` import, on-demand skill execution, and configurable keyword or embedding-based recommendation.
@@ -120,10 +128,11 @@ Then open `http://localhost:3456`.
 
 ## Core Capabilities
 
-- **Providers**: OpenClaw, OpenAI, Anthropic, Ollama, Google, DeepSeek, Groq, Together, Mistral, xAI, Fireworks, plus compatible custom endpoints.
+- **Providers**: OpenClaw, OpenAI, Anthropic, Ollama, Google, DeepSeek, Groq, Together, Mistral, xAI, Fireworks, Nebius, DeepInfra, plus compatible custom endpoints.
 - **Delegation**: built-in delegation to Claude Code, Codex CLI, OpenCode CLI, Gemini CLI, and native SwarmClaw subagents.
 - **Autonomy**: heartbeat loops, schedules, background jobs, task execution, supervisor recovery, mission control, and agent wakeups.
-- **Structured Sessions**: contextual launch from chats, chatrooms, tasks, missions, and schedules, plus reusable templates, chatroom `/breakout`, and durable run state.
+- **Orchestration**: durable structured execution with branching, repeat loops, parallel branches, explicit joins, restart-safe run state, and contextual launch from chats, chatrooms, tasks, missions, schedules, and API flows.
+- **Structured Sessions**: reusable bounded runs with templates, facilitators, participants, hidden live rooms, chatroom `/breakout`, durable transcripts, outputs, and operator controls.
 - **Memory**: hybrid recall, graph traversal, journaling, durable documents, project-scoped context, automatic reflection memory, communication preferences, profile and boundary memory, significant events, and open follow-up loops.
 - **Wallets**: balances, transfers, signatures, EVM call/quote/swap flows, and approval-gated execution.
 - **Connectors**: Discord, Slack, Telegram, WhatsApp, Teams, Matrix, OpenClaw, and more.

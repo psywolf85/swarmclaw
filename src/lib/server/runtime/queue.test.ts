@@ -511,7 +511,7 @@ describe('cleanupFinishedTaskSessions', () => {
     tasks['t-done'] = makeTask({ id: 't-done', status: 'completed', sessionId })
     storage.saveTasks(tasks)
 
-    const sessions: Record<string, unknown> = {}
+    const sessions: Record<string, any> = {}
     sessions[sessionId] = {
       id: sessionId,
       agentId: 'a1',
@@ -536,7 +536,7 @@ describe('cleanupFinishedTaskSessions', () => {
     tasks['t-done2'] = makeTask({ id: 't-done2', status: 'completed', sessionId })
     storage.saveTasks(tasks)
 
-    const sessions: Record<string, unknown> = {}
+    const sessions: Record<string, any> = {}
     sessions[sessionId] = {
       id: sessionId,
       agentId: 'a1',
@@ -563,7 +563,7 @@ describe('disableSessionHeartbeat', () => {
   it('disables heartbeat on existing session', async () => {
     const storage = await import('@/lib/server/storage')
     const sessionId = 'sess-hb-1'
-    const sessions: Record<string, unknown> = {}
+    const sessions: Record<string, any> = {}
     sessions[sessionId] = {
       id: sessionId,
       agentId: 'a1',

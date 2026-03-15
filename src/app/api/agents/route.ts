@@ -79,6 +79,7 @@ export async function POST(req: Request) {
     systemPrompt: body.systemPrompt,
     provider: body.provider,
     model: body.model,
+    ollamaMode: body.provider === 'ollama' ? (body.ollamaMode || 'local') : null,
     credentialId: body.credentialId,
     fallbackCredentialIds: body.fallbackCredentialIds,
     apiEndpoint: normalizeProviderEndpoint(body.provider, body.apiEndpoint || null),
@@ -88,6 +89,7 @@ export async function POST(req: Request) {
     routingStrategy: body.routingStrategy,
     routingTargets: body.routingTargets?.map((target) => ({
       ...target,
+      ollamaMode: target.provider === 'ollama' ? (target.ollamaMode || 'local') : null,
       apiEndpoint: normalizeProviderEndpoint(target.provider, target.apiEndpoint || null),
     })),
     delegationEnabled: body.delegationEnabled ?? false,

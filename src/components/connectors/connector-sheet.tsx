@@ -550,16 +550,16 @@ export function ConnectorSheet() {
   }, [open])
 
   const ALL_PLATFORMS = useMemo(() => {
-    const plugins = dynamicPlatforms.map(p => ({
+    const extensionPlatforms = dynamicPlatforms.map(p => ({
       id: p.id,
       label: p.name,
       color: '#10B981',
-      setupSteps: [p.description || 'Follow the plugin instructions for setup.'],
-      tokenLabel: 'Plugin Token',
-      tokenHelp: 'Secret key required by this plugin connector.',
+      setupSteps: [p.description || 'Follow the extension instructions for setup.'],
+      tokenLabel: 'Extension Token',
+      tokenHelp: 'Secret key required by this extension connector.',
       configFields: [],
     }))
-    return [...PLATFORMS, ...plugins]
+    return [...PLATFORMS, ...extensionPlatforms]
   }, [dynamicPlatforms])
   const editingId = useAppStore((s) => s.editingConnectorId)
   const setEditingId = useAppStore((s) => s.setEditingConnectorId)

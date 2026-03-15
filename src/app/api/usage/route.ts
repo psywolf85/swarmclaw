@@ -50,7 +50,7 @@ export async function GET(req: Request) {
   let totalCost = 0
   const byAgent: Record<string, { name: string; cost: number; tokens: number; count: number }> = {}
   const byProvider: Record<string, { tokens: number; cost: number }> = {}
-  const byPlugin: Record<string, { definitionTokens: number; invocationTokens: number; invocations: number; estimatedCost: number }> = {}
+  const byExtension: Record<string, { definitionTokens: number; invocationTokens: number; invocations: number; estimatedCost: number }> = {}
   const bucketMap: Record<string, { tokens: number; cost: number }> = {}
 
   for (const r of records) {
@@ -76,21 +76,21 @@ export async function GET(req: Request) {
     byAgent[agentId].tokens += tokens
     byAgent[agentId].count += 1
 
-    // by plugin — definition costs (context overhead per LLM call)
-    if (Array.isArray(r.pluginDefinitionCosts)) {
-      for (const dc of r.pluginDefinitionCosts) {
-        if (!dc.pluginId) continue
-        if (!byPlugin[dc.pluginId]) byPlugin[dc.pluginId] = { definitionTokens: 0, invocationTokens: 0, invocations: 0, estimatedCost: 0 }
-        byPlugin[dc.pluginId].definitionTokens += dc.estimatedTokens || 0
+    // by extension — definition costs (context overhead per LLM call)
+    if (Array.isArray(r.extensionDefinitionCosts)) {
+      for (const dc of r.extensionDefinitionCosts) {
+        if (!dc.extensionId) continue
+        if (!byExtension[dc.extensionId]) byExtension[dc.extensionId] = { definitionTokens: 0, invocationTokens: 0, invocations: 0, estimatedCost: 0 }
+        byExtension[dc.extensionId].definitionTokens += dc.estimatedTokens || 0
       }
     }
 
-    // by plugin — invocation costs (actual tool calls)
-    if (Array.isArray(r.pluginInvocations)) {
-      for (const inv of r.pluginInvocations) {
-        if (!inv.pluginId) continue
-        if (!byPlugin[inv.pluginId]) byPlugin[inv.pluginId] = { definitionTokens: 0, invocationTokens: 0, invocations: 0, estimatedCost: 0 }
-        const p = byPlugin[inv.pluginId]
+    // by extension — invocation costs (actual tool calls)
+    if (Array.isArray(r.extensionInvocations)) {
+      for (const inv of r.extensionInvocations) {
+        if (!inv.extensionId) continue
+        if (!byExtension[inv.extensionId]) byExtension[inv.extensionId] = { definitionTokens: 0, invocationTokens: 0, invocations: 0, estimatedCost: 0 }
+        const p = byExtension[inv.extensionId]
         p.invocationTokens += (inv.inputTokens || 0) + (inv.outputTokens || 0)
         p.invocations += 1
       }
@@ -103,10 +103,10 @@ export async function GET(req: Request) {
     bucketMap[bk].cost += cost
   }
 
-  // Estimate per-plugin cost using the average input token rate from total usage
+  // Estimate per-extension cost using the average input token rate from total usage
   if (totalTokens > 0 && totalCost > 0) {
     const avgCostPerToken = totalCost / totalTokens
-    for (const p of Object.values(byPlugin)) {
+    for (const p of Object.values(byExtension)) {
       p.estimatedCost = Math.round((p.definitionTokens + p.invocationTokens) * avgCostPerToken * 10000) / 10000
     }
   }
@@ -173,7 +173,7 @@ export async function GET(req: Request) {
     totalCost: Math.round(totalCost * 10000) / 10000,
     byAgent,
     byProvider,
-    byPlugin,
+    byExtension,
     timeSeries,
     providerHealth,
   })

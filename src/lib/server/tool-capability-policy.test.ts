@@ -7,15 +7,15 @@ import {
 
 test('capability policy permissive mode allows non-blocked tools', () => {
   const decision = resolveSessionToolPolicy(['shell', 'web_search'], { capabilityPolicyMode: 'permissive' })
-  assert.deepEqual(decision.enabledPlugins, ['shell', 'web_search'])
-  assert.equal(decision.blockedPlugins.length, 0)
+  assert.deepEqual(decision.enabledExtensions, ['shell', 'web_search'])
+  assert.equal(decision.blockedExtensions.length, 0)
 })
 
 test('capability policy balanced mode blocks destructive delete_file', () => {
   const decision = resolveSessionToolPolicy(['files', 'delete_file'], { capabilityPolicyMode: 'balanced' })
-  assert.deepEqual(decision.enabledPlugins, ['files'])
-  assert.equal(decision.blockedPlugins.length, 1)
-  assert.equal(decision.blockedPlugins[0].tool, 'delete_file')
+  assert.deepEqual(decision.enabledExtensions, ['files'])
+  assert.equal(decision.blockedExtensions.length, 1)
+  assert.equal(decision.blockedExtensions[0].tool, 'delete_file')
 })
 
 test('capability policy strict mode blocks execution/platform families', () => {
@@ -23,9 +23,9 @@ test('capability policy strict mode blocks execution/platform families', () => {
     ['shell', 'manage_tasks', 'web_search', 'memory'],
     { capabilityPolicyMode: 'strict' },
   )
-  assert.deepEqual(decision.enabledPlugins, ['web_search', 'memory'])
-  assert.equal(decision.blockedPlugins.some((entry) => entry.tool === 'shell'), true)
-  assert.equal(decision.blockedPlugins.some((entry) => entry.tool === 'manage_tasks'), true)
+  assert.deepEqual(decision.enabledExtensions, ['web_search', 'memory'])
+  assert.equal(decision.blockedExtensions.some((entry) => entry.tool === 'shell'), true)
+  assert.equal(decision.blockedExtensions.some((entry) => entry.tool === 'manage_tasks'), true)
 })
 
 test('capability policy respects explicit allow overrides', () => {
@@ -36,7 +36,7 @@ test('capability policy respects explicit allow overrides', () => {
       capabilityAllowedTools: ['shell'],
     },
   )
-  assert.deepEqual(decision.enabledPlugins, ['shell', 'web_search'])
+  assert.deepEqual(decision.enabledExtensions, ['shell', 'web_search'])
 })
 
 test('concrete tool checks inherit blocked family rules', () => {
@@ -66,17 +66,17 @@ test('task and project management can be disabled from app settings', () => {
     },
   )
 
-  assert.deepEqual(decision.enabledPlugins, ['manage_platform'])
+  assert.deepEqual(decision.enabledExtensions, ['manage_platform'])
   assert.equal(
-    decision.blockedPlugins.some((entry) => entry.tool === 'manage_tasks' && /disabled in app settings/.test(entry.reason)),
+    decision.blockedExtensions.some((entry) => entry.tool === 'manage_tasks' && /disabled in app settings/.test(entry.reason)),
     true,
   )
   assert.equal(
-    decision.blockedPlugins.some((entry) => entry.tool === 'manage_projects' && /disabled in app settings/.test(entry.reason)),
+    decision.blockedExtensions.some((entry) => entry.tool === 'manage_projects' && /disabled in app settings/.test(entry.reason)),
     true,
   )
   assert.match(
-    resolveConcreteToolPolicyBlock('manage_tasks', decision as "allow" | "deny" | "review", { taskManagementEnabled: false }),
+    resolveConcreteToolPolicyBlock('manage_tasks', decision, { taskManagementEnabled: false })!,
     /task management is disabled/i,
   )
 })

@@ -3,7 +3,7 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { genId } from '@/lib/id'
 import { loadSessions, saveSessions, loadAgents } from '../storage'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { getEnabledCapabilitySelection } from '@/lib/capability-selection'
@@ -47,6 +47,9 @@ function inferSessionsAction(
   return 'list'
 }
 
+/** @deprecated Use sessions_tool with action "identity" instead */
+export { executeWhoAmI }
+
 async function executeSessionsAction(args: any, context: { sessionId?: string; agentId?: string; cwd: string }) {
   const normalized = normalizeToolInputArgs((args ?? {}) as Record<string, unknown>)
   const action = inferSessionsAction(normalized, context)
@@ -57,6 +60,9 @@ async function executeSessionsAction(args: any, context: { sessionId?: string; a
   const name = normalized.name as string | undefined
   const updates = normalized.updates as Record<string, unknown> | undefined
   try {
+    if (action === 'identity' || action === 'whoami') {
+      return executeWhoAmI(context)
+    }
     const sessions = loadSessions()
     if (action === 'list') {
       return JSON.stringify(Object.values(sessions).slice(0, limit || 50).map((s: any) => ({ id: s.id, name: s.name })))
@@ -121,29 +127,23 @@ async function executeSessionsAction(args: any, context: { sessionId?: string; a
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const SessionInfoPlugin: Plugin = {
+const SessionInfoExtension: Extension = {
   name: 'Core Session Info',
   description: 'Identify current session context and manage other agent sessions.',
   hooks: {
-    getCapabilityDescription: () => 'I can manage chat sessions (`manage_sessions`, `sessions_tool`, `whoami_tool`, `search_history_tool`) — check my identity, look up past conversations, message other sessions, and coordinate work.',
+    getCapabilityDescription: () => 'I can manage chat sessions (`sessions_tool`) — check my identity with action `identity`, look up past conversations, spawn sessions, and coordinate work.',
     getOperatingGuidance: () => 'Inspect existing chats before creating duplicates.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
-      name: 'whoami_tool',
-      description: 'Return identity/runtime context for this agent execution.',
-      parameters: { type: 'object', properties: {} },
-      execute: async (args, context) => executeWhoAmI({ sessionId: context.session.id, agentId: context.session.agentId ?? undefined })
-    },
-    {
       name: 'sessions_tool',
-      description: 'Manage and interact with other sessions.',
+      description: 'Manage sessions and check identity. Actions: identity (whoami), list, history, spawn, update.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['list', 'history', 'spawn', 'status', 'stop', 'update'] },
+          action: { type: 'string', enum: ['identity', 'list', 'history', 'spawn', 'status', 'stop', 'update'] },
           sessionId: { type: 'string' },
           agentId: { type: 'string' },
           message: { type: 'string' },
@@ -157,21 +157,17 @@ const SessionInfoPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('session_info', SessionInfoPlugin)
+registerNativeCapability('session_info', SessionInfoExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildSessionInfoTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('manage_sessions')) return []
+  if (!bctx.hasExtension('manage_sessions')) return []
   return [
     tool(
-      async () => executeWhoAmI({ sessionId: bctx.ctx?.sessionId || undefined, agentId: bctx.ctx?.agentId || undefined }),
-      { name: 'whoami_tool', description: SessionInfoPlugin.tools![0].description, schema: z.object({}).passthrough() }
-    ),
-    tool(
       async (args) => executeSessionsAction(args, { sessionId: bctx.ctx?.sessionId || undefined, agentId: bctx.ctx?.agentId || undefined, cwd: bctx.cwd }),
-      { name: 'sessions_tool', description: SessionInfoPlugin.tools![1].description, schema: z.object({}).passthrough() }
+      { name: 'sessions_tool', description: SessionInfoExtension.tools![0].description, schema: z.object({}).passthrough() }
     )
   ]
 }

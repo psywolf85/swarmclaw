@@ -1614,13 +1614,20 @@ export async function processNext() {
             }
           }
 
-          const retryState = scheduleRetryOrDeadLetter(t2[taskId], errMsg.slice(0, 500) || 'Unknown error')
-          if (!t2[taskId].comments) t2[taskId].comments = []
+          // Reload tasks after the async repair turn to avoid overwriting concurrent mutations
+          const t3 = loadTasks()
+          // Carry forward repair fields that were saved before the async turn
+          if (t2[taskId].repairRunId && t3[taskId]) {
+            t3[taskId].repairRunId = t2[taskId].repairRunId
+            t3[taskId].lastRepairAttemptAt = t2[taskId].lastRepairAttemptAt
+          }
+          const retryState = scheduleRetryOrDeadLetter(t3[taskId], errMsg.slice(0, 500) || 'Unknown error')
+          if (!t3[taskId].comments) t3[taskId].comments = []
           // Only add a failure comment if the last comment isn't already an error comment
-          const lastComment = t2[taskId].comments!.at(-1)
+          const lastComment = t3[taskId].comments!.at(-1)
           const isRepeatError = lastComment?.agentId === agent.id && lastComment?.text.startsWith('Task failed')
           if (!isRepeatError) {
-            t2[taskId].comments!.push({
+            t3[taskId].comments!.push({
               id: genId(),
               author: agent.name,
               agentId: agent.id,
@@ -1628,22 +1635,22 @@ export async function processNext() {
               createdAt: Date.now(),
             })
           }
-          saveTasks(t2)
-          if (t2[taskId].status === 'failed') {
-            noteMissionTaskFinished(t2[taskId], 'failed', taskRunId)
-          } else if (t2[taskId].status === 'cancelled') {
-            noteMissionTaskFinished(t2[taskId], 'cancelled', taskRunId)
+          saveTasks(t3)
+          if (t3[taskId].status === 'failed') {
+            noteMissionTaskFinished(t3[taskId], 'failed', taskRunId)
+          } else if (t3[taskId].status === 'cancelled') {
+            noteMissionTaskFinished(t3[taskId], 'cancelled', taskRunId)
           }
           notify('tasks')
           notify('runs')
-          disableSessionHeartbeat(t2[taskId].sessionId)
+          disableSessionHeartbeat(t3[taskId].sessionId)
           if (retryState === 'retry') {
             const qRetry = loadQueue()
             pushQueueUnique(qRetry, taskId)
             saveQueue(qRetry)
             pushMainLoopEventToMainSessions({
               type: 'task_retry_scheduled',
-              text: `Task retry scheduled: "${task.title}" (${taskId}) attempt ${t2[taskId].attempts}/${t2[taskId].maxAttempts}.`,
+              text: `Task retry scheduled: "${task.title}" (${taskId}) attempt ${t3[taskId].attempts}/${t3[taskId].maxAttempts}.`,
             })
           }
         }
@@ -1780,6 +1787,7 @@ export function recoverStalledRunningTasks(): { recovered: number; deadLettered:
 let _resumeQueueCalled = false
 
 export function claimPoolTask(taskId: string, agentId: string): { success: boolean; error?: string } {
+  // Atomic read-check-write: reload fresh state to prevent concurrent double-claims
   const tasks = loadTasks() as Record<string, BoardTask>
   const task = tasks[taskId]
   if (!task) return { success: false, error: 'Task not found' }
@@ -1795,6 +1803,11 @@ export function claimPoolTask(taskId: string, agentId: string): { success: boole
   task.agentId = agentId
   task.updatedAt = Date.now()
   saveTasks(tasks)
+  // Re-read to verify our write won — if another agent claimed between our read and write, revert
+  const verify = loadTasks() as Record<string, BoardTask>
+  if (verify[taskId]?.claimedByAgentId !== agentId) {
+    return { success: false, error: `Task was claimed concurrently by ${verify[taskId]?.claimedByAgentId}` }
+  }
   notify('tasks')
   return { success: true }
 }

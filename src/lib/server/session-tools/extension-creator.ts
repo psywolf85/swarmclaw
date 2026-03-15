@@ -4,28 +4,28 @@ import fs from 'fs'
 import path from 'path'
 import { DATA_DIR } from '../data-dir'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
 import { getEnabledExtensionIds } from '@/lib/capability-selection'
 
-const PLUGINS_DIR = path.join(DATA_DIR, 'plugins')
+const EXTENSIONS_DIR = path.join(DATA_DIR, 'extensions')
 
 /**
- * Core Plugin Creator Execution Logic
+ * Core Extension Creator Execution Logic
  */
-interface PluginCreatorContext {
+interface ExtensionCreatorContext {
   agentId?: string | null
   sessionId?: string | null
 }
 
-async function executePluginCreatorAction(args: Record<string, unknown>, ctxOrBctx?: ToolBuildContext | PluginCreatorContext) {
+async function executeExtensionCreatorAction(args: Record<string, unknown>, ctxOrBctx?: ToolBuildContext | ExtensionCreatorContext) {
   const normalized = normalizeToolInputArgs(args)
   // Normalize context from either ToolBuildContext or simple { agentId, sessionId }
-  const pctx: PluginCreatorContext = ctxOrBctx && 'ctx' in ctxOrBctx
+  const pctx: ExtensionCreatorContext = ctxOrBctx && 'ctx' in ctxOrBctx
     ? { agentId: (ctxOrBctx as ToolBuildContext).ctx?.agentId, sessionId: (ctxOrBctx as ToolBuildContext).ctx?.sessionId }
-    : (ctxOrBctx as PluginCreatorContext) || {}
+    : (ctxOrBctx as ExtensionCreatorContext) || {}
   const action = normalized.action as string | undefined
   const filename = (normalized.filename ?? normalized.fileName) as string | undefined
   const code = (normalized.code ?? normalized.content) as string | undefined
@@ -33,23 +33,23 @@ async function executePluginCreatorAction(args: Record<string, unknown>, ctxOrBc
   const packageManager = typeof normalized.packageManager === 'string' ? normalized.packageManager : undefined
 
   try {
-    if (!fs.existsSync(PLUGINS_DIR)) {
-      fs.mkdirSync(PLUGINS_DIR, { recursive: true })
+    if (!fs.existsSync(EXTENSIONS_DIR)) {
+      fs.mkdirSync(EXTENSIONS_DIR, { recursive: true })
     }
 
     if (action === 'scaffold') {
       if (!filename || !code) return 'Error: filename and code are required for scaffold.'
       if (!filename.endsWith('.js')) return 'Error: filename must end with .js'
 
-      const manager = getPluginManager()
-      await manager.savePluginSource(filename, code, {
+      const manager = getExtensionManager()
+      await manager.saveExtensionSource(filename, code, {
         packageJson,
         packageManager,
         installDependencies: packageJson !== undefined,
       })
-      const filePath = path.join(PLUGINS_DIR, filename)
+      const filePath = path.join(EXTENSIONS_DIR, filename)
 
-      // Auto-enable the plugin for the agent that created it
+      // Auto-enable the extension for the agent that created it
       if (pctx.agentId && pctx.sessionId) {
         try {
           const { loadSessions, saveSessions } = await import('../storage')
@@ -66,30 +66,30 @@ async function executePluginCreatorAction(args: Record<string, unknown>, ctxOrBc
       }
 
       return JSON.stringify({
-        type: 'plugin_scaffold_result',
+        type: 'extension_scaffold_result',
         filename,
         filePath,
-        message: `Plugin "${filename}" was scaffolded and reloaded successfully.`,
+        message: `Extension "${filename}" was scaffolded and reloaded successfully.`,
       })
     }
 
     if (action === 'install_dependencies') {
       if (!filename) return 'Error: filename is required for install_dependencies.'
 
-      const manager = getPluginManager()
+      const manager = getExtensionManager()
       if (packageJson !== undefined) {
-        const source = manager.readPluginSource(filename)
-        await manager.savePluginSource(filename, source, {
+        const source = manager.readExtensionSource(filename)
+        await manager.saveExtensionSource(filename, source, {
           packageJson,
           packageManager,
           installDependencies: false,
         })
       }
-      const result = await manager.installPluginDependencies(filename, {
-        packageManager: packageManager as import('@/types').PluginPackageManager | undefined,
+      const result = await manager.installExtensionDependencies(filename, {
+        packageManager: packageManager as import('@/types').ExtensionPackageManager | undefined,
       })
       return JSON.stringify({
-        type: 'plugin_install_result',
+        type: 'extension_install_result',
         filename,
         packageManager: result.packageManager || packageManager || 'npm',
         message: `Dependencies installed for "${filename}".`,
@@ -98,14 +98,14 @@ async function executePluginCreatorAction(args: Record<string, unknown>, ctxOrBc
 
     if (action === 'get_spec') {
       return `
-SwarmClaw Plugin Specification:
-A plugin is a JavaScript module (.js or .mjs) that can be dual-compatible with both SwarmClaw and OpenClaw platforms.
+SwarmClaw Extension Specification:
+An extension is a JavaScript module (.js or .mjs) that can be dual-compatible with both SwarmClaw and OpenClaw platforms.
 
 \`\`\`js
 module.exports = {
   // --- Metadata ---
-  id: 'my-plugin',
-  name: 'My Plugin',           // Required
+  id: 'my-extension',
+  name: 'My Extension',           // Required
   description: 'What it does',
   version: '1.0.0',
   openclaw: true,              // Mark as OpenClaw-compatible
@@ -149,7 +149,7 @@ module.exports = {
       parameters: { type: 'object', properties: { input: { type: 'string' } } },
       execute: (args) => 'Result: ' + args.input
     });
-    api.log.info('Plugin activated');
+    api.log.info('Extension activated');
   },
 };
 \`\`\`
@@ -159,36 +159,36 @@ Key rules:
 - SwarmClaw checks hooks/tools first; OpenClaw checks register()
 - Tools must have name, description, parameters (JSON Schema), and execute function
 - Hooks are optional — only include the ones you need
-- If your plugin needs npm/pnpm/yarn/bun packages, include a packageJson object during scaffold or call install_dependencies later.
-- Dependency installs are run by the plugin manager inside a per-plugin workspace using the selected package manager with scripts disabled.
-- Plugin settings are declared through ui.settingsFields and stored per plugin ID
-- Keep plugins focused: one clear purpose per plugin
+- If your extension needs npm/pnpm/yarn/bun packages, include a packageJson object during scaffold or call install_dependencies later.
+- Dependency installs are run by the extension manager inside a per-extension workspace using the selected package manager with scripts disabled.
+- Extension settings are declared through ui.settingsFields and stored per extension ID
+- Keep extensions focused: one clear purpose per extension
 `
     }
 
     if (action === 'read') {
       if (!filename) return 'Error: filename required.'
-      return getPluginManager().readPluginSource(filename)
+      return getExtensionManager().readExtensionSource(filename)
     }
 
     if (action === 'edit') {
       if (!filename || !code) return 'Error: filename and code are required for edit.'
-      const manager = getPluginManager()
+      const manager = getExtensionManager()
       try {
-        manager.readPluginSource(filename)
+        manager.readExtensionSource(filename)
       } catch {
-        return `File not found: ${filename}. Use scaffold to create new plugins.`
+        return `File not found: ${filename}. Use scaffold to create new extensions.`
       }
-      await manager.savePluginSource(filename, code)
-      return `Updated ${filename} and reloaded plugin manager.`
+      await manager.saveExtensionSource(filename, code)
+      return `Updated ${filename} and reloaded extension manager.`
     }
 
     if (action === 'delete') {
       if (!filename) return 'Error: filename required.'
-      const filePath = path.join(PLUGINS_DIR, filename)
+      const filePath = path.join(EXTENSIONS_DIR, filename)
       if (fs.existsSync(filePath)) {
         fs.unlinkSync(filePath)
-        getPluginManager().reload()
+        getExtensionManager().reload()
         return `Deleted ${filename} and reloaded manager.`
       }
       return `File not found: ${filename}`
@@ -201,30 +201,31 @@ Key rules:
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const PluginCreatorPlugin: Plugin = {
-  name: 'Plugin Creator',
-  description: 'Design focused SwarmClaw plugins for durable capabilities and recurring automations.',
+const ExtensionCreatorExtension: Extension = {
+  name: 'Extension Creator',
+  enabledByDefault: false,
+  description: 'Design focused SwarmClaw extensions for durable capabilities and recurring automations.',
   hooks: {
-    getCapabilityDescription: () => 'I can scaffold focused plugins (`plugin_creator_tool`) when a capability should become durable instead of living in a one-off sandbox script.',
+    getCapabilityDescription: () => 'I can scaffold focused extensions (`extension_creator`) when a capability should become a durable extension instead of living in a one-off sandbox script.',
     getOperatingGuidance: () => [
-      'For recurring or scheduled automations, prefer a focused plugin plus `manage_schedules` over repeated sandbox runs.',
-      'Put API keys in plugin settings or SwarmClaw secrets instead of hardcoding them in plugin source.',
-      'Call `get_spec` before scaffolding so the plugin follows the current contract.',
+      'For recurring or scheduled automations, prefer a focused extension plus `manage_schedules` over repeated sandbox runs.',
+      'Put API keys in extension settings or SwarmClaw secrets instead of hardcoding them in extension source.',
+      'Call `get_spec` before scaffolding so the extension follows the current contract.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
-      name: 'plugin_creator_tool',
-      description: 'Create, read, edit, delete, or get the spec for writing new SwarmClaw plugins. Always call get_spec first to learn the correct plugin format.',
+      name: 'extension_creator_tool',
+      description: 'Create, read, edit, delete, or get the spec for writing new SwarmClaw extensions. Always call get_spec first to learn the correct format.',
       parameters: {
         type: 'object',
         properties: {
           action: { type: 'string', enum: ['get_spec', 'scaffold', 'read', 'edit', 'delete', 'install_dependencies'], description: 'get_spec: learn format. scaffold: create. read: view code. edit: update existing. delete: remove. install_dependencies: write/read package.json and install runtime deps.' },
-          filename: { type: 'string', description: 'Plugin filename, e.g. my-plugin.js. Required for scaffold and delete.' },
-          code: { type: 'string', description: 'The raw JavaScript code for the plugin. Required for scaffold.' },
-          packageJson: { type: 'object', description: 'Optional package.json object for dependency-aware plugins. Use with scaffold or install_dependencies.' },
+          filename: { type: 'string', description: 'Extension filename, e.g. my-extension.js. Required for scaffold and delete.' },
+          code: { type: 'string', description: 'The raw JavaScript code for the extension. Required for scaffold.' },
+          packageJson: { type: 'object', description: 'Optional package.json object for dependency-aware extensions. Use with scaffold or install_dependencies.' },
           packageManager: { type: 'string', enum: ['npm', 'pnpm', 'yarn', 'bun'], description: 'Optional package manager to use for dependency installs.' }
         },
         required: ['action']
@@ -232,7 +233,7 @@ const PluginCreatorPlugin: Plugin = {
       execute: async (args, ctx) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const session = (ctx as any)?.session
-        return executePluginCreatorAction(
+        return executeExtensionCreatorAction(
           args as Record<string, unknown>,
           { agentId: session?.agentId as string | undefined, sessionId: session?.id as string | undefined }
         )
@@ -241,19 +242,19 @@ const PluginCreatorPlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('plugin_creator', PluginCreatorPlugin)
+getExtensionManager().registerBuiltin('extension_creator', ExtensionCreatorExtension)
 
 /**
  * Legacy Bridge
  */
-export function buildPluginCreatorTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('plugin_creator')) return []
+export function buildExtensionCreatorTools(bctx: ToolBuildContext): StructuredToolInterface[] {
+  if (!bctx.hasExtension('extension_creator')) return []
   return [
     tool(
-      async (args) => executePluginCreatorAction(args, bctx),
+      async (args) => executeExtensionCreatorAction(args, bctx),
       {
-        name: 'plugin_creator_tool',
-        description: PluginCreatorPlugin.tools![0].description,
+        name: 'extension_creator_tool',
+        description: ExtensionCreatorExtension.tools![0].description,
         schema: z.object({
           action: z.enum(['get_spec', 'scaffold', 'read', 'edit', 'delete', 'install_dependencies']),
           filename: z.string().optional(),

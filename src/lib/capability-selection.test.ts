@@ -11,7 +11,7 @@ import {
 } from '@/lib/capability-selection'
 
 describe('capability selection helpers', () => {
-  it('splits legacy plugin arrays into tools and extensions', () => {
+  it('splits legacy extension arrays into tools and extensions', () => {
     const result = splitCapabilityIds(['memory', 'custom-tool.js', 'connectors', 'custom-tool.js'])
     assert.deepEqual(result.tools, ['memory', 'connectors'])
     assert.deepEqual(result.extensions, ['custom-tool.js'])

@@ -60,7 +60,7 @@ describe('heartbeat-service scheduling', () => {
           heartbeatIntervalSec: 1,
           createdAt: now,
           updatedAt: now,
-          plugins: [],
+          extensions: [],
         },
       })
       storage.saveSessions({
@@ -124,7 +124,7 @@ describe('heartbeat-service scheduling', () => {
           heartbeatPrompt: 'Reply HEARTBEAT_OK if idle.',
           createdAt: now,
           updatedAt: now,
-          plugins: [],
+          extensions: [],
         },
       })
       storage.saveSessions({

@@ -1,4 +1,5 @@
-import { isOllamaCloudModel, stripOllamaCloudModelSuffix } from '@/lib/ollama-model'
+import { stripOllamaCloudModelSuffix } from '@/lib/ollama-model'
+import { isOllamaCloudEndpoint, resolveStoredOllamaMode } from '@/lib/ollama-mode'
 import { PROVIDER_DEFAULTS } from '@/lib/providers/provider-defaults'
 
 const OLLAMA_CLOUD_KEY_ENV_VARS = ['OLLAMA_API_KEY', 'OLLAMA_CLOUD_API_KEY'] as const
@@ -7,16 +8,6 @@ function clean(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
   const trimmed = value.trim()
   return trimmed || null
-}
-
-function isOllamaCloudEndpoint(endpoint: string | null | undefined): boolean {
-  const normalized = clean(endpoint)
-  if (!normalized) return false
-  return /^https?:\/\/(?:www\.|api\.)?ollama\.com(?:\/|$)/i.test(normalized)
-}
-
-function hasExplicitEndpoint(endpoint: string | null | undefined): boolean {
-  return clean(endpoint) !== null
 }
 
 export function resolveOllamaCloudApiKey(explicitApiKey?: string | null): string | null {
@@ -31,6 +22,7 @@ export function resolveOllamaCloudApiKey(explicitApiKey?: string | null): string
 
 export function resolveOllamaRuntimeConfig(input: {
   model?: string | null
+  ollamaMode?: string | null
   apiKey?: string | null
   apiEndpoint?: string | null
 }): {
@@ -42,17 +34,20 @@ export function resolveOllamaRuntimeConfig(input: {
   const rawModel = clean(input.model) || ''
   const explicitApiKey = clean(input.apiKey)
   const explicitEndpoint = clean(input.apiEndpoint)
+  const ollamaMode = resolveStoredOllamaMode({
+    ollamaMode: input.ollamaMode ?? null,
+    apiEndpoint: explicitEndpoint,
+  })
   const cloudApiKey = resolveOllamaCloudApiKey(explicitApiKey)
-  const useCloud = isOllamaCloudEndpoint(explicitEndpoint)
-    || (!hasExplicitEndpoint(explicitEndpoint) && (
-      Boolean(explicitApiKey && explicitApiKey !== 'ollama')
-      || (isOllamaCloudModel(rawModel) && Boolean(cloudApiKey))
-    ))
+  const useCloud = ollamaMode === 'cloud'
+  const endpoint = useCloud
+    ? (isOllamaCloudEndpoint(explicitEndpoint) ? explicitEndpoint! : PROVIDER_DEFAULTS.ollamaCloud)
+    : (explicitEndpoint && !isOllamaCloudEndpoint(explicitEndpoint) ? explicitEndpoint : PROVIDER_DEFAULTS.ollama)
 
   return {
     model: useCloud ? (stripOllamaCloudModelSuffix(rawModel) || rawModel) : rawModel,
     useCloud,
-    apiKey: useCloud ? cloudApiKey : explicitApiKey,
-    endpoint: useCloud ? PROVIDER_DEFAULTS.ollamaCloud : (explicitEndpoint || PROVIDER_DEFAULTS.ollama),
+    apiKey: useCloud ? cloudApiKey : null,
+    endpoint,
   }
 }

@@ -23,7 +23,7 @@ import { AdvancedSettingsSection } from '@/components/shared/advanced-settings-s
 import { SoulLibraryPicker } from './soul-library-picker'
 import { HintTip } from '@/components/shared/hint-tip'
 import { StatusDot } from '@/components/ui/status-dot'
-import { isOllamaCloudModel } from '@/lib/ollama-model'
+import { resolveStoredOllamaMode } from '@/lib/ollama-mode'
 import { errorMessage } from '@/lib/shared-utils'
 import { getDefaultAgentToolIds } from '@/lib/agent-default-tools'
 import { getEnabledExtensionIds, getEnabledToolIds } from '@/lib/capability-selection'
@@ -40,6 +40,8 @@ const AUTO_SYNC_MODEL_PROVIDER_IDS = new Set<ProviderType>([
   'mistral',
   'xai',
   'fireworks',
+  'nebius',
+  'deepinfra',
   'ollama',
 ])
 const CONNECTION_TEST_TIMEOUT_MS = 40_000
@@ -208,6 +210,7 @@ export function AgentSheet() {
   const [delegationTargetAgentIds, setDelegationTargetAgentIds] = useState<string[]>([])
   const [tools, setTools] = useState<string[]>([])
   const [extensions, setExtensions] = useState<string[]>([])
+  const [enabledExtensionIds, setEnabledExtensionIds] = useState<Set<string> | null>(null)
   const [skills, setSkills] = useState<string[]>([])
   const [skillIds, setSkillIds] = useState<string[]>([])
   const [mcpServerIds, setMcpServerIds] = useState<string[]>([])
@@ -318,6 +321,7 @@ export function AgentSheet() {
     providerId: ProviderType,
     nextCredentialId: string | null,
     nextEndpoint: string | null,
+    nextOllamaMode: 'local' | 'cloud',
     force = false,
   ): Promise<{ synced: boolean; models: string[] } | null> => {
     if (openclawEnabled) return null
@@ -329,6 +333,7 @@ export function AgentSheet() {
       providerId,
       credentialId: nextCredentialId,
       endpoint: nextEndpoint,
+      ollamaMode: providerId === 'ollama' ? nextOllamaMode : null,
       force,
     })
 
@@ -363,11 +368,11 @@ export function AgentSheet() {
     const requiresCredential = currentProvider.requiresApiKey || (provider === 'ollama' && ollamaMode === 'cloud')
     if (requiresCredential && !credentialId) return
 
-    const syncKey = `${provider}::${credentialId || ''}::${apiEndpoint?.trim() || ''}`
+    const syncKey = `${provider}::${credentialId || ''}::${apiEndpoint?.trim() || ''}::${provider === 'ollama' ? ollamaMode : ''}`
     if (lastAutoSyncedModelsKeyRef.current === syncKey) return
     lastAutoSyncedModelsKeyRef.current = syncKey
 
-    void syncLiveProviderModels(provider, credentialId, apiEndpoint, false).catch(() => {})
+    void syncLiveProviderModels(provider, credentialId, apiEndpoint, ollamaMode, false).catch(() => {})
   }, [apiEndpoint, credentialId, currentProvider, ollamaMode, open, openclawEnabled, provider, syncLiveProviderModels])
 
   useEffect(() => {
@@ -379,6 +384,10 @@ export function AgentSheet() {
       loadSkills()
       loadProjects()
       loadClaudeSkills()
+      // Fetch enabled extension IDs so we can filter tool toggles
+      api<{ enabledExtensionIds: string[] }>('GET', '/extensions/builtins')
+        .then((res) => { if (res?.enabledExtensionIds) setEnabledExtensionIds(new Set(res.enabledExtensionIds)) })
+        .catch(() => {})
       setTestStatus('idle')
       setTestMessage('')
       setShowAdvancedSettings(false)
@@ -410,11 +419,10 @@ export function AgentSheet() {
         setFallbackCredentialIds(editing.fallbackCredentialIds || [])
         setCapabilities(Array.isArray(editing.capabilities) ? editing.capabilities : [])
         setCapInput('')
-        setOllamaMode(
-          editing.provider === 'ollama' && (Boolean(editing.credentialId) || isOllamaCloudModel(editing.model))
-            ? 'cloud'
-            : 'local'
-        )
+        setOllamaMode(resolveStoredOllamaMode({
+          ollamaMode: editing.ollamaMode ?? null,
+          apiEndpoint: editing.apiEndpoint ?? null,
+        }))
         setOpenclawEnabled(editing.provider === 'openclaw')
         setProjectId(editing.projectId)
         setAvatarSeed(editing.avatarSeed || crypto.randomUUID().slice(0, 8))
@@ -605,6 +613,7 @@ export function AgentSheet() {
       role: routingTargets.length === 0 ? 'primary' : 'backup',
       provider,
       model,
+      ollamaMode: provider === 'ollama' ? ollamaMode : null,
       credentialId,
       fallbackCredentialIds,
       apiEndpoint,
@@ -648,6 +657,7 @@ export function AgentSheet() {
       systemPrompt,
       provider,
       model,
+      ollamaMode: provider === 'ollama' ? ollamaMode : null,
       credentialId,
       apiEndpoint: normalizedEndpoint,
       gatewayProfileId,
@@ -656,6 +666,12 @@ export function AgentSheet() {
       routingStrategy,
       routingTargets: routingTargets.map((target, index) => ({
         ...target,
+        ollamaMode: target.provider === 'ollama'
+          ? resolveStoredOllamaMode({
+            ollamaMode: target.ollamaMode ?? null,
+            apiEndpoint: target.apiEndpoint ?? null,
+          })
+          : null,
         preferredGatewayTags: parseGatewayTagList(formatGatewayTagList(target.preferredGatewayTags)),
         preferredGatewayUseCase: target.preferredGatewayUseCase || null,
         priority: typeof target.priority === 'number' ? target.priority : index + 1,
@@ -750,6 +766,7 @@ export function AgentSheet() {
         description: editing.description || undefined,
         provider: editing.provider,
         model: editing.model,
+        ollamaMode: editing.provider === 'ollama' ? (editing.ollamaMode || 'local') : null,
         credentialId: editing.credentialId || null,
         fallbackCredentialIds: editing.fallbackCredentialIds || [],
         apiEndpoint: editing.apiEndpoint || null,
@@ -810,6 +827,7 @@ export function AgentSheet() {
         credentialId,
         endpoint: apiEndpoint,
         model,
+        ollamaMode: provider === 'ollama' ? ollamaMode : null,
       }, {
         timeoutMs: CONNECTION_TEST_TIMEOUT_MS,
       })
@@ -817,7 +835,7 @@ export function AgentSheet() {
       if (result.ok) {
         let syncedModels: string[] = []
         try {
-          const synced = await syncLiveProviderModels(provider, credentialId, apiEndpoint, true)
+          const synced = await syncLiveProviderModels(provider, credentialId, apiEndpoint, ollamaMode, true)
           syncedModels = synced?.models || []
         } catch {
           // Best-effort: a passing connection test should still pass if model sync fails.
@@ -1347,6 +1365,7 @@ export function AgentSheet() {
             defaultModels={currentProvider.defaultModels}
             credentialId={credentialId}
             apiEndpoint={apiEndpoint}
+            ollamaMode={provider === 'ollama' ? ollamaMode : null}
             supportsDiscovery={currentProvider.supportsModelDiscovery}
             className={`${inputClass} cursor-pointer`}
           />
@@ -1446,7 +1465,7 @@ export function AgentSheet() {
                           const cred = await api<{ id: string }>('POST', '/credentials', { provider, name: newKeyName.trim() || `${provider} key`, apiKey: newKeyValue.trim() })
                           await loadCredentials()
                           setCredentialId(cred.id)
-                          const synced = await syncLiveProviderModels(provider, cred.id, apiEndpoint, true).catch(() => null)
+                          const synced = await syncLiveProviderModels(provider, cred.id, apiEndpoint, ollamaMode, true).catch(() => null)
                           setAddingKey(false)
                           setNewKeyName('')
                           setNewKeyValue('')
@@ -1876,7 +1895,20 @@ export function AgentSheet() {
                   </select>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  <select value={target.provider} onChange={(e) => updateRoutingTarget(target.id, { provider: e.target.value as ProviderType, gatewayProfileId: e.target.value === 'openclaw' ? target.gatewayProfileId : null })} className={inputClass}>
+                  <select
+                    value={target.provider}
+                    onChange={(e) => updateRoutingTarget(target.id, {
+                      provider: e.target.value as ProviderType,
+                      gatewayProfileId: e.target.value === 'openclaw' ? target.gatewayProfileId : null,
+                      ollamaMode: e.target.value === 'ollama'
+                        ? resolveStoredOllamaMode({
+                          ollamaMode: target.ollamaMode ?? null,
+                          apiEndpoint: target.apiEndpoint ?? null,
+                        })
+                        : null,
+                    })}
+                    className={inputClass}
+                  >
                     {providers.map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
@@ -2024,20 +2056,26 @@ export function AgentSheet() {
           <label className="block font-display text-[12px] font-600 text-text-2 uppercase tracking-[0.08em] mb-2">Tools</label>
           <p className="text-[12px] text-text-3/60 mb-3">Enable built-in tool families for this agent.</p>
           <div className="space-y-3">
-            {AVAILABLE_TOOLS.map((t) => (
-              <label key={t.id} className="flex items-center gap-3 cursor-pointer">
-                <div
-                  onClick={() => setTools((prev) => prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id])}
-                  className={`w-11 h-6 rounded-full transition-all duration-200 relative cursor-pointer shrink-0
-                    ${tools.includes(t.id) ? 'bg-accent-bright' : 'bg-white/[0.08]'}`}
-                >
-                  <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-200
-                    ${tools.includes(t.id) ? 'left-[22px]' : 'left-0.5'}`} />
-                </div>
-                <span className="font-display text-[14px] font-600 text-text-2">{t.label}</span>
-                <span className="text-[12px] text-text-3">{t.description}</span>
-              </label>
-            ))}
+            {AVAILABLE_TOOLS
+              .map((t) => {
+                const extensionDisabled = !!t.extensionId && !!enabledExtensionIds && !enabledExtensionIds.has(t.extensionId)
+                return (
+                  <label key={t.id} className={`flex items-center gap-3 ${extensionDisabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`} title={extensionDisabled ? 'Enable in Extensions page' : undefined}>
+                    <div
+                      onClick={() => !extensionDisabled && setTools((prev) => prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id])}
+                      className={`w-11 h-6 rounded-full transition-all duration-200 relative shrink-0
+                        ${extensionDisabled ? 'bg-white/[0.04] cursor-not-allowed' : tools.includes(t.id) ? 'bg-accent-bright cursor-pointer' : 'bg-white/[0.08] cursor-pointer'}`}
+                    >
+                      <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-200
+                        ${tools.includes(t.id) && !extensionDisabled ? 'left-[22px]' : 'left-0.5'}`} />
+                    </div>
+                    <span className={`font-display text-[14px] font-600 ${extensionDisabled ? 'text-text-3/40' : 'text-text-2'}`}>{t.label}</span>
+                    <span className={`text-[12px] ${extensionDisabled ? 'text-text-3/30' : 'text-text-3'}`}>
+                      {extensionDisabled ? 'Enable in Extensions page' : t.description}
+                    </span>
+                  </label>
+                )
+              })}
           </div>
         </div>
       )}
@@ -2064,20 +2102,26 @@ export function AgentSheet() {
           <label className="block font-display text-[12px] font-600 text-text-2 uppercase tracking-[0.08em] mb-2">Platform Tools</label>
           <p className="text-[12px] text-text-3/60 mb-3">Allow this agent to manage platform resources directly.</p>
           <div className="space-y-3">
-            {PLATFORM_TOOLS.map((t) => (
-              <label key={t.id} className="flex items-center gap-3 cursor-pointer">
-                <div
-                  onClick={() => setTools((prev) => prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id])}
-                  className={`w-11 h-6 rounded-full transition-all duration-200 relative cursor-pointer shrink-0
-                    ${tools.includes(t.id) ? 'bg-accent-bright' : 'bg-white/[0.08]'}`}
-                >
-                  <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-200
-                    ${tools.includes(t.id) ? 'left-[22px]' : 'left-0.5'}`} />
-                </div>
-                <span className="font-display text-[14px] font-600 text-text-2">{t.label}</span>
-                <span className="text-[12px] text-text-3">{t.description}</span>
-              </label>
-            ))}
+            {PLATFORM_TOOLS
+              .map((t) => {
+                const extensionDisabled = !!t.extensionId && !!enabledExtensionIds && !enabledExtensionIds.has(t.extensionId)
+                return (
+                  <label key={t.id} className={`flex items-center gap-3 ${extensionDisabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`} title={extensionDisabled ? 'Enable in Extensions page' : undefined}>
+                    <div
+                      onClick={() => !extensionDisabled && setTools((prev) => prev.includes(t.id) ? prev.filter((x) => x !== t.id) : [...prev, t.id])}
+                      className={`w-11 h-6 rounded-full transition-all duration-200 relative shrink-0
+                        ${extensionDisabled ? 'bg-white/[0.04] cursor-not-allowed' : tools.includes(t.id) ? 'bg-accent-bright cursor-pointer' : 'bg-white/[0.08] cursor-pointer'}`}
+                    >
+                      <div className={`absolute top-0.5 w-5 h-5 rounded-full bg-white transition-all duration-200
+                        ${tools.includes(t.id) && !extensionDisabled ? 'left-[22px]' : 'left-0.5'}`} />
+                    </div>
+                    <span className={`font-display text-[14px] font-600 ${extensionDisabled ? 'text-text-3/40' : 'text-text-2'}`}>{t.label}</span>
+                    <span className={`text-[12px] ${extensionDisabled ? 'text-text-3/30' : 'text-text-3'}`}>
+                      {extensionDisabled ? 'Enable in Extensions page' : t.description}
+                    </span>
+                  </label>
+                )
+              })}
           </div>
         </div>
       )}

@@ -18,7 +18,7 @@ export interface Message {
   attachedFiles?: string[]
   toolEvents?: MessageToolEvent[]
   thinking?: string
-  kind?: 'chat' | 'heartbeat' | 'system' | 'context-clear' | 'plugin-ui' | 'connector-delivery'
+  kind?: 'chat' | 'heartbeat' | 'system' | 'context-clear' | 'extension-ui' | 'connector-delivery'
   suppressed?: boolean
   bookmarked?: boolean
   suggestions?: string[]
@@ -292,7 +292,7 @@ export interface CanvasDocument {
 
 export type CanvasContent = string | CanvasDocument | null
 
-export type ProviderType = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'openai' | 'ollama' | 'anthropic' | 'openclaw' | 'google' | 'deepseek' | 'groq' | 'together' | 'mistral' | 'xai' | 'fireworks'
+export type ProviderType = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'openai' | 'ollama' | 'anthropic' | 'openclaw' | 'google' | 'deepseek' | 'groq' | 'together' | 'mistral' | 'xai' | 'fireworks' | 'nebius' | 'deepinfra'
 
 export interface ProviderInfo {
   id: ProviderType
@@ -327,6 +327,7 @@ export interface Credential {
 }
 
 export type Credentials = Record<string, Credential>
+export type OllamaMode = 'local' | 'cloud'
 
 export interface Session {
   id: string
@@ -337,6 +338,7 @@ export interface Session {
   user: string
   provider: ProviderType
   model: string
+  ollamaMode?: OllamaMode | null
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null
@@ -477,8 +479,8 @@ export type ApprovalCategory =
   | 'tool_access'
   | 'wallet_transfer'
   | 'wallet_action'
-  | 'plugin_scaffold'
-  | 'plugin_install'
+  | 'extension_scaffold'
+  | 'extension_install'
   | 'task_tool'
   | 'human_loop'
   | 'connector_sender'
@@ -516,15 +518,15 @@ export interface MailboxEnvelope {
   ackAt?: number | null
 }
 
-export interface PluginInvocationRecord {
-  pluginId: string
+export interface ExtensionInvocationRecord {
+  extensionId: string
   toolName: string
   inputTokens: number
   outputTokens: number
 }
 
-export interface PluginDefinitionCost {
-  pluginId: string
+export interface ExtensionDefinitionCost {
+  extensionId: string
   estimatedTokens: number
 }
 
@@ -539,26 +541,26 @@ export interface UsageRecord {
   estimatedCost: number
   timestamp: number
   durationMs?: number
-  pluginDefinitionCosts?: PluginDefinitionCost[]
-  pluginInvocations?: PluginInvocationRecord[]
+  extensionDefinitionCosts?: ExtensionDefinitionCost[]
+  extensionInvocations?: ExtensionInvocationRecord[]
 }
 
-// --- Plugin System ---
+// --- Extension System ---
 
-export interface PluginPromptBuildResult {
+export interface ExtensionPromptBuildResult {
   systemPrompt?: string
   prependContext?: string
   prependSystemContext?: string
   appendSystemContext?: string
 }
 
-export interface PluginModelResolveResult {
+export interface ExtensionModelResolveResult {
   providerOverride?: ProviderType
   modelOverride?: string
   apiEndpointOverride?: string | null
 }
 
-export interface PluginToolCallResult {
+export interface ExtensionToolCallResult {
   input?: Record<string, unknown> | null
   params?: Record<string, unknown>
   block?: boolean
@@ -566,20 +568,20 @@ export interface PluginToolCallResult {
   warning?: string
 }
 
-export interface PluginMessagePersistResult {
+export interface ExtensionMessagePersistResult {
   message?: Message
 }
 
-export interface PluginBeforeMessageWriteResult extends PluginMessagePersistResult {
+export interface ExtensionBeforeMessageWriteResult extends ExtensionMessagePersistResult {
   block?: boolean
 }
 
-export interface PluginSubagentSpawningResult {
+export interface ExtensionSubagentSpawningResult {
   status: 'ok' | 'error'
   error?: string
 }
 
-export interface PluginHooks {
+export interface ExtensionHooks {
   beforeAgentStart?: (ctx: { session: Session; message: string }) => Promise<void> | void
   afterAgentComplete?: (ctx: { session: Session; response: string }) => Promise<void> | void
   beforeModelResolve?: (ctx: {
@@ -589,7 +591,7 @@ export interface PluginHooks {
     provider: ProviderType
     model: string
     apiEndpoint?: string | null
-  }) => Promise<PluginModelResolveResult | void> | PluginModelResolveResult | void
+  }) => Promise<ExtensionModelResolveResult | void> | ExtensionModelResolveResult | void
   beforeToolExec?: (ctx: { toolName: string; input: Record<string, unknown> | null }) => Promise<Record<string, unknown> | void> | Record<string, unknown> | void
   beforePromptBuild?: (ctx: {
     session: Session
@@ -597,14 +599,14 @@ export interface PluginHooks {
     message: string
     history: Message[]
     messages: Message[]
-  }) => Promise<PluginPromptBuildResult | void> | PluginPromptBuildResult | void
+  }) => Promise<ExtensionPromptBuildResult | void> | ExtensionPromptBuildResult | void
   beforeToolCall?: (ctx: {
     session: Session
     toolName: string
     input: Record<string, unknown> | null
     runId?: string
     toolCallId?: string
-  }) => Promise<PluginToolCallResult | Record<string, unknown> | void> | PluginToolCallResult | Record<string, unknown> | void
+  }) => Promise<ExtensionToolCallResult | Record<string, unknown> | void> | ExtensionToolCallResult | Record<string, unknown> | void
   llmInput?: (ctx: {
     session: Session
     runId: string
@@ -635,13 +637,13 @@ export interface PluginHooks {
     toolName?: string
     toolCallId?: string
     isSynthetic?: boolean
-  }) => Promise<PluginMessagePersistResult | Message | void> | PluginMessagePersistResult | Message | void
+  }) => Promise<ExtensionMessagePersistResult | Message | void> | ExtensionMessagePersistResult | Message | void
   beforeMessageWrite?: (ctx: {
     session: Session
     message: Message
     phase?: 'user' | 'system' | 'assistant_partial' | 'assistant_final' | 'heartbeat'
     runId?: string
-  }) => Promise<PluginBeforeMessageWriteResult | Message | void> | PluginBeforeMessageWriteResult | Message | void
+  }) => Promise<ExtensionBeforeMessageWriteResult | Message | void> | ExtensionBeforeMessageWriteResult | Message | void
   afterToolExec?: (ctx: { session: Session; toolName: string; input: Record<string, unknown> | null; output: string }) => Promise<void> | void
   onMessage?: (ctx: { session: Session; message: Message }) => Promise<void> | void
   sessionStart?: (ctx: {
@@ -663,7 +665,7 @@ export interface PluginHooks {
     cwd: string
     mode: 'run' | 'session'
     threadRequested: boolean
-  }) => Promise<PluginSubagentSpawningResult | void> | PluginSubagentSpawningResult | void
+  }) => Promise<ExtensionSubagentSpawningResult | void> | ExtensionSubagentSpawningResult | void
   subagentSpawned?: (ctx: {
     parentSessionId?: string | null
     childSessionId: string
@@ -703,15 +705,15 @@ export interface PluginHooks {
   transformOutboundMessage?: (ctx: { session: Session; text: string }) => Promise<string> | string
 
   // Context injection — return a markdown string to inject into the agent's state modifier, or null/undefined to skip
-  getAgentContext?: (ctx: { session: Session; enabledPlugins: string[]; message: string; history: Message[] }) => Promise<string | null | undefined> | string | null | undefined
+  getAgentContext?: (ctx: { session: Session; enabledExtensions: string[]; message: string; history: Message[] }) => Promise<string | null | undefined> | string | null | undefined
 
   // Self-description — returns a capability line for the system prompt (e.g., "I can remember things across conversations")
   getCapabilityDescription?: () => string | null | undefined
 
-  // Operating guidance — returns operational hints for the agent when this plugin is active
+  // Operating guidance — returns operational hints for the agent when this extension is active
   getOperatingGuidance?: () => string | string[] | null | undefined
 
-  // Approval guidance — returns approval-scoped instructions when this plugin is active
+  // Approval guidance — returns approval-scoped instructions when this extension is active
   getApprovalGuidance?: (ctx: {
     approval: ApprovalRequest
     phase: 'request' | 'resume' | 'connector_reminder'
@@ -719,7 +721,7 @@ export interface PluginHooks {
   }) => string | string[] | null | undefined
 }
 
-export interface PluginToolPlanning {
+export interface ExtensionToolPlanning {
   /**
    * Capability tags that the harness can use for prompt guidance and tool routing.
    * Examples: research.search, research.fetch, browser.capture, artifact.pdf,
@@ -734,7 +736,7 @@ export interface PluginToolPlanning {
   /**
    * Optional natural-language cues that indicate when this tool should be
    * preferred or explicitly invoked. These are declarative hints so the harness
-   * does not need to hard-code every plugin-specific workflow centrally.
+   * does not need to hard-code every extension-specific workflow centrally.
    */
   requestMatchers?: Array<{
     capability?: string
@@ -744,15 +746,15 @@ export interface PluginToolPlanning {
   }>
 }
 
-export interface PluginToolDef {
+export interface ExtensionToolDef {
   name: string
   description: string
   parameters: Record<string, unknown>
-  planning?: PluginToolPlanning
+  planning?: ExtensionToolPlanning
   execute: (args: Record<string, unknown>, ctx: { session: Session; message: string }) => Promise<string | object> | string | object
 }
 
-export interface PluginSettingsField {
+export interface ExtensionSettingsField {
   key: string
   label: string
   type: 'text' | 'number' | 'boolean' | 'select' | 'secret'
@@ -763,7 +765,7 @@ export interface PluginSettingsField {
   required?: boolean
 }
 
-export interface PluginUIExtension {
+export interface ExtensionUIDefinition {
   sidebarItems?: Array<{
     id: string
     label: string
@@ -784,9 +786,9 @@ export interface PluginUIExtension {
     action: 'message' | 'link' | 'tool'
     value: string
   }>
-  /** Settings fields declared by the plugin, rendered in the plugin settings panel */
-  settingsFields?: PluginSettingsField[]
-  /** Chat panels the plugin provides (e.g., browser view, terminal) */
+  /** Settings fields declared by the extension, rendered in the extension settings panel */
+  settingsFields?: ExtensionSettingsField[]
+  /** Chat panels the extension provides (e.g., browser view, terminal) */
   chatPanels?: Array<{
     id: string
     label: string
@@ -794,7 +796,7 @@ export interface PluginUIExtension {
     /** WS topic to subscribe to for updates (e.g., 'browser:{sessionId}') */
     wsTopic?: string
   }>
-  /** Badges to show on agent cards when this plugin is enabled */
+  /** Badges to show on agent cards when this extension is enabled */
   agentBadges?: Array<{
     id: string
     label: string
@@ -802,7 +804,7 @@ export interface PluginUIExtension {
   }>
 }
 
-export interface PluginProviderExtension {
+export interface ExtensionProviderDefinition {
   id: string
   name: string
   models: string[]
@@ -882,7 +884,7 @@ export interface OutboundSendOptions {
   threadId?: string
 }
 
-export interface PluginConnectorExtension {
+export interface ExtensionConnectorDefinition {
   id: string
   name: string
   description: string
@@ -897,21 +899,21 @@ export interface PluginConnectorExtension {
   startListener?: (onMessage: (msg: InboundMessage) => void) => Promise<() => void>
 }
 
-export interface Plugin {
+export interface Extension {
   name: string
   version?: string
   description?: string
   author?: string
   openclaw?: boolean
   enabledByDefault?: boolean
-  hooks?: PluginHooks
-  tools?: PluginToolDef[]
-  ui?: PluginUIExtension
-  providers?: PluginProviderExtension[]
-  connectors?: PluginConnectorExtension[]
+  hooks?: ExtensionHooks
+  tools?: ExtensionToolDef[]
+  ui?: ExtensionUIDefinition
+  providers?: ExtensionProviderDefinition[]
+  connectors?: ExtensionConnectorDefinition[]
 }
 
-export interface PluginMeta {
+export interface ExtensionMeta {
   name: string
   description?: string
   filename: string
@@ -920,8 +922,8 @@ export interface PluginMeta {
   author?: string
   version?: string
   source?: 'local' | 'manual' | 'marketplace'
-  sourceLabel?: PluginPublisherSource
-  installSource?: PluginInstallSource
+  sourceLabel?: ExtensionPublisherSource
+  installSource?: ExtensionInstallSource
   sourceUrl?: string
   openclaw?: boolean
   failureCount?: number
@@ -935,17 +937,17 @@ export interface PluginMeta {
   providerCount?: number
   connectorCount?: number
   createdByAgentId?: string | null
-  settingsFields?: PluginSettingsField[]
+  settingsFields?: ExtensionSettingsField[]
   hasDependencyManifest?: boolean
   dependencyCount?: number
   devDependencyCount?: number
-  packageManager?: PluginPackageManager
-  dependencyInstallStatus?: PluginDependencyInstallStatus
+  packageManager?: ExtensionPackageManager
+  dependencyInstallStatus?: ExtensionDependencyInstallStatus
   dependencyInstallError?: string
   dependencyInstalledAt?: number
 }
 
-export type PluginPublisherSource =
+export type ExtensionPublisherSource =
   | 'builtin'
   | 'local'
   | 'manual'
@@ -953,30 +955,30 @@ export type PluginPublisherSource =
   | 'swarmforge'
   | 'clawhub'
 
-export type PluginCatalogSource =
+export type ExtensionCatalogSource =
   | 'swarmclaw'
   | 'swarmclaw-site'
   | 'swarmforge'
   | 'clawhub'
 
-export type PluginInstallSource =
+export type ExtensionInstallSource =
   | 'builtin'
   | 'local'
   | 'manual'
-  | PluginCatalogSource
+  | ExtensionCatalogSource
 
-export type PluginPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
-export type PluginDependencyInstallStatus = 'none' | 'ready' | 'installing' | 'installed' | 'error'
+export type ExtensionPackageManager = 'npm' | 'pnpm' | 'yarn' | 'bun'
+export type ExtensionDependencyInstallStatus = 'none' | 'ready' | 'installing' | 'installed' | 'error'
 
-export interface MarketplacePlugin {
+export interface MarketplaceExtension {
   id: string
   name: string
   description: string
   author: string
   version: string
   url: string
-  source?: PluginPublisherSource
-  catalogSource?: PluginCatalogSource
+  source?: ExtensionPublisherSource
+  catalogSource?: ExtensionCatalogSource
   tags?: string[]
   openclaw?: boolean
   downloads?: number
@@ -1039,6 +1041,7 @@ export interface Agent {
   systemPrompt: string
   provider: ProviderType
   model: string
+  ollamaMode?: OllamaMode | null
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null
@@ -1658,6 +1661,9 @@ export type ProtocolStepKind =
   | 'parallel'
   | 'join'
   | 'complete'
+  | 'for_each'
+  | 'subflow'
+  | 'swarm_claim'
 
 export interface ProtocolStepDefinition {
   id: string
@@ -1674,6 +1680,11 @@ export interface ProtocolStepDefinition {
   repeat?: ProtocolRepeatConfig | null
   parallel?: ProtocolParallelConfig | null
   join?: ProtocolJoinConfig | null
+  dependsOnStepIds?: string[]
+  outputKey?: string | null
+  forEach?: ProtocolForEachConfig | null
+  subflow?: ProtocolSubflowConfig | null
+  swarm?: ProtocolSwarmConfig | null
 }
 
 export interface ProtocolTemplate {
@@ -1758,6 +1769,120 @@ export interface ProtocolRunParallelStepState {
   joinCompletedAt?: number | null
 }
 
+// --- DAG Step State ---
+
+export type ProtocolRunStepStatus = 'pending' | 'ready' | 'running' | 'waiting' | 'completed' | 'failed' | 'skipped'
+
+export interface ProtocolRunStepState {
+  stepId: string
+  status: ProtocolRunStepStatus
+  startedAt?: number | null
+  completedAt?: number | null
+  error?: string | null
+}
+
+export interface ProtocolRunStepOutput {
+  stepId: string
+  outputKey?: string | null
+  summary?: string | null
+  artifactIds?: string[]
+  taskIds?: string[]
+  childRunIds?: string[]
+  structuredData?: Record<string, unknown> | null
+}
+
+// --- For-Each Config ---
+
+export interface ProtocolForEachConfig {
+  itemsSource:
+    | { type: 'literal'; items: unknown[] }
+    | { type: 'step_output'; stepId: string; path?: string | null }
+    | { type: 'artifact'; artifactId?: string | null; artifactKind?: string | null }
+    | { type: 'llm_extract'; prompt: string }
+  itemAlias: string
+  branchTemplate: {
+    steps: ProtocolStepDefinition[]
+    entryStepId?: string | null
+    participantAgentIds?: string[]
+    facilitatorAgentId?: string | null
+  }
+  joinMode: 'all'
+  maxItems?: number | null
+  onEmpty?: 'fail' | 'skip' | 'advance'
+}
+
+export interface ProtocolRunForEachStepState {
+  stepId: string
+  items: unknown[]
+  branchRunIds: string[]
+  branches: ProtocolRunParallelBranchState[]
+  waitingOnBranchIds?: string[]
+  joinReady?: boolean
+  joinCompletedAt?: number | null
+}
+
+// --- Subflow Config ---
+
+export interface ProtocolSubflowConfig {
+  templateId: string
+  templateVersion?: string | null
+  participantAgentIds?: string[]
+  facilitatorAgentId?: string | null
+  inputMapping?: Record<string, string> | null
+  outputMapping?: Record<string, string> | null
+  onFailure: 'fail_parent' | 'advance_with_warning'
+}
+
+export interface ProtocolRunSubflowState {
+  stepId: string
+  childRunId: string
+  templateId: string
+  status: ProtocolRunStatus
+  summary?: string | null
+  lastError?: string | null
+  startedAt?: number | null
+  completedAt?: number | null
+}
+
+// --- Swarm Config ---
+
+export interface ProtocolSwarmConfig {
+  eligibleAgentIds: string[]
+  workItemsSource:
+    | { type: 'literal'; items: Array<{ id: string; label: string; description?: string | null }> }
+    | { type: 'step_output'; stepId: string; path?: string | null }
+  claimLimitPerAgent?: number | null
+  selectionMode: 'first_claim' | 'claim_until_empty'
+  claimTimeoutSec: number
+  onUnclaimed: 'fail' | 'advance' | 'fallback_assign'
+}
+
+export interface ProtocolSwarmClaim {
+  id: string
+  workItemId: string
+  workItemLabel: string
+  agentId: string
+  childRunId?: string | null
+  taskId?: string | null
+  status: 'claimed' | 'running' | 'completed' | 'failed'
+  claimedAt: number
+  completedAt?: number | null
+}
+
+export interface ProtocolRunSwarmState {
+  stepId: string
+  workItems: Array<{ id: string; label: string; description?: string | null }>
+  claims: ProtocolSwarmClaim[]
+  unclaimedItemIds: string[]
+  eligibleAgentIds: string[]
+  claimLimitPerAgent: number
+  selectionMode: 'first_claim' | 'claim_until_empty'
+  claimTimeoutSec: number
+  openedAt: number
+  closedAt?: number | null
+  timedOut?: boolean
+}
+
 export interface ProtocolRunConfig {
   goal?: string | null
   kickoffMessage?: string | null
@@ -1808,6 +1933,15 @@ export interface ProtocolRun {
   loopState?: Record<string, ProtocolRunLoopState>
   branchHistory?: ProtocolRunBranchDecision[]
   parallelState?: Record<string, ProtocolRunParallelStepState>
+  stepState?: Record<string, ProtocolRunStepState>
+  completedStepIds?: string[]
+  runningStepIds?: string[]
+  readyStepIds?: string[]
+  failedStepIds?: string[]
+  stepOutputs?: Record<string, ProtocolRunStepOutput>
+  forEachState?: Record<string, ProtocolRunForEachStepState>
+  subflowState?: Record<string, ProtocolRunSubflowState>
+  swarmState?: Record<string, ProtocolRunSwarmState>
   createdAt: number
   updatedAt: number
   startedAt?: number | null
@@ -1852,6 +1986,16 @@ export interface ProtocolRunEvent {
     | 'delegation_dispatched'
     | 'archived'
     | 'summary_posted'
+    | 'step_ready'
+    | 'step_waiting'
+    | 'step_failed'
+    | 'for_each_expanded'
+    | 'subflow_started'
+    | 'subflow_completed'
+    | 'subflow_failed'
+    | 'swarm_opened'
+    | 'swarm_claimed'
+    | 'swarm_exhausted'
   summary: string
   phaseId?: string | null
   stepId?: string | null
@@ -2234,8 +2378,8 @@ export interface AppSettings {
   toolLoopFrequencyWarn?: number
   toolLoopFrequencyCritical?: number
   toolLoopCircuitBreaker?: number
-  // Per-plugin settings (keyed by pluginId)
-  pluginSettings?: Record<string, Record<string, unknown>>
+  // Per-extension settings (keyed by extensionId)
+  extensionSettings?: Record<string, Record<string, unknown>>
 }
 
 export interface WhatsAppApprovedContact {
@@ -2438,6 +2582,7 @@ export interface AgentRoutingTarget {
   role?: AgentRoutingTargetRole
   provider: ProviderType
   model: string
+  ollamaMode?: OllamaMode | null
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null
@@ -2453,6 +2598,7 @@ export interface AgentPackEntry {
   description?: string
   provider: ProviderType
   model: string
+  ollamaMode?: OllamaMode | null
   credentialId?: string | null
   fallbackCredentialIds?: string[]
   apiEndpoint?: string | null

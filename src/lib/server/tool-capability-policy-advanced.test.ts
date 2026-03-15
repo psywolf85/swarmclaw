@@ -16,15 +16,15 @@ describe('permissive mode', () => {
   it('enables all standard tools including shell, files, delegate, manage_platform', () => {
     const tools = ['shell', 'files', 'delegate', 'manage_platform', 'web', 'memory']
     const d = resolveSessionToolPolicy(tools, mode)
-    assert.deepStrictEqual(d.enabledPlugins, tools)
-    assert.equal(d.blockedPlugins.length, 0)
+    assert.deepStrictEqual(d.enabledExtensions, tools)
+    assert.equal(d.blockedExtensions.length, 0)
     assert.equal(d.mode, 'permissive')
   })
 
   it('allows destructive delete_file', () => {
     const d = resolveSessionToolPolicy(['delete_file'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['delete_file'])
-    assert.equal(d.blockedPlugins.length, 0)
+    assert.deepStrictEqual(d.enabledExtensions, ['delete_file'])
+    assert.equal(d.blockedExtensions.length, 0)
   })
 
   it('still applies safety blocks in permissive mode', () => {
@@ -32,10 +32,10 @@ describe('permissive mode', () => {
       capabilityPolicyMode: 'permissive',
       safetyBlockedTools: ['shell'],
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['web'])
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'shell')
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.deepStrictEqual(d.enabledExtensions, ['web'])
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'shell')
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 })
 
@@ -47,25 +47,25 @@ describe('balanced mode', () => {
 
   it('allows non-destructive tools (files, web, memory)', () => {
     const d = resolveSessionToolPolicy(['files', 'web', 'memory'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['files', 'web', 'memory'])
-    assert.equal(d.blockedPlugins.length, 0)
+    assert.deepStrictEqual(d.enabledExtensions, ['files', 'web', 'memory'])
+    assert.equal(d.blockedExtensions.length, 0)
   })
 
   it('blocks destructive delete_file with correct reason', () => {
     const d = resolveSessionToolPolicy(['delete_file'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'delete_file')
-    assert.match(d.blockedPlugins[0].reason, /balanced policy.*destructive/i)
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'delete_file')
+    assert.match(d.blockedExtensions[0].reason, /balanced policy.*destructive/i)
   })
 
   it('allows shell (not marked destructive)', () => {
     const d = resolveSessionToolPolicy(['shell'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['shell'])
+    assert.deepStrictEqual(d.enabledExtensions, ['shell'])
   })
 
   it('allows delegate (not marked destructive)', () => {
     const d = resolveSessionToolPolicy(['delegate'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['delegate'])
+    assert.deepStrictEqual(d.enabledExtensions, ['delegate'])
   })
 })
 
@@ -77,43 +77,43 @@ describe('strict mode', () => {
 
   it('allows memory (not in blocked categories)', () => {
     const d = resolveSessionToolPolicy(['memory'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['memory'])
+    assert.deepStrictEqual(d.enabledExtensions, ['memory'])
   })
 
   it('allows web_search and web (network category not blocked in strict)', () => {
     const d = resolveSessionToolPolicy(['web', 'web_search'], mode)
-    assert.deepStrictEqual(d.enabledPlugins, ['web', 'web_search'])
+    assert.deepStrictEqual(d.enabledExtensions, ['web', 'web_search'])
   })
 
   it('blocks shell (execution category)', () => {
     const d = resolveSessionToolPolicy(['shell'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'shell')
-    assert.match(d.blockedPlugins[0].reason, /strict policy/)
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'shell')
+    assert.match(d.blockedExtensions[0].reason, /strict policy/)
   })
 
   it('blocks files (filesystem category)', () => {
     const d = resolveSessionToolPolicy(['files'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'files')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'files')
   })
 
   it('blocks delegate (delegation + execution)', () => {
     const d = resolveSessionToolPolicy(['delegate'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'delegate')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'delegate')
   })
 
   it('blocks manage_platform (platform category)', () => {
     const d = resolveSessionToolPolicy(['manage_platform'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'manage_platform')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'manage_platform')
   })
 
   it('blocks wallet (outbound category)', () => {
     const d = resolveSessionToolPolicy(['wallet'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'wallet')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'wallet')
   })
 
   it('blocks browser (browser + network, but browser triggers execution-like block)', () => {
@@ -123,17 +123,17 @@ describe('strict mode', () => {
     // browser categories are browser+network; strict blocks execution, delegation, platform, outbound, filesystem
     // browser is NOT in those categories, so it should be allowed
     // Unless the implementation treats browser differently — let's test and see
-    if (d.blockedPlugins.length > 0) {
-      assert.equal(d.blockedPlugins[0].tool, 'browser')
+    if (d.blockedExtensions.length > 0) {
+      assert.equal(d.blockedExtensions[0].tool, 'browser')
     } else {
-      assert.deepStrictEqual(d.enabledPlugins, ['browser'])
+      assert.deepStrictEqual(d.enabledExtensions, ['browser'])
     }
   })
 
   it('blocks manage_connectors explicitly', () => {
     const d = resolveSessionToolPolicy(['manage_connectors'], mode)
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'manage_connectors')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'manage_connectors')
   })
 })
 
@@ -146,8 +146,8 @@ describe('safety blocks', () => {
       capabilityPolicyMode: 'permissive',
       safetyBlockedTools: ['shell'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
   it('rejects safety-blocked tool in balanced mode', () => {
@@ -155,8 +155,8 @@ describe('safety blocks', () => {
       capabilityPolicyMode: 'balanced',
       safetyBlockedTools: ['web'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
   it('rejects safety-blocked tool in strict mode', () => {
@@ -164,35 +164,35 @@ describe('safety blocks', () => {
       capabilityPolicyMode: 'strict',
       safetyBlockedTools: ['memory'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
   it('safety block on concrete web_search blocks the web_search family', () => {
     const d = resolveSessionToolPolicy(['web_search'], {
       safetyBlockedTools: ['web_search'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'web_search')
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'web_search')
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
   it('safety block on memory_tool blocks memory', () => {
     const d = resolveSessionToolPolicy(['memory'], {
       safetyBlockedTools: ['memory_tool'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'memory')
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'memory')
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
   it('safety block on delegate_to_claude_code blocks claude_code', () => {
     const d = resolveSessionToolPolicy(['claude_code'], {
       safetyBlockedTools: ['delegate_to_claude_code'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'claude_code')
-    assert.equal(d.blockedPlugins[0].source, 'safety')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'claude_code')
+    assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 })
 
@@ -204,18 +204,18 @@ describe('explicit policy blocks', () => {
     const d = resolveSessionToolPolicy(['shell', 'web'], {
       capabilityBlockedTools: ['shell'],
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['web'])
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'shell')
-    assert.match(d.blockedPlugins[0].reason, /explicit policy rule/)
+    assert.deepStrictEqual(d.enabledExtensions, ['web'])
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'shell')
+    assert.match(d.blockedExtensions[0].reason, /explicit policy rule/)
   })
 
   it('blocking a concrete tool blocks parent family', () => {
     const d = resolveSessionToolPolicy(['files'], {
       capabilityBlockedTools: ['read_file'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].tool, 'files')
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'files')
   })
 })
 
@@ -228,8 +228,8 @@ describe('explicit allows override mode blocks', () => {
       capabilityPolicyMode: 'strict',
       capabilityAllowedTools: ['shell'],
     })
-    assert.ok(d.enabledPlugins.includes('shell'))
-    assert.ok(d.enabledPlugins.includes('web_search'))
+    assert.ok(d.enabledExtensions.includes('shell'))
+    assert.ok(d.enabledExtensions.includes('web_search'))
   })
 
   it('safety block takes precedence over explicit allow', () => {
@@ -238,9 +238,9 @@ describe('explicit allows override mode blocks', () => {
       capabilityAllowedTools: ['shell'],
       safetyBlockedTools: ['shell'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.equal(d.blockedPlugins[0].source, 'safety')
-    assert.equal(d.enabledPlugins.length, 0)
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].source, 'safety')
+    assert.equal(d.enabledExtensions.length, 0)
   })
 })
 
@@ -252,9 +252,9 @@ describe('category blocks', () => {
     const d = resolveSessionToolPolicy(['web', 'web_search', 'web_fetch', 'memory'], {
       capabilityBlockedCategories: ['network'],
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['memory'])
-    assert.equal(d.blockedPlugins.length, 3)
-    for (const b of d.blockedPlugins) {
+    assert.deepStrictEqual(d.enabledExtensions, ['memory'])
+    assert.equal(d.blockedExtensions.length, 3)
+    for (const b of d.blockedExtensions) {
       assert.match(b.reason, /category "network"/)
     }
   })
@@ -263,16 +263,16 @@ describe('category blocks', () => {
     const d = resolveSessionToolPolicy(['shell', 'process', 'web'], {
       capabilityBlockedCategories: ['execution'],
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['web'])
-    assert.equal(d.blockedPlugins.length, 2)
+    assert.deepStrictEqual(d.enabledExtensions, ['web'])
+    assert.equal(d.blockedExtensions.length, 2)
   })
 
   it('blocking platform category blocks manage_tasks and manage_schedules', () => {
     const d = resolveSessionToolPolicy(['manage_tasks', 'manage_schedules', 'memory'], {
       capabilityBlockedCategories: ['platform'],
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['memory'])
-    assert.equal(d.blockedPlugins.length, 2)
+    assert.deepStrictEqual(d.enabledExtensions, ['memory'])
+    assert.equal(d.blockedExtensions.length, 2)
   })
 })
 
@@ -284,24 +284,24 @@ describe('settings blocks', () => {
     const d = resolveSessionToolPolicy(['manage_tasks', 'memory'], {
       taskManagementEnabled: false,
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['memory'])
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.match(d.blockedPlugins[0].reason, /task management is disabled/)
+    assert.deepStrictEqual(d.enabledExtensions, ['memory'])
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.match(d.blockedExtensions[0].reason, /task management is disabled/)
   })
 
   it('projectManagementEnabled=false blocks manage_projects', () => {
     const d = resolveSessionToolPolicy(['manage_projects', 'memory'], {
       projectManagementEnabled: false,
     })
-    assert.deepStrictEqual(d.enabledPlugins, ['memory'])
-    assert.equal(d.blockedPlugins.length, 1)
-    assert.match(d.blockedPlugins[0].reason, /project management is disabled/)
+    assert.deepStrictEqual(d.enabledExtensions, ['memory'])
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.match(d.blockedExtensions[0].reason, /project management is disabled/)
   })
 
   it('both enabled by default (undefined)', () => {
     const d = resolveSessionToolPolicy(['manage_tasks', 'manage_projects'], {})
-    assert.deepStrictEqual(d.enabledPlugins, ['manage_tasks', 'manage_projects'])
-    assert.equal(d.blockedPlugins.length, 0)
+    assert.deepStrictEqual(d.enabledExtensions, ['manage_tasks', 'manage_projects'])
+    assert.equal(d.blockedExtensions.length, 0)
   })
 })
 
@@ -339,7 +339,7 @@ describe('resolveConcreteToolPolicyBlock', () => {
     assert.equal(resolveConcreteToolPolicyBlock('manage_schedules', d, {}), null)
   })
 
-  it('returns block reason when family is not in enabledPlugins', () => {
+  it('returns block reason when family is not in enabledExtensions', () => {
     const d = resolveSessionToolPolicy(['memory'], {})
     const result = resolveConcreteToolPolicyBlock('manage_schedules', d, {})
     assert.ok(result !== null)
@@ -404,14 +404,14 @@ describe('compound scenarios', () => {
     // shell: strict-blocked (execution)
     // delete_file: strict-blocked (destructive + filesystem)
     // delegate: strict-blocked (delegation + execution)
-    assert.equal(d.enabledPlugins.length, 0)
-    assert.equal(d.blockedPlugins.length, 6)
+    assert.equal(d.enabledExtensions.length, 0)
+    assert.equal(d.blockedExtensions.length, 6)
 
-    const memoryBlock = d.blockedPlugins.find((b) => b.tool === 'memory')
+    const memoryBlock = d.blockedExtensions.find((b) => b.tool === 'memory')
     assert.ok(memoryBlock)
     assert.equal(memoryBlock.source, 'safety')
 
-    const tasksBlock = d.blockedPlugins.find((b) => b.tool === 'manage_tasks')
+    const tasksBlock = d.blockedExtensions.find((b) => b.tool === 'manage_tasks')
     assert.ok(tasksBlock)
     assert.match(tasksBlock.reason, /task management is disabled/)
   })
@@ -425,29 +425,29 @@ describe('compound scenarios', () => {
       'monitor', 'http_request',
     ]
     const d = resolveSessionToolPolicy(tools, { capabilityPolicyMode: 'strict' })
-    assert.equal(d.requestedPlugins.length, 20)
-    assert.equal(d.enabledPlugins.length + d.blockedPlugins.length, 20)
+    assert.equal(d.requestedExtensions.length, 20)
+    assert.equal(d.enabledExtensions.length + d.blockedExtensions.length, 20)
 
     // memory, web, web_search, web_fetch should be enabled
-    assert.ok(d.enabledPlugins.includes('memory'))
-    assert.ok(d.enabledPlugins.includes('web'))
-    assert.ok(d.enabledPlugins.includes('web_search'))
-    assert.ok(d.enabledPlugins.includes('web_fetch'))
-    assert.ok(d.enabledPlugins.includes('http_request'))
+    assert.ok(d.enabledExtensions.includes('memory'))
+    assert.ok(d.enabledExtensions.includes('web'))
+    assert.ok(d.enabledExtensions.includes('web_search'))
+    assert.ok(d.enabledExtensions.includes('web_fetch'))
+    assert.ok(d.enabledExtensions.includes('http_request'))
 
     // shell, files, delegate, manage_platform should be blocked
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'shell'))
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'files'))
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'delegate'))
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'manage_platform'))
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'wallet'))
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'delete_file'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'shell'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'files'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'delegate'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'manage_platform'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'wallet'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'delete_file'))
   })
 
   it('duplicate tool requested twice is deduplicated', () => {
     const d = resolveSessionToolPolicy(['shell', 'shell', 'web', 'web'], {})
-    assert.equal(d.requestedPlugins.length, 2)
-    assert.deepStrictEqual(d.requestedPlugins, ['shell', 'web'])
+    assert.equal(d.requestedExtensions.length, 2)
+    assert.deepStrictEqual(d.requestedExtensions, ['shell', 'web'])
   })
 })
 
@@ -457,43 +457,43 @@ describe('compound scenarios', () => {
 describe('edge cases', () => {
   it('undefined sessionTools returns empty arrays', () => {
     const d = resolveSessionToolPolicy(undefined, {})
-    assert.deepStrictEqual(d.requestedPlugins, [])
-    assert.deepStrictEqual(d.enabledPlugins, [])
-    assert.deepStrictEqual(d.blockedPlugins, [])
+    assert.deepStrictEqual(d.requestedExtensions, [])
+    assert.deepStrictEqual(d.enabledExtensions, [])
+    assert.deepStrictEqual(d.blockedExtensions, [])
   })
 
   it('empty sessionTools returns empty arrays', () => {
     const d = resolveSessionToolPolicy([], {})
-    assert.deepStrictEqual(d.requestedPlugins, [])
-    assert.deepStrictEqual(d.enabledPlugins, [])
-    assert.deepStrictEqual(d.blockedPlugins, [])
+    assert.deepStrictEqual(d.requestedExtensions, [])
+    assert.deepStrictEqual(d.enabledExtensions, [])
+    assert.deepStrictEqual(d.blockedExtensions, [])
   })
 
   it('null settings treated as empty', () => {
     const d = resolveSessionToolPolicy(['shell'], null)
-    assert.deepStrictEqual(d.enabledPlugins, ['shell'])
+    assert.deepStrictEqual(d.enabledExtensions, ['shell'])
     assert.equal(d.mode, 'permissive')
   })
 
   it('undefined settings treated as empty', () => {
     const d = resolveSessionToolPolicy(['shell'], undefined)
-    assert.deepStrictEqual(d.enabledPlugins, ['shell'])
+    assert.deepStrictEqual(d.enabledExtensions, ['shell'])
   })
 
   it('unknown tool name passes through in permissive (no descriptor)', () => {
     const d = resolveSessionToolPolicy(['totally_fake_tool'], { capabilityPolicyMode: 'permissive' })
-    assert.deepStrictEqual(d.enabledPlugins, ['totally_fake_tool'])
+    assert.deepStrictEqual(d.enabledExtensions, ['totally_fake_tool'])
   })
 
   it('unknown tool name passes through in strict (no descriptor, no categories)', () => {
     const d = resolveSessionToolPolicy(['totally_fake_tool'], { capabilityPolicyMode: 'strict' })
-    assert.deepStrictEqual(d.enabledPlugins, ['totally_fake_tool'])
+    assert.deepStrictEqual(d.enabledExtensions, ['totally_fake_tool'])
   })
 
   it('case-insensitive tool matching', () => {
     const d = resolveSessionToolPolicy(['SHELL', 'Web'], { capabilityPolicyMode: 'strict' })
-    assert.ok(d.blockedPlugins.some((b) => b.tool === 'shell'))
-    assert.ok(d.enabledPlugins.includes('web'))
+    assert.ok(d.blockedExtensions.some((b) => b.tool === 'shell'))
+    assert.ok(d.enabledExtensions.includes('web'))
   })
 
   it('settings block takes priority over safety block (checked first)', () => {
@@ -501,8 +501,8 @@ describe('edge cases', () => {
       taskManagementEnabled: false,
       safetyBlockedTools: ['manage_tasks'],
     })
-    assert.equal(d.blockedPlugins.length, 1)
+    assert.equal(d.blockedExtensions.length, 1)
     // Settings block is checked before safety in the implementation
-    assert.match(d.blockedPlugins[0].reason, /task management is disabled/)
+    assert.match(d.blockedExtensions[0].reason, /task management is disabled/)
   })
 })

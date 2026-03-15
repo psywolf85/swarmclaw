@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { afterEach, describe, it } from 'node:test'
 import { EventEmitter } from 'node:events'
-import { getPluginManager } from '../plugins'
+import { getExtensionManager } from '../extensions'
 import { loadSettings, saveSettings } from '../storage'
 import { executeGoogleWorkspaceAction } from './google-workspace'
 
@@ -16,14 +16,14 @@ afterEach(() => {
 })
 
 describe('google_workspace tool', () => {
-  it('loads settings through the standard plugin settings system', () => {
-    getPluginManager().setPluginSettings('google_workspace', {
+  it('loads settings through the standard extension settings system', () => {
+    getExtensionManager().setExtensionSettings('google_workspace', {
       accessToken: 'token-123',
       sanitizeMode: 'block',
       projectId: 'project-x',
     })
 
-    const settings = getPluginManager().getPluginSettings('google_workspace')
+    const settings = getExtensionManager().getExtensionSettings('google_workspace')
     assert.equal(settings.accessToken, 'token-123')
     assert.equal(settings.sanitizeMode, 'block')
     assert.equal(settings.projectId, 'project-x')
@@ -79,7 +79,7 @@ describe('google_workspace tool', () => {
     assert.match(result, /interactive `gws auth login` \/ `gws auth setup` is not supported/i)
   })
 
-  it('passes plugin settings through env and formats JSON output', async () => {
+  it('passes extension settings through env and formats JSON output', async () => {
     let observedArgs: string[] = []
     let observedEnv: NodeJS.ProcessEnv | undefined
 

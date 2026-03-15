@@ -10,8 +10,6 @@ export interface StreamingAwareMessageListOptions {
   localStreaming: boolean
   hasLiveArtifacts: boolean
   assistantRenderId?: string | null
-  displayText?: string
-  thinkingText?: string
 }
 
 function isStreamingAssistantMessage(
@@ -53,13 +51,12 @@ export function buildStreamingAwareMessageList(
 
   const syntheticAssistantMessage: Message = {
     role: 'assistant',
-    text: opts.displayText || '',
+    text: '',
     time: 0,
     kind: 'chat',
     streaming: true,
     clientRenderId: opts.assistantRenderId,
   }
-  if (opts.thinkingText?.trim()) syntheticAssistantMessage.thinking = opts.thinkingText
 
   return [
     ...nextMessages,
@@ -204,12 +201,15 @@ export function reconcileClientMessageMetadata(nextMessages: Message[], currentM
 
   if (clientRenderIdsByKey.size === 0) return nextMessages
 
-  return nextMessages.map((message) => {
+  let modified = false
+  const result = nextMessages.map((message) => {
     if (message.clientRenderId) return message
     const queue = clientRenderIdsByKey.get(messageReconciliationKey(message))
     const clientRenderId = queue?.shift()
-    return clientRenderId ? { ...message, clientRenderId } : message
+    if (clientRenderId) { modified = true; return { ...message, clientRenderId } }
+    return message
   })
+  return modified ? result : nextMessages
 }
 
 export function messagesDiffer(nextMessages: Message[], currentMessages: Message[]): boolean {

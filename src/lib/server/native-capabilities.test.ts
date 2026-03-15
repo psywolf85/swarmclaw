@@ -1,20 +1,20 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
 
-import '@/lib/server/builtin-plugins'
+import '@/lib/server/builtin-extensions'
 import { collectCapabilityDescriptions, listNativeCapabilities } from '@/lib/server/native-capabilities'
-import { getPluginManager } from '@/lib/server/plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
 
 describe('native capabilities', () => {
-  it('keeps platform-owned built-ins out of PluginManager listings', () => {
-    const plugins = getPluginManager().listPlugins()
+  it('keeps platform-owned built-ins out of ExtensionManager listings', () => {
+    const extensions = getExtensionManager().listExtensions()
     const nativeIds = new Set(listNativeCapabilities().map((entry) => entry.filename))
 
     assert.equal(nativeIds.has('memory'), true)
     assert.equal(nativeIds.has('connectors'), true)
-    assert.equal(plugins.some((entry) => entry.filename === 'memory'), false)
-    assert.equal(plugins.some((entry) => entry.filename === 'connectors'), false)
-    assert.equal(plugins.some((entry) => entry.filename === 'email'), true)
+    assert.equal(extensions.some((entry) => entry.filename === 'memory'), false)
+    assert.equal(extensions.some((entry) => entry.filename === 'connectors'), false)
+    assert.equal(extensions.some((entry) => entry.filename === 'email'), true)
   })
 
   it('still contributes native capability descriptions to prompt assembly', () => {

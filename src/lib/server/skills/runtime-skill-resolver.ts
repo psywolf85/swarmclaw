@@ -10,7 +10,7 @@ import type {
   SkillSecuritySummary,
 } from '@/types'
 import { dedup } from '@/lib/shared-utils'
-import { expandPluginIds, getPluginAliases, normalizePluginId } from '@/lib/server/tool-aliases'
+import { expandExtensionIds, getExtensionAliases, normalizeExtensionId } from '@/lib/server/tool-aliases'
 import { loadLearnedSkills, loadSettings, loadSkills } from '@/lib/server/storage'
 import { cosineSimilarity, getEmbedding } from '@/lib/server/embeddings'
 import { discoverSkills, type DiscoveredSkill } from './skill-discovery'
@@ -127,7 +127,7 @@ export interface RuntimeSkillSnapshot {
 
 export interface ResolveRuntimeSkillsOptions {
   cwd?: string | null
-  enabledPlugins?: string[] | null
+  enabledExtensions?: string[] | null
   agentSkillIds?: string[] | null
   storedSkills?: Record<string, Skill>
   learnedSkills?: Record<string, LearnedSkill>
@@ -201,22 +201,22 @@ function inferToolNames(input: {
   skillKey?: string | null
   explicit?: string[]
 }): string[] {
-  const explicit = dedup((input.explicit || []).map((value) => normalizePluginId(value)).filter(Boolean))
+  const explicit = dedup((input.explicit || []).map((value) => normalizeExtensionId(value)).filter(Boolean))
   if (explicit.length > 0) return explicit
 
   const inferred = new Set<string>()
   for (const candidate of [input.skillKey, input.name]) {
     const normalized = normalizeKey(candidate || '')
     if (!normalized) continue
-    const aliases = getPluginAliases(normalized)
+    const aliases = getExtensionAliases(normalized)
     if (aliases.length > 1) {
-      for (const alias of aliases) inferred.add(normalizePluginId(alias))
+      for (const alias of aliases) inferred.add(normalizeExtensionId(alias))
       continue
     }
     const dashed = normalized.replace(/_/g, '-')
-    const dashedAliases = getPluginAliases(dashed)
+    const dashedAliases = getExtensionAliases(dashed)
     if (dashedAliases.length > 1) {
-      for (const alias of dashedAliases) inferred.add(normalizePluginId(alias))
+      for (const alias of dashedAliases) inferred.add(normalizeExtensionId(alias))
     }
   }
   return [...inferred].filter(Boolean)
@@ -472,14 +472,14 @@ function mergeSeeds(seeds: SkillSeed[]): SkillSeed {
   }
 }
 
-function scoreSkillForRuntime(seed: SkillSeed, status: RuntimeSkillStatus, enabledPluginSet: Set<string>): {
+function scoreSkillForRuntime(seed: SkillSeed, status: RuntimeSkillStatus, enabledExtensionSet: Set<string>): {
   autoMatch: boolean
   score: number
   matchReasons: string[]
 } {
   let score = 0
   const reasons: string[] = []
-  const matchingTools = seed.toolNames.filter((toolName) => enabledPluginSet.has(normalizePluginId(toolName)))
+  const matchingTools = seed.toolNames.filter((toolName) => enabledExtensionSet.has(normalizeExtensionId(toolName)))
   if (matchingTools.length > 0) {
     score += 45 + matchingTools.length
     reasons.push(`matches tools: ${matchingTools.join(', ')}`)
@@ -506,7 +506,7 @@ function toResolvedSkill(seed: SkillSeed, status: RuntimeSkillStatus, match: {
   score: number
   matchReasons: string[]
 }, options: {
-  enabledPluginSet: Set<string>
+  enabledExtensionSet: Set<string>
   selected: boolean
 }): ResolvedRuntimeSkill {
   const missing = formatMissing(status)
@@ -518,8 +518,8 @@ function toResolvedSkill(seed: SkillSeed, status: RuntimeSkillStatus, match: {
 
   const dispatch = seed.commandDispatch?.kind === 'tool' ? seed.commandDispatch : null
   const dispatchToolAvailable = dispatch
-    ? options.enabledPluginSet.has(normalizePluginId(dispatch.toolName))
-      || options.enabledPluginSet.has(dispatch.toolName)
+    ? options.enabledExtensionSet.has(normalizeExtensionId(dispatch.toolName))
+      || options.enabledExtensionSet.has(dispatch.toolName)
     : false
   const dispatchBlocker = dispatch
     ? !dispatchToolAvailable
@@ -607,9 +607,9 @@ export function resolveRuntimeSkills(options: ResolveRuntimeSkillsOptions = {}):
     grouped.set(seed.key, current)
   }
 
-  const enabledPluginSet = new Set(
-    expandPluginIds(Array.isArray(options.enabledPlugins) ? options.enabledPlugins : [])
-      .map((entry) => normalizePluginId(entry))
+  const enabledExtensionSet = new Set(
+    expandExtensionIds(Array.isArray(options.enabledExtensions) ? options.enabledExtensions : [])
+      .map((entry) => normalizeExtensionId(entry))
       .filter(Boolean),
   )
   const selectedSkillSelector = normalizeKey(options.selectedSkillId || '')
@@ -618,7 +618,7 @@ export function resolveRuntimeSkills(options: ResolveRuntimeSkillsOptions = {}):
     .map((entries) => {
       const merged = mergeSeeds(entries)
       const status = evaluateSkillStatus(merged)
-      const match = scoreSkillForRuntime(merged, status, enabledPluginSet)
+      const match = scoreSkillForRuntime(merged, status, enabledExtensionSet)
       const selected = Boolean(
         selectedSkillSelector
         && [
@@ -630,7 +630,7 @@ export function resolveRuntimeSkills(options: ResolveRuntimeSkillsOptions = {}):
         ].some((value) => normalizeKey(value || '') === selectedSkillSelector),
       )
       return toResolvedSkill(merged, status, match, {
-        enabledPluginSet,
+        enabledExtensionSet,
         selected,
       })
     })
@@ -761,12 +761,12 @@ function buildAvailableSkillBlocks(skills: ResolvedRuntimeSkill[]): string[] {
 function recommendRuntimeSkillsForTaskSync(
   skills: ResolvedRuntimeSkill[],
   task: string,
-  enabledPlugins?: string[] | null,
+  enabledExtensions?: string[] | null,
 ): RuntimeSkillRecommendation[] {
   const queryTerms = new Set(tokenize(task))
-  const enabledPluginSet = new Set(
-    expandPluginIds(Array.isArray(enabledPlugins) ? enabledPlugins : [])
-      .map((entry) => normalizePluginId(entry))
+  const enabledExtensionSet = new Set(
+    expandExtensionIds(Array.isArray(enabledExtensions) ? enabledExtensions : [])
+      .map((entry) => normalizeExtensionId(entry))
       .filter(Boolean),
   )
 
@@ -798,7 +798,7 @@ function recommendRuntimeSkillsForTaskSync(
       if (descriptionOverlap > 0) {
         score += descriptionOverlap * 3
       }
-      const toolOverlap = skill.toolNames.filter((toolName) => enabledPluginSet.has(normalizePluginId(toolName)))
+      const toolOverlap = skill.toolNames.filter((toolName) => enabledExtensionSet.has(normalizeExtensionId(toolName)))
       if (toolOverlap.length > 0) {
         score += toolOverlap.length * 8
       }
@@ -868,10 +868,10 @@ async function getCachedSkillEmbedding(
 export async function recommendRuntimeSkillsForTask(
   skills: ResolvedRuntimeSkill[],
   task: string,
-  enabledPlugins?: string[] | null,
+  enabledExtensions?: string[] | null,
   options?: RuntimeSkillRecommendationOptions,
 ): Promise<RuntimeSkillRecommendation[]> {
-  const keywordRanked = recommendRuntimeSkillsForTaskSync(skills, task, enabledPlugins)
+  const keywordRanked = recommendRuntimeSkillsForTaskSync(skills, task, enabledExtensions)
   const limit = getRecommendationLimit(options)
   const mode = getRecommendationMode(options)
   if (mode !== 'embedding') return keywordRanked.slice(0, limit)

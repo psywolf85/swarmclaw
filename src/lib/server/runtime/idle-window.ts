@@ -20,7 +20,7 @@ const state: IdleWindowState = {
  * Returns true when no user activity is detected recently
  * and no runs are currently executing.
  */
-export function isIdleWindow(options?: { thresholdMs?: number }): boolean {
+export async function isIdleWindow(options?: { thresholdMs?: number }): Promise<boolean> {
   const threshold = options?.thresholdMs ?? DEFAULT_IDLE_THRESHOLD_MS
   const now = Date.now()
   const sessions = loadSessions()
@@ -33,8 +33,7 @@ export function isIdleWindow(options?: { thresholdMs?: number }): boolean {
 
   // Check for running runs via the session-run-manager (lazy import to avoid circular deps)
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getSessionExecutionState } = require('@/lib/server/runtime/session-run-manager')
+    const { getSessionExecutionState } = await import('@/lib/server/runtime/session-run-manager')
     for (const session of Object.values(sessions) as unknown as Session[]) {
       if (!session?.id) continue
       const exec = getSessionExecutionState(session.id) as { runningRunId?: string }
@@ -65,7 +64,7 @@ export async function drainIdleWindowCallbacks(): Promise<void> {
 
   const now = Date.now()
   const forceDrain = now - state.lastDrainedAt >= DAILY_GUARANTEE_MS
-  if (!forceDrain && !isIdleWindow()) return
+  if (!forceDrain && !(await isIdleWindow())) return
 
   const batch = state.callbacks.splice(0)
   state.lastDrainedAt = now

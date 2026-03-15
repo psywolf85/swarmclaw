@@ -29,6 +29,7 @@ function buildThreadSession(agent: Agent, sessionId: string, user: string, creat
     user: existing?.user || user,
     provider: agent.provider,
     model: agent.model,
+    ollamaMode: agent.ollamaMode ?? existing?.ollamaMode ?? null,
     credentialId: agent.credentialId || null,
     fallbackCredentialIds: agent.fallbackCredentialIds || [],
     apiEndpoint: agent.apiEndpoint || null,

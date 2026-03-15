@@ -100,7 +100,7 @@ function dispatchDeferred(request: WakeModeRequest, priority: number, jobId: str
   const queue = state.deferredQueue.get(key) || []
 
   // Deduplicate by eventId or reason+source
-  const existingIndex = queue.findIndex((entry: any) => {
+  const existingIndex = queue.findIndex((entry: DeferredWake) => {
     if (request.eventId && entry.request.eventId) {
       return request.eventId === entry.request.eventId
     }
@@ -120,7 +120,7 @@ function dispatchDeferred(request: WakeModeRequest, priority: number, jobId: str
   }
 
   // Keep sorted by priority (highest first)
-  queue.sort((a: any, b: any) => b.priority - a.priority)
+  queue.sort((a: DeferredWake, b: DeferredWake) => b.priority - a.priority)
   state.deferredQueue.set(key, queue)
 
   log.info('wake-dispatcher', `Deferred wake ${jobId} queued for next heartbeat`, {
@@ -152,6 +152,11 @@ function dispatchScheduled(
     state.scheduledTimers.delete(jobId)
     try {
       dispatchImmediate(request, priority, jobId)
+      log.info('wake-dispatcher', `Scheduled wake ${jobId} fired after ${delayMs}ms delay`, {
+        agentId: request.agentId,
+        sessionId: request.sessionId,
+        reason: request.reason,
+      })
     } catch (err: unknown) {
       log.error('wake-dispatcher', `Scheduled wake ${jobId} failed, retrying once`, {
         error: errorMessage(err),
@@ -163,11 +168,6 @@ function dispatchScheduled(
         try { dispatchImmediate(request, priority, jobId) } catch { /* give up */ }
       }, 5000)
     }
-    log.info('wake-dispatcher', `Scheduled wake ${jobId} fired after ${delayMs}ms delay`, {
-      agentId: request.agentId,
-      sessionId: request.sessionId,
-      reason: request.reason,
-    })
   }, delayMs)
 
   state.scheduledTimers.set(jobId, timerId)
@@ -202,13 +202,13 @@ export function drainDeferredWakes(agentId?: string, sessionId?: string): WakeMo
   const queue = state.deferredQueue.get(key)
   if (!queue || queue.length === 0) return []
 
-  const drained = queue.map((entry: any) => entry.request)
+  const drained = queue.map((entry: DeferredWake) => entry.request)
   state.deferredQueue.delete(key)
 
   log.info('wake-dispatcher', `Drained ${drained.length} deferred wakes`, {
     agentId,
     sessionId,
-    reasons: drained.map((r: any) => r.reason),
+    reasons: drained.map((r: WakeModeRequest) => r.reason),
   })
 
   return drained

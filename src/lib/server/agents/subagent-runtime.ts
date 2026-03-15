@@ -58,8 +58,8 @@ export interface SpawnSubagentInput {
   cwd?: string
   /** Inherit parent's browser profile */
   shareBrowserProfile?: boolean
-  /** Inherit parent session's plugins/tools (default true) */
-  inheritPlugins?: boolean
+  /** Inherit parent session's extensions/tools (default true) */
+  inheritExtensions?: boolean
   /** Wait for completion (default true) */
   waitForCompletion?: boolean
   /** Timeout in seconds for waiting */
@@ -118,12 +118,12 @@ export function getHandle(jobId: string): SubagentHandle | null {
 }
 
 // ---------------------------------------------------------------------------
-// Plugin Inheritance
+// Extension Inheritance
 // ---------------------------------------------------------------------------
 
 /**
- * Merge parent session plugins with agent-defined plugins.
- * Agent plugins take precedence (listed first), parent plugins fill in gaps.
+ * Merge parent session extensions with agent-defined extensions.
+ * Agent extensions take precedence (listed first), parent extensions fill in gaps.
  * Case-insensitive deduplication, original casing preserved.
  */
 function mergeCapabilities(
@@ -201,7 +201,7 @@ async function spawnSubagentImpl(
     throw new Error(`Max subagent depth (${maxDepth}) reached.`)
   }
   const parent = context.sessionId ? sessions[context.sessionId] : null
-  const parentPlugins = getEnabledCapabilityIds(parent as { tools?: string[] | null, extensions?: string[] | null } | null)
+  const parentExtensions = getEnabledCapabilityIds(parent as { tools?: string[] | null, extensions?: string[] | null } | null)
   const spawningResult = await runCapabilitySubagentSpawning(
     {
       parentSessionId: context.sessionId || null,
@@ -212,10 +212,10 @@ async function spawnSubagentImpl(
       mode: 'run',
       threadRequested: false,
     },
-    { enabledIds: parentPlugins },
+    { enabledIds: parentExtensions },
   )
   if (spawningResult.status === 'error') {
-    throw new Error(spawningResult.error || 'Subagent spawn blocked by plugin hook')
+    throw new Error(spawningResult.error || 'Subagent spawn blocked by extension hook')
   }
 
   // 1. Create delegation job
@@ -238,11 +238,11 @@ async function spawnSubagentImpl(
     input.shareBrowserProfile === true,
   )
 
-  const agentPlugins = getEnabledCapabilityIds(agent)
-  const effectivePlugins = input.inheritPlugins === false
-    ? agentPlugins
-    : mergeCapabilities(agentPlugins, parent)
-  const effectiveSelection = splitCapabilityIds(effectivePlugins)
+  const agentExtensions = getEnabledCapabilityIds(agent)
+  const effectiveExtensions = input.inheritExtensions === false
+    ? agentExtensions
+    : mergeCapabilities(agentExtensions, parent)
+  const effectiveSelection = splitCapabilityIds(effectiveExtensions)
 
   const nextSession = {
     id: sid,
@@ -311,7 +311,7 @@ async function spawnSubagentImpl(
       mode: 'run',
       threadRequested: false,
     },
-    { enabledIds: parentPlugins },
+    { enabledIds: parentExtensions },
   )
 
   // 8. Register runtime handle for cancellation
@@ -353,7 +353,7 @@ async function spawnSubagentImpl(
           error: subagentResult.error,
           durationMs: subagentResult.durationMs,
         },
-        { enabledIds: parentPlugins },
+        { enabledIds: parentExtensions },
       )
       await runCapabilityHook(
         'sessionEnd',
@@ -364,7 +364,7 @@ async function spawnSubagentImpl(
           durationMs: subagentResult.durationMs,
           reason: subagentResult.status,
         },
-        { enabledIds: parentPlugins },
+        { enabledIds: parentExtensions },
       )
       return subagentResult
     })
@@ -394,7 +394,7 @@ async function spawnSubagentImpl(
           error: subagentResult.error,
           durationMs: subagentResult.durationMs,
         },
-        { enabledIds: parentPlugins },
+        { enabledIds: parentExtensions },
       )
       await runCapabilityHook(
         'sessionEnd',
@@ -405,7 +405,7 @@ async function spawnSubagentImpl(
           durationMs: subagentResult.durationMs,
           reason: subagentResult.status,
         },
-        { enabledIds: parentPlugins },
+        { enabledIds: parentExtensions },
       )
       return subagentResult
     })
@@ -467,7 +467,7 @@ export {
   getDescendants,
   buildLineageTree,
   cancelSubtree,
-  mergeCapabilities as _mergePlugins,
+  mergeCapabilities as _mergeExtensions,
 }
 
 export type {

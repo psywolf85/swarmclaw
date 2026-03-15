@@ -8,15 +8,15 @@ describe('connector outbox', () => {
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
       const outboxMod = await import('./src/lib/server/connectors/outbox')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const outbox = outboxMod.default || outboxMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       const attempts = []
-      plugins.getPluginManager().registerBuiltin('test-outbox-plugin', {
-        name: 'Test Outbox Plugin',
+      ext.getExtensionManager().registerBuiltin('test-outbox-extension', {
+        name: 'Test Outbox Extension',
         connectors: [{
           id: 'test-outbox',
           name: 'Test Outbox',
@@ -57,7 +57,7 @@ describe('connector outbox', () => {
       await outbox.runConnectorOutboxNow({ now: scheduled.sendAt + 5 })
       const after = storage.loadConnectorOutbox()[scheduled.followUpId]
       console.log(JSON.stringify({ scheduled, before, after, attempts }))
-    `, { prefix: 'swarmclaw-outbox-test-' })
+    `, { prefix: 'swarmclaw-outbox-test-' }) as any
 
     assert.equal(output.before.status, 'pending')
     assert.equal(output.after.status, 'sent')
@@ -70,15 +70,15 @@ describe('connector outbox', () => {
       const storageMod = await import('./src/lib/server/storage')
       const managerMod = await import('./src/lib/server/connectors/manager')
       const outboxMod = await import('./src/lib/server/connectors/outbox')
-      const pluginsMod = await import('./src/lib/server/plugins')
+      const extMod = await import('./src/lib/server/extensions')
       const storage = storageMod.default || storageMod
       const manager = managerMod.default || managerMod
       const outbox = outboxMod.default || outboxMod
-      const plugins = pluginsMod.default || pluginsMod
+      const ext = extMod.default || extMod
 
       let sendCount = 0
-      plugins.getPluginManager().registerBuiltin('test-outbox-retry-plugin', {
-        name: 'Test Outbox Retry Plugin',
+      ext.getExtensionManager().registerBuiltin('test-outbox-retry-extension', {
+        name: 'Test Outbox Retry Extension',
         connectors: [{
           id: 'test-outbox-retry',
           name: 'Test Outbox Retry',
@@ -122,7 +122,7 @@ describe('connector outbox', () => {
       await outbox.runConnectorOutboxNow({ now: afterFirst.sendAt + 1 })
       const afterSecond = storage.loadConnectorOutbox()[queued.outboxId]
       console.log(JSON.stringify({ afterFirst, afterSecond, sendCount }))
-    `, { prefix: 'swarmclaw-outbox-test-' })
+    `, { prefix: 'swarmclaw-outbox-test-' }) as any
 
     assert.equal(output.afterFirst.status, 'pending')
     assert.equal(output.afterFirst.attemptCount, 1)
@@ -181,7 +181,7 @@ describe('connector outbox', () => {
       })
       const outbox = storage.loadConnectorOutbox()
       console.log(JSON.stringify({ first, second, third, outbox }))
-    `, { prefix: 'swarmclaw-outbox-test-' })
+    `, { prefix: 'swarmclaw-outbox-test-' }) as any
 
     assert.equal(output.first.followUpId, output.second.followUpId)
     assert.notEqual(output.third.followUpId, output.first.followUpId)

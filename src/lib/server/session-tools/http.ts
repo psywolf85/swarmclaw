@@ -3,8 +3,8 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import type { ToolBuildContext } from './context'
 import { truncate, MAX_OUTPUT } from './context'
 import { withRetry } from '../tool-retry'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
 
@@ -65,18 +65,18 @@ async function executeHttpAction(args: HttpRequestArgs) {
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const HttpPlugin: Plugin = {
+const HttpExtension: Extension = {
   name: 'Core HTTP',
   description: 'Make direct HTTP API calls without generating throwaway code.',
   hooks: {
     getCapabilityDescription: () => 'I can make direct HTTP requests (`http_request`) without writing code. Use this for straightforward API calls or fetching JSON.',
     getOperatingGuidance: () => [
       'Prefer `http_request` over `sandbox_exec` for straightforward REST or JSON API calls.',
-      'Keep API keys in plugin settings or SwarmClaw secrets instead of hardcoding them in generated code.',
+      'Keep API keys in Extension Settings or SwarmClaw secrets instead of hardcoding them in generated code.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'http_request',
@@ -98,20 +98,20 @@ const HttpPlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('http', HttpPlugin)
+registerNativeCapability('http', HttpExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildHttpTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('http_request')) return []
+  if (!bctx.hasExtension('http_request')) return []
 
   return [
     tool(
       (args: HttpRequestArgs) => executeHttpAction(args),
       {
         name: 'http_request',
-        description: HttpPlugin.tools![0].description,
+        description: HttpExtension.tools![0].description,
         schema: z.object({
           method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS']).describe('HTTP method'),
           url: z.string().describe('Full URL to request'),

@@ -6,8 +6,8 @@ import { UPLOAD_DIR } from '../storage'
 import { BROWSER_PROFILES_DIR, WORKSPACE_DIR } from '../data-dir'
 import type { ToolBuildContext } from './context'
 import { safePath, truncate, listDirRecursive, MAX_FILE } from './context'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { dedup, errorMessage } from '@/lib/shared-utils'
 
@@ -462,9 +462,9 @@ async function executeSendFile(args: Record<string, unknown>, bctx: { cwd: strin
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const FilePlugin: Plugin = {
+const FileExtension: Extension = {
   name: 'Core Files',
   description: 'Complete file management: read, write, list, move, copy, delete, and send.',
   hooks: {
@@ -475,7 +475,7 @@ const FilePlugin: Plugin = {
       'If a `files` call fails, correct the arguments and retry. Do not conclude that the workspace is inaccessible until an explicit read/list/write attempt with a path fails.',
       'When `send_file` returns a download link, copy that link exactly instead of rewriting it.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'files',
@@ -532,20 +532,20 @@ const FilePlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('files', FilePlugin)
+registerNativeCapability('files', FileExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildFileTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('files')) return []
+  if (!bctx.hasExtension('files')) return []
 
   return [
     tool(
       async (args) => executeFileAction(args, { cwd: bctx.cwd, filesystemScope: bctx.filesystemScope }),
       {
         name: 'files',
-        description: FilePlugin.tools![0].description,
+        description: FileExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     ),
@@ -553,7 +553,7 @@ export function buildFileTools(bctx: ToolBuildContext): StructuredToolInterface[
       async (args) => executeSendFile(args, { cwd: bctx.cwd, filesystemScope: bctx.filesystemScope }),
       {
         name: 'send_file',
-        description: FilePlugin.tools![1].description,
+        description: FileExtension.tools![1].description,
         schema: z.object({}).passthrough()
       }
     )

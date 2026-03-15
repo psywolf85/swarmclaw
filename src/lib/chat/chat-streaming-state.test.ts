@@ -10,6 +10,7 @@ import {
   reconcileClientMessageMetadata,
   shouldHidePersistedStreamingAssistantMessage,
   upsertStreamingAssistantArtifact,
+  type StreamingAwareMessageListOptions,
 } from './chat-streaming-state'
 
 describe('chat-streaming-state', () => {
@@ -42,9 +43,7 @@ describe('chat-streaming-state', () => {
         localStreaming: true,
         hasLiveArtifacts: true,
         assistantRenderId: 'render-1',
-        displayText: 'final answer',
-        thinkingText: 'working...',
-      }),
+      } as StreamingAwareMessageListOptions),
       [
         { role: 'user', text: 'hello', time: 1 },
         {
@@ -70,9 +69,7 @@ describe('chat-streaming-state', () => {
         localStreaming: true,
         hasLiveArtifacts: true,
         assistantRenderId: 'render-2',
-        displayText: '',
-        thinkingText: '',
-      }),
+      } as StreamingAwareMessageListOptions),
       [
         { role: 'user', text: 'hello', time: 1 },
         {

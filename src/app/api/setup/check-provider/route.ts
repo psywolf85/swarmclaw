@@ -15,6 +15,8 @@ type SetupProvider =
   | 'mistral'
   | 'xai'
   | 'fireworks'
+  | 'nebius'
+  | 'deepinfra'
   | 'ollama'
   | 'openclaw'
 
@@ -24,6 +26,7 @@ interface SetupCheckBody {
   credentialId?: string
   endpoint?: string
   model?: string
+  ollamaMode?: string
 }
 
 function clean(value: unknown): string {
@@ -54,7 +57,7 @@ async function checkOpenAiCompatible(
         cache: 'no-store',
       })
       if (modelsRes.ok) {
-        const modelsPayload = await modelsRes.json().catch(() => ({} as any))
+        const modelsPayload = await modelsRes.json().catch(() => ({} as Record<string, unknown>))
         const first = Array.isArray(modelsPayload?.data) ? modelsPayload.data[0] : null
         if (first?.id) testModel = String(first.id)
       }
@@ -74,6 +77,8 @@ async function checkOpenAiCompatible(
       'Mistral AI': 'mistral-small-latest',
       'xAI (Grok)': 'grok-3-mini-fast',
       'Fireworks AI': 'accounts/fireworks/models/llama4-scout-instruct-basic',
+      Nebius: 'deepseek-ai/DeepSeek-R1-0528',
+      DeepInfra: 'deepseek-ai/DeepSeek-R1-0528',
     }
     testModel = fallbacks[providerName] || 'gpt-4o-mini'
   }
@@ -125,18 +130,24 @@ async function checkAnthropic(apiKey: string, modelRaw: string): Promise<{ ok: b
     const detail = await parseErrorMessage(res, `Anthropic returned ${res.status}.`)
     return { ok: false, message: detail }
   }
-  const payload = await res.json().catch(() => ({} as any))
-  const text = typeof payload?.content?.[0]?.text === 'string' ? payload.content[0].text : ''
+  const payload = await res.json().catch(() => ({} as Record<string, unknown>))
+  const content = Array.isArray(payload.content) ? payload.content : []
+  const firstContent = content[0]
+  const text = firstContent && typeof firstContent === 'object' && 'text' in firstContent && typeof firstContent.text === 'string'
+    ? firstContent.text
+    : ''
   return { ok: true, message: text ? `Connected to Anthropic. Sample: ${text.slice(0, 120)}` : 'Connected to Anthropic.' }
 }
 
 async function checkOllama(params: {
   endpointRaw: string
   modelRaw: string
+  ollamaMode?: string
   apiKey?: string
 }): Promise<{ ok: boolean; message: string; normalizedEndpoint: string; recommendedModel?: string }> {
   const runtime = resolveOllamaRuntimeConfig({
     model: params.modelRaw,
+    ollamaMode: params.ollamaMode ?? null,
     apiKey: params.apiKey,
     apiEndpoint: params.endpointRaw,
   })
@@ -162,7 +173,7 @@ async function checkOllama(params: {
         cache: 'no-store',
       })
       if (res.ok) {
-        const payload = await res.json().catch(() => ({} as any))
+        const payload = await res.json().catch(() => ({} as Record<string, unknown>))
         const models = runtime.useCloud
           ? (Array.isArray(payload?.data) ? payload.data : [])
           : (Array.isArray(payload?.models) ? payload.models : [])
@@ -294,14 +305,21 @@ export async function POST(req: Request) {
       case 'together':
       case 'mistral':
       case 'xai':
-      case 'fireworks': {
+      case 'fireworks':
+      case 'nebius':
+      case 'deepinfra': {
         const info = OPENAI_COMPATIBLE_DEFAULTS[provider]
         if (!apiKey) return NextResponse.json({ ok: false, message: `${info.name} API key is required.` })
         const result = await checkOpenAiCompatible(info.name, apiKey, endpoint, info.defaultEndpoint, model)
         return NextResponse.json(result)
       }
       case 'ollama': {
-        const result = await checkOllama({ endpointRaw: endpoint, modelRaw: model, apiKey })
+        const result = await checkOllama({
+          endpointRaw: endpoint,
+          modelRaw: model,
+          ollamaMode: body.ollamaMode,
+          apiKey,
+        })
         return NextResponse.json(result)
       }
       case 'openclaw': {
@@ -311,10 +329,10 @@ export async function POST(req: Request) {
       default:
         return NextResponse.json({ ok: false, message: `Unsupported provider: ${provider}` }, { status: 400 })
     }
-  } catch (err: any) {
-    const message = err?.name === 'TimeoutError'
+  } catch (err: unknown) {
+    const message = err instanceof Error && err.name === 'TimeoutError'
       ? 'Connection check timed out. Verify endpoint/network and try again.'
-      : (err?.message || 'Failed to validate provider setup.')
+      : (err instanceof Error && err.message ? err.message : 'Failed to validate provider setup.')
     return NextResponse.json({ ok: false, message }, { status: 500 })
   }
 }

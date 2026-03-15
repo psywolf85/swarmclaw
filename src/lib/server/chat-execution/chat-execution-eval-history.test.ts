@@ -79,7 +79,7 @@ test('executeSessionChatTurn persists internal eval user turns for same-thread r
       messages: [],
       createdAt: now,
       lastActiveAt: now,
-      plugins: [],
+      extensions: [],
     }
     storage.saveSessions(sessions)
 

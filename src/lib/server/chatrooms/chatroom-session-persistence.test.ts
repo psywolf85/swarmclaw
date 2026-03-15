@@ -49,7 +49,7 @@ describe('chatroom synthetic session persistence', () => {
         model: 'gpt-4o',
         createdAt: now,
         updatedAt: now,
-        plugins: ['delegate'],
+        extensions: ['delegate'],
       }
 
       const first = helpers.ensureSyntheticSession(agent, 'room-1')
@@ -72,7 +72,7 @@ describe('chatroom synthetic session persistence', () => {
         messageCount: second.messages.length,
         firstMessage: second.messages[0]?.text || '',
         delegateResumeIds: second.delegateResumeIds,
-        plugins: second.plugins || [],
+        extensions: second.extensions || [],
       }))
     `)
 
@@ -82,6 +82,6 @@ describe('chatroom synthetic session persistence', () => {
     assert.equal(output.messageCount, 1)
     assert.equal(output.firstMessage, 'first prompt')
     assert.equal(output.delegateResumeIds?.codex, 'resume-123')
-    assert.deepEqual(output.plugins, ['delegate'])
+    assert.deepEqual(output.extensions, ['delegate'])
   })
 })

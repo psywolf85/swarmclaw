@@ -83,7 +83,7 @@ import { shouldSuppressHiddenControlText, stripHiddenControlTokens } from '@/lib
 import { buildAgentDisabledMessage, isAgentDisabled } from '@/lib/server/agents/agent-availability'
 import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
 import { errorMessage as toErrorMessage } from '@/lib/shared-utils'
-import { listUniversalToolAccessPluginIds } from '@/lib/server/universal-tool-access'
+import { listUniversalToolAccessExtensionIds } from '@/lib/server/universal-tool-access'
 import { bridgeHumanReplyFromChat } from '@/lib/server/chatrooms/session-mailbox'
 import {
   collectCapabilityDescriptions,
@@ -118,9 +118,9 @@ export {
   reconcileConnectorDeliveryText,
 }
 
-export function buildAgentRuntimeCapabilities(enabledPlugins: string[]): string[] {
+export function buildAgentRuntimeCapabilities(enabledExtensions: string[]): string[] {
   const capabilities = ['heartbeats', 'autonomous_loop', 'multi_agent_chat']
-  if (enabledPlugins.length > 0) capabilities.unshift('tools')
+  if (enabledExtensions.length > 0) capabilities.unshift('tools')
   return capabilities
 }
 
@@ -277,6 +277,9 @@ async function resolveExactOutputContractWithTimeout(params: {
 }): Promise<ExactOutputContract | null> {
   if (params.internal || params.source !== 'chat') return null
   if (params.toolEvents.length === 0) return null
+  // Skip expensive LLM classifier when no explicit exact-output markers appear
+  const { extractExplicitExactLiteral } = await import('@/lib/server/chat-execution/exact-output-contract')
+  if (!extractExplicitExactLiteral(params.userMessage)) return null
 
   let timer: NodeJS.Timeout | null = null
   try {
@@ -598,7 +601,7 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   const settings = loadSettings()
   const allowSilentReplies = isDirectConnectorSession(session)
   const parts: string[] = []
-  const enabledPlugins = listUniversalToolAccessPluginIds(
+  const enabledExtensions = listUniversalToolAccessExtensionIds(
     getEnabledCapabilityIds(session).length > 0 ? getEnabledCapabilityIds(session) : getEnabledCapabilityIds(agent),
   )
 
@@ -619,7 +622,7 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   const runtimeLines = [
     '## Runtime',
     `os=${process.platform} | host=${os.hostname()} | agent=${agent.id} | provider=${session.provider} | model=${session.model}`,
-    `capabilities=${buildAgentRuntimeCapabilities(enabledPlugins).join(',')}`,
+    `capabilities=${buildAgentRuntimeCapabilities(enabledExtensions).join(',')}`,
     'tool_access=universal',
   ]
   parts.push(runtimeLines.join('\n'))
@@ -636,7 +639,7 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   try {
     const runtimeSkills = resolveRuntimeSkills({
       cwd: session.cwd,
-      enabledPlugins,
+      enabledExtensions,
       agentId: agent.id,
       sessionId: session.id,
       userId: session.user,
@@ -666,18 +669,18 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   ]
   parts.push(thinkingHint.join('\n'))
 
-  if (enabledPlugins.length === 0) {
+  if (enabledExtensions.length === 0) {
     parts.push(buildNoToolsGuidance().join('\n'))
   } else {
     parts.push(buildEnabledToolsAutonomyGuidance().join('\n'))
   }
-  const toolAvailabilityLines = buildToolAvailabilityLines(enabledPlugins)
+  const toolAvailabilityLines = buildToolAvailabilityLines(enabledExtensions)
   if (toolAvailabilityLines.length > 0) parts.push(['## Tool Availability', ...toolAvailabilityLines].join('\n'))
-  const toolDisciplineLines = buildToolDisciplineLines(enabledPlugins)
+  const toolDisciplineLines = buildToolDisciplineLines(enabledExtensions)
   if (toolDisciplineLines.length > 0) parts.push(['## Tool Discipline', ...toolDisciplineLines].join('\n'))
-  const operatingGuidance = collectCapabilityOperatingGuidance(enabledPlugins)
+  const operatingGuidance = collectCapabilityOperatingGuidance(enabledExtensions)
   if (operatingGuidance.length > 0) parts.push(['## Tool Guidance', ...operatingGuidance].join('\n'))
-  const capabilityLines = collectCapabilityDescriptions(enabledPlugins)
+  const capabilityLines = collectCapabilityDescriptions(enabledExtensions)
   if (capabilityLines.length > 0) parts.push(['## Tool Capabilities', ...capabilityLines].join('\n'))
 
   // 7. Heartbeat Guidance
@@ -785,7 +788,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   const runtimeCapabilityIds = filterRuntimeCapabilityIds(getEnabledCapabilityIds(session), {
     delegationEnabled: agentForSession?.delegationEnabled === true,
   })
-  const toolPolicy = resolveSessionToolPolicy(listUniversalToolAccessPluginIds(runtimeCapabilityIds), appSettings)
+  const toolPolicy = resolveSessionToolPolicy(listUniversalToolAccessExtensionIds(runtimeCapabilityIds), appSettings)
   const isHeartbeatRun = isInternalHeartbeatRun(internal, source)
   const isAutonomousInternalRun = internal && source !== 'chat'
   const heartbeatLightContext = isHeartbeatRun && !!input.heartbeatConfig?.lightContext
@@ -835,7 +838,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   if (mission?.id) {
     session.missionId = mission.id
   }
-  const pluginsForRun = heartbeatStatusOnly ? [] : toolPolicy.enabledPlugins
+  const extensionsForRun = heartbeatStatusOnly ? [] : toolPolicy.enabledExtensions
   if (runMessageStartIndex === 0) {
     await runCapabilityHook(
       'sessionStart',
@@ -843,12 +846,12 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         session,
         resumedFrom: session.parentSessionId || null,
       },
-      { enabledIds: pluginsForRun },
+      { enabledIds: extensionsForRun },
     )
   }
   const sessionEnabledIds = runtimeCapabilityIds
-  const sessionForRunSelection = splitCapabilityIds(pluginsForRun)
-  let sessionForRun = JSON.stringify(sessionEnabledIds) === JSON.stringify(pluginsForRun)
+  const sessionForRunSelection = splitCapabilityIds(extensionsForRun)
+  let sessionForRun = JSON.stringify(sessionEnabledIds) === JSON.stringify(extensionsForRun)
     ? session
     : { ...session, tools: sessionForRunSelection.tools, extensions: sessionForRunSelection.extensions }
   if (mission?.id) {
@@ -868,12 +871,12 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   }
   let effectiveMessage = message
 
-  if (pluginsForRun.length > 0) {
+  if (extensionsForRun.length > 0) {
     try {
       effectiveMessage = await transformCapabilityText(
         'transformInboundMessage',
         { session: sessionForRun, text: message },
-        { enabledIds: pluginsForRun },
+        { enabledIds: extensionsForRun },
       )
     } catch {
       effectiveMessage = message
@@ -886,7 +889,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   }
   const missionContextBlock = buildMissionContextBlock(mission)
 
-  if (pluginsForRun.length > 0) {
+  if (extensionsForRun.length > 0) {
     const modelResolvePrompt = heartbeatLightContext
       ? (joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), missionContextBlock) || '')
       : (joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), missionContextBlock) || '')
@@ -899,7 +902,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         model: sessionForRun.model,
         apiEndpoint: sessionForRun.apiEndpoint || null,
       },
-      { enabledIds: pluginsForRun },
+      { enabledIds: extensionsForRun },
     )
     if (modelResolve) {
       sessionForRun = {
@@ -911,11 +914,11 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
     }
   }
 
-  if (!heartbeatStatusOnly && toolPolicy.blockedPlugins.length > 0) {
-    const blockedSummary = toolPolicy.blockedPlugins
+  if (!heartbeatStatusOnly && toolPolicy.blockedExtensions.length > 0) {
+    const blockedSummary = toolPolicy.blockedExtensions
       .map((entry) => `${entry.tool} (${entry.reason})`)
       .join(', ')
-    onEvent?.({ t: 'err', text: `Capability policy blocked plugins for this run: ${blockedSummary}` })
+    onEvent?.({ t: 'err', text: `Capability policy blocked extensions for this run: ${blockedSummary}` })
   }
 
   // --- Agent spend-limit enforcement (hourly/daily/monthly) ---
@@ -1056,7 +1059,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         attachedFiles: attachedFiles?.length ? attachedFiles : undefined,
         replyToId: input.replyToId || undefined,
       },
-      enabledIds: pluginsForRun,
+      enabledIds: extensionsForRun,
       phase: 'user',
       runId: lifecycleRunId,
     })
@@ -1071,7 +1074,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
             text: `[Automated Link Analysis]\n${linkAnalysis.join('\n\n')}`,
             time: Date.now(),
           },
-          enabledIds: pluginsForRun,
+          enabledIds: extensionsForRun,
           phase: 'system',
           runId: lifecycleRunId,
           isSynthetic: true,
@@ -1094,28 +1097,28 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
       }
       if (!internal) {
         try {
-          await runCapabilityHook('onMessage', { session, message: nextUserMessage }, { enabledIds: pluginsForRun })
+          await runCapabilityHook('onMessage', { session, message: nextUserMessage }, { enabledIds: extensionsForRun })
         } catch { /* onMessage hooks are non-critical */ }
       }
     }
   }
 
-  // Determine plugin/LangGraph path early so we can skip the redundant system prompt.
+  // Determine extension/LangGraph path early so we can skip the redundant system prompt.
   // Dependencies: providerType (line 750), sessionForRun (line 625), isLocalOpenClawEndpoint (import).
   const useLocalOpenClawNativeRuntime = providerType === 'openclaw' && isLocalOpenClawEndpoint(sessionForRun.apiEndpoint)
-  const enabledSessionPlugins = getEnabledCapabilityIds(sessionForRun)
-  const hasPlugins = enabledSessionPlugins.length > 0
+  const enabledSessionExtensions = getEnabledCapabilityIds(sessionForRun)
+  const hasExtensions = enabledSessionExtensions.length > 0
     && !NON_LANGGRAPH_PROVIDER_IDS.has(providerType)
     && !useLocalOpenClawNativeRuntime
 
-  // When using LangGraph (hasPlugins), streamAgentChatCore builds the full prompt
+  // When using LangGraph (hasExtensions), streamAgentChatCore builds the full prompt
   // including identity, soul, skills, tool discipline, and execution policy.
   // Only build the standalone system prompt for the direct-provider (no LangGraph) path
   // to avoid duplicating tool discipline, operating guidance, and capability sections.
   // lightContext mode uses a minimal prompt for both paths to reduce token cost.
   const systemPrompt = heartbeatLightContext
     ? joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), missionContextBlock)
-    : (hasPlugins ? undefined : joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), missionContextBlock))
+    : (hasExtensions ? undefined : joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), missionContextBlock))
   const toolEvents: MessageToolEvent[] = []
   const streamErrors: string[] = []
   const accumulatedUsage = { inputTokens: 0, outputTokens: 0, estimatedCost: 0 }
@@ -1160,7 +1163,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
           thinking: thinkingText || undefined,
           toolEvents: persistedToolEvents.length ? persistedToolEvents : undefined,
         },
-        enabledIds: pluginsForRun,
+        enabledIds: extensionsForRun,
         phase: 'assistant_partial',
         runId: lifecycleRunId,
         isSynthetic: true,
@@ -1269,7 +1272,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
 
   const requestedToolPreflightResponse = resolveRequestedToolPreflightResponse({
     message,
-    enabledPlugins: pluginsForRun,
+    enabledExtensions: extensionsForRun,
     toolPolicy,
     appSettings,
     internal,
@@ -1290,7 +1293,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
           text: requestedToolPreflightResponse,
           time: Date.now(),
         },
-        enabledIds: pluginsForRun,
+        enabledIds: extensionsForRun,
         phase: 'assistant_final',
         runId: lifecycleRunId,
         isSynthetic: true,
@@ -1326,15 +1329,15 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   const endLlmPerf = perf.start('chat-execution', 'llm-round-trip', {
     sessionId,
     provider: providerType,
-    hasPlugins,
-    pluginCount: enabledSessionPlugins.length,
+    hasExtensions,
+    extensionCount: enabledSessionExtensions.length,
   })
   preflightToolRoutingResult = await runExclusiveDirectMemoryPreflight({
     session: sessionForRun,
     sessionId,
     message,
     effectiveMessage,
-    enabledPlugins: pluginsForRun,
+    enabledExtensions: extensionsForRun,
     toolPolicy,
     appSettings,
     internal,
@@ -1373,8 +1376,8 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         ? (heartbeatLightContext ? [] : getSessionMessages(sessionId).slice(-6))
         : undefined
 
-      console.log(`[chat-execution] provider=${providerType}, hasPlugins=${hasPlugins}, localOpenClawNative=${useLocalOpenClawNativeRuntime}, imagePath=${resolvedImagePath || 'none'}, attachedFiles=${attachedFiles?.length || 0}, plugins=${enabledSessionPlugins.length}`)
-      if (hasPlugins) {
+      console.log(`[chat-execution] provider=${providerType}, hasExtensions=${hasExtensions}, localOpenClawNative=${useLocalOpenClawNativeRuntime}, imagePath=${resolvedImagePath || 'none'}, attachedFiles=${attachedFiles?.length || 0}, extensions=${enabledSessionExtensions.length}`)
+      if (hasExtensions) {
         const result = await streamAgentChat({
           session: sessionForRun,
           message: effectiveMessage,
@@ -1436,7 +1439,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
               historyMessages: directHistorySnapshot,
               imagesCount: resolvedImagePath ? 1 : 0,
             },
-            { enabledIds: pluginsForRun },
+            { enabledIds: extensionsForRun },
           )
           fullResponse = await provider.handler.streamChat({
             session: sessionForRun,
@@ -1473,7 +1476,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
                   }
                 : undefined,
             },
-            { enabledIds: pluginsForRun },
+            { enabledIds: extensionsForRun },
           )
           if (canUseResponseCache && responseCacheInput && fullResponse) {
             setCachedLlmResponse(responseCacheInput, fullResponse, responseCacheConfig)
@@ -1510,7 +1513,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
 
   // Record usage for the direct (non-tools) streamChat path.
   // streamAgentChat already calls appendUsage internally for the tools path.
-  if (!hasPlugins && fullResponse && !errorMessage && !responseCacheHit) {
+  if (!hasExtensions && fullResponse && !errorMessage && !responseCacheHit) {
     const inputTokens = directUsage.received ? directUsage.inputTokens : Math.ceil(message.length / 4)
     const outputTokens = directUsage.received ? directUsage.outputTokens : Math.ceil(fullResponse.length / 4)
     const totalTokens = inputTokens + outputTokens
@@ -1543,7 +1546,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
     sessionId,
     message,
     effectiveMessage,
-    enabledPlugins: pluginsForRun,
+    enabledExtensions: extensionsForRun,
     toolPolicy,
     appSettings,
     internal,
@@ -1592,12 +1595,12 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
 
   const persistedToolEvents = dedupeConsecutiveToolEvents(pruneIncompleteToolEvents(toolEvents))
   let finalText = (fullResponse || '').trim() || (!internal && errorMessage ? `Error: ${errorMessage}` : '')
-  if (pluginsForRun.length > 0 && finalText && !isHeartbeatRun) {
+  if (extensionsForRun.length > 0 && finalText && !isHeartbeatRun) {
     try {
       finalText = await transformCapabilityText(
         'transformOutboundMessage',
         { session: sessionForRun, text: finalText },
-        { enabledIds: pluginsForRun },
+        { enabledIds: extensionsForRun },
       )
     } catch { /* outbound transforms are non-critical */ }
   }
@@ -1720,7 +1723,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
           toolEvents: persistedToolEvents.length ? persistedToolEvents : undefined,
           kind: persistedKind,
         },
-        enabledIds: pluginsForRun,
+        enabledIds: extensionsForRun,
         phase: isHeartbeatRun ? 'heartbeat' : 'assistant_final',
         runId: lifecycleRunId,
       })
@@ -1761,7 +1764,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
             current.lastHeartbeatSentAt = nowTs
           }
           try {
-            await runCapabilityHook('onMessage', { session: current, message: nextAssistantMessage }, { enabledIds: pluginsForRun })
+            await runCapabilityHook('onMessage', { session: current, message: nextAssistantMessage }, { enabledIds: extensionsForRun })
           } catch { /* onMessage hooks are non-critical */ }
 
           // Conversation tone detection
@@ -1851,7 +1854,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
       }
     }
 
-    // Fire afterChatTurn hook for all enabled plugins (memory auto-save, logging, etc.)
+    // Fire afterChatTurn hook for all enabled extensions (memory auto-save, logging, etc.)
     try {
       await runCapabilityHook('afterChatTurn', {
         session: current,
@@ -1860,7 +1863,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         source,
         internal,
         toolEvents: persistedToolEvents,
-      }, { enabledIds: pluginsForRun })
+      }, { enabledIds: extensionsForRun })
     } catch { /* afterChatTurn hooks are non-critical */ }
 
     // Don't extend idle timeout for heartbeat runs — only user-initiated activity counts

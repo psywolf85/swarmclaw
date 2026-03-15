@@ -15,9 +15,7 @@ let runtime: typeof import('@/lib/server/agents/subagent-runtime')
 let lineage: typeof import('@/lib/server/agents/subagent-lineage')
 let delegationJobs: typeof import('@/lib/server/agents/delegation-jobs')
 let storage: typeof import('@/lib/server/storage')
-let pluginManager: {
-  registerBuiltin: (id: string, plugin: Record<string, unknown>) => void
-}
+let extensionManager: Awaited<ReturnType<typeof import('@/lib/server/extensions').getExtensionManager>>
 let providers: Record<string, unknown>
 
 before(async () => {
@@ -30,7 +28,7 @@ before(async () => {
   delegationJobs = await import('@/lib/server/agents/delegation-jobs')
   lineage = await import('@/lib/server/agents/subagent-lineage')
   runtime = await import('@/lib/server/agents/subagent-runtime')
-  pluginManager = (await import('@/lib/server/plugins')).getPluginManager()
+  extensionManager = (await import('@/lib/server/extensions')).getExtensionManager()
   const providersMod = await import('@/lib/providers/index')
   providers = providersMod.PROVIDERS
 })
@@ -45,7 +43,7 @@ after(() => {
   fs.rmSync(tempDir, { recursive: true, force: true })
 })
 
-function seedAgent(id: string, name: string, plugins: string[] = []) {
+function seedAgent(id: string, name: string, extensions: string[] = []) {
   const agents = storage.loadAgents()
   agents[id] = {
     id,
@@ -53,8 +51,11 @@ function seedAgent(id: string, name: string, plugins: string[] = []) {
     provider: 'anthropic',
     model: 'claude-sonnet-4-20250514',
     systemPrompt: 'Test agent',
-    plugins,
-  }
+    extensions,
+    description: '',
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+  } as import('@/types').Agent
   storage.saveAgents(agents)
 }
 
@@ -81,10 +82,10 @@ describe('subagent-runtime', () => {
 
       // Create a chain of sessions to simulate depth
       const sessions = storage.loadSessions()
-      sessions['depth-s0'] = { id: 'depth-s0', parentSessionId: null, cwd: tempDir }
-      sessions['depth-s1'] = { id: 'depth-s1', parentSessionId: 'depth-s0', cwd: tempDir }
-      sessions['depth-s2'] = { id: 'depth-s2', parentSessionId: 'depth-s1', cwd: tempDir }
-      sessions['depth-s3'] = { id: 'depth-s3', parentSessionId: 'depth-s2', cwd: tempDir }
+      sessions['depth-s0'] = { id: 'depth-s0', parentSessionId: null, cwd: tempDir } as unknown as import('@/types').Session
+      sessions['depth-s1'] = { id: 'depth-s1', parentSessionId: 'depth-s0', cwd: tempDir } as unknown as import('@/types').Session
+      sessions['depth-s2'] = { id: 'depth-s2', parentSessionId: 'depth-s1', cwd: tempDir } as unknown as import('@/types').Session
+      sessions['depth-s3'] = { id: 'depth-s3', parentSessionId: 'depth-s2', cwd: tempDir } as unknown as import('@/types').Session
       storage.saveSessions(sessions)
 
       await assert.rejects(
@@ -151,7 +152,7 @@ describe('subagent-runtime', () => {
         cwd: tempDir,
         parentSessionId: null,
         agentId: 'parent-agent',
-      }
+      } as unknown as import('@/types').Session
       storage.saveSessions(sessions)
 
       // Create parent lineage node
@@ -198,20 +199,20 @@ describe('subagent-runtime', () => {
       seedAgent('child-hook-agent', 'Child Hook Agent')
 
       const marks: string[] = []
-      pluginManager.registerBuiltin('subagent_lifecycle_test', {
+      extensionManager.registerBuiltin('subagent_lifecycle_test', {
         name: 'Subagent Lifecycle Test',
         hooks: {
-          subagentSpawning: ({ agentId }) => {
+          subagentSpawning: ({ agentId }: { agentId: string }) => {
             marks.push(`spawning:${agentId}`)
             return { status: 'ok' }
           },
-          subagentSpawned: ({ childSessionId }) => {
+          subagentSpawned: ({ childSessionId }: { childSessionId: string }) => {
             marks.push(`spawned:${childSessionId}`)
           },
-          subagentEnded: ({ status }) => {
+          subagentEnded: ({ status }: { status: string }) => {
             marks.push(`ended:${status}`)
           },
-          sessionEnd: ({ reason }) => {
+          sessionEnd: ({ reason }: { reason?: string | null }) => {
             marks.push(`session_end:${reason}`)
           },
         },
@@ -234,10 +235,13 @@ describe('subagent-runtime', () => {
       agents['child-hook-agent'] = {
         id: 'child-hook-agent',
         name: 'Child Hook Agent',
-        provider: 'subagent-test-provider',
+        provider: 'subagent-test-provider' as import('@/types').ProviderType,
         model: 'unit',
         systemPrompt: 'Child runtime test',
-      }
+        description: '',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      } as import('@/types').Agent
       storage.saveAgents(agents)
 
       const sessions = storage.loadSessions()
@@ -246,13 +250,13 @@ describe('subagent-runtime', () => {
         cwd: tempDir,
         parentSessionId: null,
         agentId: 'parent-hook-agent',
-        provider: 'subagent-test-provider',
+        provider: 'subagent-test-provider' as import('@/types').ProviderType,
         model: 'unit',
-        plugins: ['subagent_lifecycle_test'],
+        extensions: ['subagent_lifecycle_test'],
         messages: [],
         createdAt: Date.now(),
         lastActiveAt: Date.now(),
-      }
+      } as unknown as import('@/types').Session
       storage.saveSessions(sessions)
 
       const handle = await runtime.spawnSubagent(
@@ -270,50 +274,50 @@ describe('subagent-runtime', () => {
   })
 
   describe('mergePlugins', () => {
-    it('returns agent plugins when parent has none', () => {
-      const merged = runtime._mergePlugins(['shell', 'memory'], null)
+    it('returns agent extensions when parent has none', () => {
+      const merged = runtime._mergeExtensions(['shell', 'memory'], null)
       assert.deepEqual(merged, ['shell', 'memory'])
     })
 
-    it('returns parent plugins when agent has none', () => {
-      const merged = runtime._mergePlugins([], { plugins: ['browser', 'web'] })
+    it('returns parent extensions when agent has none', () => {
+      const merged = runtime._mergeExtensions([], { extensions: ['browser', 'web'] })
       assert.deepEqual(merged, ['browser', 'web'])
     })
 
-    it('merges and deduplicates agent + parent plugins', () => {
-      const merged = runtime._mergePlugins(
+    it('merges and deduplicates agent + parent extensions', () => {
+      const merged = runtime._mergeExtensions(
         ['shell', 'memory'],
-        { plugins: ['memory', 'browser', 'web'] },
+        { extensions: ['memory', 'browser', 'web'] },
       )
-      // agent plugins first, then parent fills gaps; 'memory' not duplicated
+      // agent extensions first, then parent fills gaps; 'memory' not duplicated
       assert.deepEqual(merged, ['shell', 'memory', 'browser', 'web'])
     })
 
     it('deduplicates case-insensitively', () => {
-      const merged = runtime._mergePlugins(['Shell'], { plugins: ['shell', 'web'] })
+      const merged = runtime._mergeExtensions(['Shell'], { extensions: ['shell', 'web'] })
       assert.equal(merged.length, 2)
       assert.equal(merged[0], 'Shell') // preserves original case
       assert.equal(merged[1], 'web')
     })
 
-    it('falls back to parent tools when plugins is missing', () => {
-      const merged = runtime._mergePlugins(['shell'], { tools: ['browser'] })
+    it('falls back to parent tools when extensions is missing', () => {
+      const merged = runtime._mergeExtensions(['shell'], { tools: ['browser'] })
       assert.deepEqual(merged, ['shell', 'browser'])
     })
 
     it('ignores empty/whitespace strings', () => {
-      const merged = runtime._mergePlugins(['shell', ''], { plugins: ['  ', 'web'] })
+      const merged = runtime._mergeExtensions(['shell', ''], { extensions: ['  ', 'web'] })
       assert.deepEqual(merged, ['shell', 'web'])
     })
 
     it('returns empty array when both are empty', () => {
-      const merged = runtime._mergePlugins([], { plugins: [] })
+      const merged = runtime._mergeExtensions([], { extensions: [] })
       assert.deepEqual(merged, [])
     })
   })
 
-  describe('plugin inheritance in spawnSubagent', () => {
-    it('child session inherits parent plugins merged with agent plugins', async () => {
+  describe('extension inheritance in spawnSubagent', () => {
+    it('child session inherits parent extensions merged with agent extensions', async () => {
       lineage._clearLineage()
       seedAgent('inherit-agent', 'Inherit Agent', ['shell', 'memory'])
 
@@ -323,8 +327,8 @@ describe('subagent-runtime', () => {
         cwd: tempDir,
         parentSessionId: null,
         agentId: 'inherit-agent',
-        plugins: ['shell', 'browser', 'web', 'manage_connectors'],
-      }
+        extensions: ['shell', 'browser', 'web', 'manage_connectors'],
+      } as unknown as import('@/types').Session
       storage.saveSessions(sessions)
 
       let handle: Awaited<ReturnType<typeof runtime.spawnSubagent>> | null = null
@@ -338,17 +342,17 @@ describe('subagent-runtime', () => {
       if (handle) {
         const childSession = storage.loadSessions()[handle.sessionId]
         assert.ok(childSession, 'Child session should exist')
-        const plugins = childSession.plugins as string[]
-        assert.ok(plugins.includes('shell'), 'should have shell from agent')
-        assert.ok(plugins.includes('memory'), 'should have memory from agent')
-        assert.ok(plugins.includes('browser'), 'should inherit browser from parent')
-        assert.ok(plugins.includes('web'), 'should inherit web from parent')
-        assert.ok(plugins.includes('manage_connectors'), 'should inherit manage_connectors from parent')
-        assert.equal(plugins.filter((p: string) => p.toLowerCase() === 'shell').length, 1, 'shell should not be duplicated')
+        const extensions = childSession.extensions as string[]
+        assert.ok(extensions.includes('shell'), 'should have shell from agent')
+        assert.ok(extensions.includes('memory'), 'should have memory from agent')
+        assert.ok(extensions.includes('browser'), 'should inherit browser from parent')
+        assert.ok(extensions.includes('web'), 'should inherit web from parent')
+        assert.ok(extensions.includes('manage_connectors'), 'should inherit manage_connectors from parent')
+        assert.equal(extensions.filter((p: string) => p.toLowerCase() === 'shell').length, 1, 'shell should not be duplicated')
       }
     })
 
-    it('child session does not inherit when inheritPlugins is false', async () => {
+    it('child session does not inherit when inheritExtensions is false', async () => {
       lineage._clearLineage()
       seedAgent('no-inherit-agent', 'No Inherit Agent', ['shell'])
 
@@ -357,14 +361,14 @@ describe('subagent-runtime', () => {
         id: 'no-inherit-parent',
         cwd: tempDir,
         parentSessionId: null,
-        plugins: ['shell', 'browser', 'web'],
-      }
+        extensions: ['shell', 'browser', 'web'],
+      } as unknown as import('@/types').Session
       storage.saveSessions(sessions)
 
       let handle: Awaited<ReturnType<typeof runtime.spawnSubagent>> | null = null
       try {
         handle = await runtime.spawnSubagent(
-          { agentId: 'no-inherit-agent', message: 'no inherit', inheritPlugins: false, waitForCompletion: false },
+          { agentId: 'no-inherit-agent', message: 'no inherit', inheritExtensions: false, waitForCompletion: false },
           { sessionId: 'no-inherit-parent', cwd: tempDir },
         )
       } catch { /* enqueueSessionRun may fail */ }
@@ -372,8 +376,8 @@ describe('subagent-runtime', () => {
       if (handle) {
         const childSession = storage.loadSessions()[handle.sessionId]
         assert.ok(childSession, 'Child session should exist')
-        const plugins = childSession.plugins as string[]
-        assert.deepEqual(plugins, ['shell'], 'should only have agent plugins')
+        const extensions = childSession.extensions as string[]
+        assert.deepEqual(extensions, ['shell'], 'should only have agent extensions')
       }
     })
   })

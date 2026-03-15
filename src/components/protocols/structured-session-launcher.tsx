@@ -114,6 +114,7 @@ export function StructuredSessionLauncher({
     setForm(buildInitialState(initialContext))
     setError(null)
     setAdvancedOpen(false)
+    setSaving(false)
   }, [initialContext, open])
 
   useEffect(() => {

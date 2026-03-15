@@ -73,10 +73,10 @@ export interface UiSlice {
   setEditingKnowledgeId: (id: string | null) => void
   knowledgeRefreshKey: number
   triggerKnowledgeRefresh: () => void
-  pluginSheetOpen: boolean
-  setPluginSheetOpen: (open: boolean) => void
-  editingPluginFilename: string | null
-  setEditingPluginFilename: (filename: string | null) => void
+  extensionSheetOpen: boolean
+  setExtensionSheetOpen: (open: boolean) => void
+  editingExtensionFilename: string | null
+  setEditingExtensionFilename: (filename: string | null) => void
   projectSheetOpen: boolean
   setProjectSheetOpen: (open: boolean) => void
   editingProjectId: string | null
@@ -167,10 +167,10 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get)
   setEditingKnowledgeId: (id) => set({ editingKnowledgeId: id }),
   knowledgeRefreshKey: 0,
   triggerKnowledgeRefresh: () => set((s) => ({ knowledgeRefreshKey: s.knowledgeRefreshKey + 1 })),
-  pluginSheetOpen: false,
-  setPluginSheetOpen: (open) => set({ pluginSheetOpen: open }),
-  editingPluginFilename: null,
-  setEditingPluginFilename: (filename) => set({ editingPluginFilename: filename }),
+  extensionSheetOpen: false,
+  setExtensionSheetOpen: (open) => set({ extensionSheetOpen: open }),
+  editingExtensionFilename: null,
+  setEditingExtensionFilename: (filename) => set({ editingExtensionFilename: filename }),
   projectSheetOpen: false,
   setProjectSheetOpen: (open) => set({ projectSheetOpen: open }),
   editingProjectId: null,

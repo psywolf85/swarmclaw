@@ -179,7 +179,7 @@ describe('connectors/session', () => {
         name: 'Findable Agent',
         provider: 'anthropic' as const,
         model: 'claude-3',
-        plugins: [],
+        extensions: [],
         systemPrompt: '',
         createdAt: Date.now(),
       } as unknown as Agent
@@ -358,7 +358,7 @@ describe('connectors/session', () => {
         name: 'New Agent',
         provider: 'anthropic',
         model: 'claude-3',
-        plugins: ['web'],
+        extensions: ['web'],
         systemPrompt: 'You are helpful.',
         createdAt: Date.now(),
       })
@@ -385,7 +385,7 @@ describe('connectors/session', () => {
         name: 'New Agent',
         provider: 'anthropic' as const,
         model: 'claude-3',
-        plugins: ['web'],
+        extensions: ['web'],
         systemPrompt: 'You are helpful.',
         createdAt: Date.now(),
       } as unknown as Agent
@@ -424,7 +424,7 @@ describe('connectors/session', () => {
         name: 'Reuse Agent',
         provider: 'anthropic' as const,
         model: 'claude-3',
-        plugins: [],
+        extensions: [],
         systemPrompt: '',
         createdAt: Date.now(),
       } as unknown as Agent
@@ -446,7 +446,7 @@ describe('connectors/session', () => {
         name: 'Owner Agent',
         provider: 'anthropic',
         model: 'claude-3',
-        plugins: [],
+        extensions: [],
         threadSessionId: 'agent-thread-owner',
         createdAt: now,
       })
@@ -464,7 +464,7 @@ describe('connectors/session', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent-owner',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -491,7 +491,7 @@ describe('connectors/session', () => {
         name: 'Owner Agent',
         provider: 'anthropic' as const,
         model: 'claude-3',
-        plugins: [],
+        extensions: [],
         threadSessionId: 'agent-thread-owner',
         createdAt: now,
       } as unknown as Agent
@@ -513,7 +513,7 @@ describe('connectors/session', () => {
         name: 'Mirror Agent',
         provider: 'anthropic',
         model: 'claude-3',
-        plugins: [],
+        extensions: [],
         threadSessionId: 'agent-thread-mirror',
         createdAt: now,
       })
@@ -531,7 +531,7 @@ describe('connectors/session', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'agent-mirror',
-          plugins: [],
+          extensions: [],
         },
       })
 
@@ -586,7 +586,7 @@ describe('connectors/session', () => {
 
       mod.persistSessionRecord(session)
 
-      assert.ok(session.updatedAt > 0)
+      assert.ok(session.updatedAt! > 0)
       const loaded = storage.loadStoredItem('sessions', 'sess-persist') as Record<string, unknown>
       assert.ok(loaded)
       assert.equal(loaded.name, 'persist-test')

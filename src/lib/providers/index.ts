@@ -211,6 +211,40 @@ export const PROVIDERS: Record<string, BuiltinProviderConfig> = {
       },
     },
   },
+  nebius: {
+    id: 'nebius',
+    name: 'Nebius',
+    models: ['deepseek-ai/DeepSeek-R1-0528', 'Qwen/Qwen3-235B-A22B', 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8'],
+    requiresApiKey: true,
+    requiresEndpoint: false,
+    defaultEndpoint: 'https://api.tokenfactory.nebius.com/v1',
+    handler: {
+      streamChat: (opts) => {
+        const patchedSession = {
+          ...opts.session,
+          apiEndpoint: opts.session.apiEndpoint || 'https://api.tokenfactory.nebius.com/v1',
+        }
+        return streamOpenAiChat({ ...opts, session: patchedSession })
+      },
+    },
+  },
+  deepinfra: {
+    id: 'deepinfra',
+    name: 'DeepInfra',
+    models: ['deepseek-ai/DeepSeek-R1-0528', 'meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8', 'Qwen/Qwen3-235B-A22B'],
+    requiresApiKey: true,
+    requiresEndpoint: false,
+    defaultEndpoint: 'https://api.deepinfra.com/v1/openai',
+    handler: {
+      streamChat: (opts) => {
+        const patchedSession = {
+          ...opts.session,
+          apiEndpoint: opts.session.apiEndpoint || 'https://api.deepinfra.com/v1/openai',
+        }
+        return streamOpenAiChat({ ...opts, session: patchedSession })
+      },
+    },
+  },
   ollama: {
     id: 'ollama',
     name: 'Ollama',
@@ -282,11 +316,11 @@ export function getProviderList(): ProviderInfo[] {
       defaultEndpoint: c.baseUrl,
     }))
 
-  let pluginProviders: ProviderInfo[] = []
+  let extensionProviders: ProviderInfo[] = []
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getPluginManager } = require('../server/plugins')
-    pluginProviders = getPluginManager().getProviders().map((p: Record<string, unknown>) => ({
+    const { getExtensionManager } = require('../server/extensions')
+    extensionProviders = getExtensionManager().getProviders().map((p: Record<string, unknown>) => ({
       id: String(p.id) as ProviderType,
       name: String(p.name),
       models: p.models as string[],
@@ -296,9 +330,9 @@ export function getProviderList(): ProviderInfo[] {
       requiresEndpoint: Boolean(p.requiresEndpoint),
       defaultEndpoint: p.defaultEndpoint as string | undefined,
     }))
-  } catch { /* ignore if running somewhere plugins aren't available */ }
+  } catch { /* ignore if running somewhere extensions aren't available */ }
 
-  return [...builtins, ...customs, ...pluginProviders]
+  return [...builtins, ...customs, ...extensionProviders]
 }
 
 export function getProvider(id: string): BuiltinProviderConfig | null {
@@ -324,12 +358,12 @@ export function getProvider(id: string): BuiltinProviderConfig | null {
     }
   }
 
-  // Check Plugin Providers
+  // Check Extension Providers
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getPluginManager } = require('../server/plugins')
-    const pluginProviders = getPluginManager().getProviders()
-    const found = pluginProviders.find((p: Record<string, unknown>) => p.id === id)
+    const { getExtensionManager } = require('../server/extensions')
+    const extensionProviders = getExtensionManager().getProviders()
+    const found = extensionProviders.find((p: Record<string, unknown>) => p.id === id)
     if (found) {
       return {
         id: found.id as ProviderType,

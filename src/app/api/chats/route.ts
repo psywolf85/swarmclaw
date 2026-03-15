@@ -131,6 +131,7 @@ export async function POST(req: Request) {
     user: body.user || 'user',
     provider: body.provider || agent?.provider || 'claude-cli',
     model: body.model || agent?.model || '',
+    ollamaMode: body.ollamaMode ?? agent?.ollamaMode ?? ((body.provider || agent?.provider) === 'ollama' ? 'local' : null),
     credentialId: body.credentialId || agent?.credentialId || null,
     fallbackCredentialIds: body.fallbackCredentialIds || agent?.fallbackCredentialIds || [],
     apiEndpoint: normalizeProviderEndpoint(

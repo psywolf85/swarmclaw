@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: true, status: 'running' })
   } else if (action === 'stop') {
     const { stopDaemon } = await import('@/lib/server/runtime/daemon-state')
-    stopDaemon({ source: 'api/daemon:post:stop', manualStop: true })
+    await stopDaemon({ source: 'api/daemon:post:stop', manualStop: true })
     notify('daemon')
     return NextResponse.json({ ok: true, status: 'stopped' })
   }

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { getPluginManager } from './plugins'
+import { getExtensionManager } from './extensions'
 import { getEnabledToolPlanningView, getToolsForCapability, TOOL_CAPABILITY } from './tool-planning'
 
 let seq = 0
@@ -29,10 +29,10 @@ describe('tool-planning', () => {
     assert.deepEqual(aliasView.displayToolIds, ['google_workspace'])
   })
 
-  it('collects planning metadata from custom plugin tools', () => {
-    const pluginId = uniquePluginId('planner_plugin')
-    getPluginManager().registerBuiltin(pluginId, {
-      name: 'Planner Plugin',
+  it('collects planning metadata from custom extension tools', () => {
+    const extensionId = uniquePluginId('planner_extension')
+    getExtensionManager().registerBuiltin(extensionId, {
+      name: 'Planner Extension',
       tools: [
         {
           name: 'custom_media_sender',
@@ -47,8 +47,8 @@ describe('tool-planning', () => {
       ],
     })
 
-    const view = getEnabledToolPlanningView([pluginId])
-    assert.deepEqual(getToolsForCapability([pluginId], TOOL_CAPABILITY.deliveryMedia), ['custom_media_sender'])
+    const view = getEnabledToolPlanningView([extensionId])
+    assert.deepEqual(getToolsForCapability([extensionId], TOOL_CAPABILITY.deliveryMedia), ['custom_media_sender'])
     assert.equal(view.disciplineGuidance.includes('Use `custom_media_sender` for bespoke outbound media delivery.'), true)
   })
 })

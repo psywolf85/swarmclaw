@@ -28,7 +28,7 @@ function makeAgent(): Agent {
     systemPrompt: 'test',
     provider: 'ollama',
     model: 'qwen3.5',
-    plugins: ['wallet'],
+    extensions: ['wallet'],
     createdAt: now,
     updatedAt: now,
   }
@@ -47,7 +47,7 @@ function makeSession(): Session {
     messages: [],
     createdAt: now,
     lastActiveAt: now,
-    plugins: ['wallet'],
+    extensions: ['wallet'],
     agentId: 'agent_wallet',
   }
 }
@@ -59,7 +59,7 @@ function makeBuildContext(session: Session) {
       sessionId: session.id,
       agentId: session.agentId || null,
     },
-    hasPlugin: (pluginId: string) => pluginId === 'wallet',
+    hasExtension: (extensionId: string) => extensionId === 'wallet',
     hasTool: () => true,
     cleanupFns: [],
     commandTimeoutMs: 5000,
@@ -68,7 +68,7 @@ function makeBuildContext(session: Session) {
     persistDelegateResumeId: () => {},
     readStoredDelegateResumeId: () => null,
     resolveCurrentSession: () => session,
-    activePlugins: ['wallet'],
+    activeExtensions: ['wallet'],
   }
 }
 

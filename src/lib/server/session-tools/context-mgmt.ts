@@ -4,7 +4,7 @@ import { HumanMessage } from '@langchain/core/messages'
 import { loadSessions, saveSessions } from '../storage'
 import { buildChatModel } from '../build-llm'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks, Session } from '@/types'
+import type { Extension, ExtensionHooks, Session } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
@@ -68,12 +68,12 @@ async function executeContextSummarize(args: { keepLastN?: number }, bctx: Conte
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const ContextPlugin: Plugin = {
+const ContextExtension: Extension = {
   name: 'Core Context',
   description: 'Manage and optimize the agent conversation context window.',
-  hooks: {} as PluginHooks,
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'context_status',
@@ -93,7 +93,7 @@ const ContextPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('context_mgmt', ContextPlugin)
+registerNativeCapability('context_mgmt', ContextExtension)
 
 /**
  * Legacy Bridge
@@ -102,11 +102,11 @@ export function buildContextTools(bctx: ToolBuildContext): StructuredToolInterfa
   return [
     tool(
       async () => executeContextStatus(bctx),
-      { name: 'context_status', description: ContextPlugin.tools![0].description, schema: z.object({}).passthrough() }
+      { name: 'context_status', description: ContextExtension.tools![0].description, schema: z.object({}).passthrough() }
     ),
     tool(
       async (args) => executeContextSummarize(args as { keepLastN?: number }, bctx),
-      { name: 'context_summarize', description: ContextPlugin.tools![1].description, schema: z.object({}).passthrough() }
+      { name: 'context_summarize', description: ContextExtension.tools![1].description, schema: z.object({}).passthrough() }
     )
   ]
 }

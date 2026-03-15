@@ -165,13 +165,13 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     }
   }, [pathname, isViewEnabled, router, isAuthPage])
 
-  // Plugin sidebar items
-  const refreshPluginState = useCallback(() => {
+  // Extension sidebar items
+  const refreshExtensionState = useCallback(() => {
     void loadExtensions()
   }, [loadExtensions])
 
-  useEffect(() => { refreshPluginState() }, [refreshPluginState])
-  useWs('extensions', refreshPluginState, 30000)
+  useEffect(() => { refreshExtensionState() }, [refreshExtensionState])
+  useWs('extensions', refreshExtensionState, 30000)
 
   // Keyboard shortcuts
   const handleShortcutKey = useCallback((e: KeyboardEvent) => {

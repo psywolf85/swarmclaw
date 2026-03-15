@@ -191,6 +191,8 @@ export const OPENAI_COMPATIBLE_DEFAULTS: Record<string, { name: string; defaultE
   mistral: { name: 'Mistral AI', defaultEndpoint: 'https://api.mistral.ai/v1' },
   xai: { name: 'xAI (Grok)', defaultEndpoint: 'https://api.x.ai/v1' },
   fireworks: { name: 'Fireworks AI', defaultEndpoint: 'https://api.fireworks.ai/inference/v1' },
+  nebius: { name: 'Nebius', defaultEndpoint: 'https://api.tokenfactory.nebius.com/v1' },
+  deepinfra: { name: 'DeepInfra', defaultEndpoint: 'https://api.deepinfra.com/v1/openai' },
 }
 
 export async function pingOpenAiCompatible(

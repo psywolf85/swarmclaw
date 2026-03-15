@@ -1,8 +1,8 @@
-import type { PluginToolPlanning } from '@/types'
+import type { ExtensionToolPlanning } from '@/types'
 import { dedup } from '@/lib/shared-utils'
-import { getPluginManager } from './plugins'
+import { getExtensionManager } from './extensions'
 import { getNativeCapabilityTools } from './native-capabilities'
-import { canonicalizePluginId, expandPluginIds } from './tool-aliases'
+import { canonicalizeExtensionId, expandExtensionIds } from './tool-aliases'
 
 export const TOOL_CAPABILITY = {
   researchSearch: 'research.search',
@@ -21,12 +21,12 @@ export interface ToolPlanningEntry {
   toolName: string
   capabilities: string[]
   disciplineGuidance: string[]
-  requestMatchers: NonNullable<PluginToolPlanning['requestMatchers']>
+  requestMatchers: NonNullable<ExtensionToolPlanning['requestMatchers']>
 }
 
 export interface ToolPlanningView {
   displayToolIds: string[]
-  expandedPluginIds: string[]
+  expandedExtensionIds: string[]
   entries: ToolPlanningEntry[]
   disciplineGuidance: string[]
   capabilityToTools: Map<string, string[]>
@@ -161,7 +161,7 @@ const CORE_TOOL_PLANNING: Record<string, ToolPlanningEntry[]> = {
       disciplineGuidance: [
         'For `google_workspace`, pass exact `gws` arguments in `{"args":[...]}` form. Prefer list/get/read commands first to confirm IDs and current state before mutating Drive, Docs, Sheets, Gmail, Calendar, or Chat resources.',
         'Use `params` and `jsonInput` for `--params` / `--json` payloads instead of packing raw JSON blobs into the `args` array.',
-        'Do not call interactive `gws auth login` or `gws auth setup` from the agent. Use the plugin settings or a pre-authenticated `gws` install.',
+        'Do not call interactive `gws auth login` or `gws auth setup` from the agent. Use the extension settings or a pre-authenticated `gws` install.',
       ],
       requestMatchers: [
         {
@@ -189,7 +189,7 @@ function dedupeStrings(values: string[]): string[] {
   return dedup(values.filter((value) => typeof value === 'string' && value.trim()).map((value) => value.trim()))
 }
 
-function normalizePlanningEntry(toolName: string, planning: PluginToolPlanning | null | undefined): ToolPlanningEntry | null {
+function normalizePlanningEntry(toolName: string, planning: ExtensionToolPlanning | null | undefined): ToolPlanningEntry | null {
   if (!planning) return null
   const capabilities = dedupeStrings(Array.isArray(planning.capabilities) ? planning.capabilities : [])
   const disciplineGuidance = dedupeStrings(Array.isArray(planning.disciplineGuidance) ? planning.disciplineGuidance : [])
@@ -212,13 +212,13 @@ function normalizePlanningEntry(toolName: string, planning: PluginToolPlanning |
   }
 }
 
-export function getEnabledToolPlanningView(enabledPlugins: string[]): ToolPlanningView {
-  const displayToolIds = dedupeStrings(enabledPlugins.map((toolId) => canonicalizePluginId(toolId))).sort()
-  const expandedPluginIds = dedupeStrings(expandPluginIds(enabledPlugins)).sort()
+export function getEnabledToolPlanningView(enabledExtensions: string[]): ToolPlanningView {
+  const displayToolIds = dedupeStrings(enabledExtensions.map((toolId) => canonicalizeExtensionId(toolId))).sort()
+  const expandedExtensionIds = dedupeStrings(expandExtensionIds(enabledExtensions)).sort()
   const entries: ToolPlanningEntry[] = []
 
-  for (const pluginId of expandedPluginIds) {
-    const coreEntries = CORE_TOOL_PLANNING[pluginId] || []
+  for (const extensionId of expandedExtensionIds) {
+    const coreEntries = CORE_TOOL_PLANNING[extensionId] || []
     for (const entry of coreEntries) {
       entries.push({
         toolName: entry.toolName,
@@ -230,8 +230,8 @@ export function getEnabledToolPlanningView(enabledPlugins: string[]): ToolPlanni
   }
 
   for (const entry of [
-    ...getNativeCapabilityTools(expandedPluginIds),
-    ...getPluginManager().getTools(expandedPluginIds),
+    ...getNativeCapabilityTools(expandedExtensionIds),
+    ...getExtensionManager().getTools(expandedExtensionIds),
   ]) {
     const planningEntry = normalizePlanningEntry(entry.tool.name, entry.tool.planning)
     if (planningEntry) entries.push(planningEntry)
@@ -250,7 +250,7 @@ export function getEnabledToolPlanningView(enabledPlugins: string[]): ToolPlanni
 
   return {
     displayToolIds,
-    expandedPluginIds,
+    expandedExtensionIds,
     entries,
     disciplineGuidance: Array.from(disciplineSet),
     capabilityToTools: new Map(
@@ -259,23 +259,23 @@ export function getEnabledToolPlanningView(enabledPlugins: string[]): ToolPlanni
   }
 }
 
-export function getToolsForCapability(enabledPlugins: string[], capability: string): string[] {
-  return getEnabledToolPlanningView(enabledPlugins).capabilityToTools.get(capability) || []
+export function getToolsForCapability(enabledExtensions: string[], capability: string): string[] {
+  return getEnabledToolPlanningView(enabledExtensions).capabilityToTools.get(capability) || []
 }
 
-export function getFirstToolForCapability(enabledPlugins: string[], capability: string): string | null {
-  return getToolsForCapability(enabledPlugins, capability)[0] || null
+export function getFirstToolForCapability(enabledExtensions: string[], capability: string): string | null {
+  return getToolsForCapability(enabledExtensions, capability)[0] || null
 }
 
 export function matchToolCapabilitiesForMessage(
-  enabledPlugins: string[],
+  enabledExtensions: string[],
   message: string,
 ): Map<string, string[]> {
   const text = String(message || '').toLowerCase()
   const hasLiteralUrl = /https?:\/\/[^\s<>"')]+/i.test(message)
   const matches = new Map<string, Set<string>>()
 
-  for (const entry of getEnabledToolPlanningView(enabledPlugins).entries) {
+  for (const entry of getEnabledToolPlanningView(enabledExtensions).entries) {
     for (const matcher of entry.requestMatchers) {
       const patterns = Array.isArray(matcher.patterns) ? matcher.patterns : []
       if (matcher.requireLiteralUrl === true && !hasLiteralUrl) continue

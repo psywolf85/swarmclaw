@@ -1,7 +1,7 @@
 'use client'
 
 import { useAppStore } from '@/stores/use-app-store'
-import { PluginList } from '@/components/plugins/plugin-list'
+import { ExtensionList } from '@/components/extensions/extension-list'
 
 export default function ExtensionsPage() {
   return (
@@ -11,7 +11,7 @@ export default function ExtensionsPage() {
           Extensions
         </h2>
         <button
-          onClick={() => useAppStore.getState().setPluginSheetOpen(true)}
+          onClick={() => useAppStore.getState().setExtensionSheetOpen(true)}
           className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-[8px] text-[11px] font-600 text-accent-bright bg-accent-soft hover:bg-accent-bright/15 transition-all cursor-pointer"
           style={{ fontFamily: 'inherit' }}
         >
@@ -21,7 +21,7 @@ export default function ExtensionsPage() {
           Extension
         </button>
       </div>
-      <PluginList />
+      <ExtensionList />
     </div>
   )
 }

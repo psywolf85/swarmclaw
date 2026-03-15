@@ -10,8 +10,8 @@ import { safePath, truncate, MAX_OUTPUT, findBinaryOnPath } from './context'
 import { getSearchProvider } from './search-providers'
 import { dedupeScreenshotMarkdownLines } from './web-output'
 import { withRetry } from '../tool-retry'
-import type { BrowserObservation, Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { BrowserObservation, Extension, ExtensionHooks } from '@/types'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { dedup, errorMessage, hmrSingleton, sleep } from '@/lib/shared-utils'
 import { resolvePathWithinBaseDir } from '../path-utils'
@@ -154,6 +154,51 @@ export function hasActiveBrowser(sessionId: string): boolean { return activeBrow
  * Unified Web Execution Logic
  */
  
+async function executeWebApiAction(normalized: Record<string, unknown>) {
+  const { withRetry } = await import('../tool-retry')
+  const method = String(normalized.method || '').toUpperCase()
+  const url = String(normalized.url || '')
+  if (!method || !url) return 'Error: "method" and "url" are required for api action.'
+  const headers = normalized.headers as Record<string, string> | undefined
+  const body = typeof normalized.body === 'string' ? normalized.body : undefined
+  const timeoutSec = typeof normalized.timeoutSec === 'number' ? normalized.timeoutSec : undefined
+  const followRedirects = typeof normalized.followRedirects === 'boolean' ? normalized.followRedirects : undefined
+
+  const requestArgs = { method, url, headers, body, timeoutSec, followRedirects }
+  return withRetry(async (a: typeof requestArgs) => {
+    try {
+      const timeout = Math.max(1, Math.min(a.timeoutSec ?? 30, 120)) * 1000
+      const init: RequestInit = {
+        method: a.method,
+        headers: (a.headers ?? undefined) as Record<string, string> | undefined,
+        signal: AbortSignal.timeout(timeout),
+      }
+      if (a.body && a.method !== 'GET' && a.method !== 'HEAD') {
+        init.body = a.body
+      }
+      if (a.followRedirects === false) {
+        init.redirect = 'manual'
+      }
+      const res = await fetch(a.url, init)
+      const resHeaders: Record<string, string> = {}
+      for (const key of ['content-type', 'location', 'x-request-id', 'retry-after', 'content-length']) {
+        const val = res.headers.get(key)
+        if (val) resHeaders[key] = val
+      }
+      let resBody: string
+      const ct = res.headers.get('content-type') ?? ''
+      if (ct.includes('image/') || ct.includes('audio/') || ct.includes('video/') || ct.includes('application/octet-stream')) {
+        resBody = `[binary content, ${res.headers.get('content-length') ?? 'unknown'} bytes]`
+      } else {
+        resBody = truncate(await res.text(), MAX_OUTPUT)
+      }
+      return JSON.stringify({ status: res.status, statusText: res.statusText, headers: resHeaders, body: resBody })
+    } catch (err: unknown) {
+      return JSON.stringify({ error: errorMessage(err) })
+    }
+  }, requestArgs)
+}
+
 async function executeWebAction(args: Record<string, unknown>) {
   const normalized = normalizeToolInputArgs(args)
   const { query, url, maxResults } = normalized as { query?: string; url?: string; maxResults?: number }
@@ -161,6 +206,7 @@ async function executeWebAction(args: Record<string, unknown>) {
     action: (normalized as { action?: string }).action,
     query,
     url,
+    method: (normalized as { method?: string }).method,
   })
   try {
     if (action === 'search') {
@@ -199,6 +245,8 @@ async function executeWebAction(args: Record<string, unknown>) {
       const main = $('article, main, [role="main"]').first()
       const text = (main.length ? main.text() : $('body').text()).replace(/\s+/g, ' ').trim()
       return truncate(text, MAX_OUTPUT)
+    } else if (action === 'api') {
+      return executeWebApiAction(normalized)
     }
     return `Error: Unknown action "${action}"`
   } catch (err: unknown) {
@@ -207,25 +255,30 @@ async function executeWebAction(args: Record<string, unknown>) {
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const WebPlugin: Plugin = {
+const WebExtension: Extension = {
   name: 'Core Web',
-  description: 'Search the web and fetch content from URLs.',
+  description: 'Search the web, fetch content, and make HTTP API calls.',
   hooks: {
-    getCapabilityDescription: () => 'I can use the unified `web` tool with action `search` for research and action `fetch` for reading a URL.',
-  } as PluginHooks,
+    getCapabilityDescription: () => 'I can use the unified `web` tool with action `search` for research, `fetch` for reading a URL, and `api` for raw HTTP API calls with full control over method/headers/body.',
+  } as ExtensionHooks,
   tools: [
     {
       name: 'web',
-      description: 'Unified web access tool. Actions: search, fetch.',
+      description: 'Unified web access tool. Actions: search (web search), fetch (read URL content), api (raw HTTP request with method/headers/body).',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['search', 'fetch'] },
+          action: { type: 'string', enum: ['search', 'fetch', 'api'] },
           query: { type: 'string' },
           url: { type: 'string' },
-          maxResults: { type: 'number' }
+          maxResults: { type: 'number' },
+          method: { type: 'string', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'HEAD', 'OPTIONS'], description: 'HTTP method (for api action)' },
+          headers: { type: 'object', additionalProperties: { type: 'string' }, description: 'Request headers (for api action)' },
+          body: { type: 'string', description: 'Request body (for api action)' },
+          timeoutSec: { type: 'number', description: 'Timeout in seconds (for api action, default 30, max 120)' },
+          followRedirects: { type: 'boolean', description: 'Follow redirects (for api action, default true)' },
         },
         required: ['action']
       },
@@ -234,7 +287,7 @@ const WebPlugin: Plugin = {
   ]
 }
 
-getPluginManager().registerBuiltin('web', WebPlugin)
+registerNativeCapability('web', WebExtension)
 
 /**
  * Legacy Bridge
@@ -243,13 +296,13 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
   const tools: StructuredToolInterface[] = []
   const { cwd, ctx, cleanupFns, filesystemScope } = bctx
 
-  if (bctx.hasPlugin('web')) {
+  if (bctx.hasExtension('web')) {
     tools.push(
       tool(
         async (args) => executeWebAction(args),
         {
           name: 'web',
-          description: WebPlugin.tools![0].description,
+          description: WebExtension.tools![0].description,
           schema: z.object({}).passthrough()
         }
       )
@@ -257,7 +310,7 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
   }
 
   // Browser tool (kept as direct injection for now due to complexity)
-  if (bctx.hasPlugin('browser')) {
+  if (bctx.hasExtension('browser')) {
     const sessionKey = ctx?.sessionId || `anon-${Date.now()}`
     const currentSession = bctx.resolveCurrentSession?.()
     const profileInfo = currentSession?.id
@@ -1581,7 +1634,7 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
 
   // openclaw_browser CLI passthrough
   const openclawPath = findBinaryOnPath('openclaw') || findBinaryOnPath('clawdbot')
-  if (openclawPath && (bctx.hasPlugin('browser') || bctx.hasPlugin('openclaw_browser'))) {
+  if (openclawPath && (bctx.hasExtension('browser') || bctx.hasExtension('openclaw_browser'))) {
     tools.push(
       tool(
         async (rawArgs) => {

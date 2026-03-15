@@ -13,10 +13,10 @@ afterEach(() => {
 })
 
 describe('proxy', () => {
-  it('keeps CORS headers on plugin-install auth failures for allowed origins', () => {
+  it('keeps CORS headers on extension-install auth failures for allowed origins', () => {
     process.env.ACCESS_KEY = 'top-secret'
 
-    const request = new NextRequest('http://localhost/api/plugins/install', {
+    const request = new NextRequest('http://localhost/api/extensions/install', {
       method: 'POST',
       headers: {
         origin: 'https://swarmclaw.ai',

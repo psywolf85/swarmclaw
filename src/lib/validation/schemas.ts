@@ -1,4 +1,8 @@
 import { z } from 'zod'
+import type { ProtocolStepDefinition } from '@/types'
+import { validateStepDag, validateStepRefs } from '@/lib/server/protocols/step-dag-validation'
+
+const OllamaModeSchema = z.enum(['local', 'cloud']).nullable().optional().default(null)
 
 const AgentSandboxBrowserSchema = z.object({
   enabled: z.boolean().optional(),
@@ -43,6 +47,7 @@ const AgentRoutingTargetSchema = z.object({
   role: z.enum(['primary', 'economy', 'premium', 'reasoning', 'backup']).optional(),
   provider: z.string().min(1),
   model: z.string().optional().default(''),
+  ollamaMode: OllamaModeSchema,
   credentialId: z.string().nullable().optional().default(null),
   fallbackCredentialIds: z.array(z.string()).optional().default([]),
   apiEndpoint: z.string().nullable().optional().default(null),
@@ -58,6 +63,7 @@ export const AgentCreateSchema = z.object({
   description: z.string().optional().default(''),
   systemPrompt: z.string().optional().default(''),
   model: z.string().optional().default(''),
+  ollamaMode: OllamaModeSchema,
   credentialId: z.string().nullable().optional().default(null),
   fallbackCredentialIds: z.array(z.string()).optional().default([]),
   apiEndpoint: z.string().nullable().optional().default(null),
@@ -254,6 +260,75 @@ export const ProtocolRepeatConfigSchema = z.object({
   onExhausted: z.enum(['advance', 'fail']).optional().default('fail'),
 })
 
+const ProtocolForEachItemsSourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('literal'), items: z.array(z.unknown()).min(1) }),
+  z.object({ type: z.literal('step_output'), stepId: z.string().min(1), path: z.string().nullable().optional().default(null) }),
+  z.object({ type: z.literal('artifact'), artifactId: z.string().nullable().optional().default(null), artifactKind: z.string().nullable().optional().default(null) }),
+  z.object({ type: z.literal('llm_extract'), prompt: z.string().min(1) }),
+])
+
+const ProtocolForEachConfigSchema = z.object({
+  itemsSource: ProtocolForEachItemsSourceSchema,
+  itemAlias: z.string().min(1),
+  branchTemplate: z.object({
+    steps: z.lazy(() => z.array(ProtocolStepDefinitionSchema).min(1)),
+    entryStepId: z.string().nullable().optional().default(null),
+    participantAgentIds: z.array(z.string()).optional().default([]),
+    facilitatorAgentId: z.string().nullable().optional().default(null),
+  }),
+  joinMode: z.literal('all').optional().default('all'),
+  maxItems: z.number().int().min(1).max(200).nullable().optional().default(50),
+  onEmpty: z.enum(['fail', 'skip', 'advance']).optional().default('fail'),
+})
+
+const ProtocolSubflowConfigSchema = z.object({
+  templateId: z.string().min(1),
+  templateVersion: z.string().nullable().optional().default(null),
+  participantAgentIds: z.array(z.string()).optional().default([]),
+  facilitatorAgentId: z.string().nullable().optional().default(null),
+  inputMapping: z.record(z.string(), z.string()).nullable().optional().default(null),
+  outputMapping: z.record(z.string(), z.string()).nullable().optional().default(null),
+  onFailure: z.enum(['fail_parent', 'advance_with_warning']).optional().default('fail_parent'),
+})
+
+const ProtocolSwarmWorkItemSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  description: z.string().nullable().optional().default(null),
+})
+
+const ProtocolSwarmWorkItemsSourceSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('literal'), items: z.array(ProtocolSwarmWorkItemSchema).min(1) }),
+  z.object({ type: z.literal('step_output'), stepId: z.string().min(1), path: z.string().nullable().optional().default(null) }),
+])
+
+const ProtocolSwarmConfigSchema = z.object({
+  eligibleAgentIds: z.array(z.string().min(1)).min(1),
+  workItemsSource: ProtocolSwarmWorkItemsSourceSchema,
+  claimLimitPerAgent: z.number().int().min(1).max(10).nullable().optional().default(1),
+  selectionMode: z.enum(['first_claim', 'claim_until_empty']).optional().default('first_claim'),
+  claimTimeoutSec: z.number().min(30).max(3600).optional().default(300),
+  onUnclaimed: z.enum(['fail', 'advance', 'fallback_assign']).optional().default('fail'),
+})
+
+export const ProtocolJoinConfigSchema = z.object({
+  parallelStepId: z.string().nullable().optional().default(null),
+})
+
+export const ProtocolParallelBranchDefinitionSchema: z.ZodTypeAny = z.lazy(() => z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  steps: z.array(ProtocolStepDefinitionSchema).min(1),
+  entryStepId: z.string().nullable().optional().default(null),
+  participantAgentIds: z.array(z.string()).optional().default([]),
+  facilitatorAgentId: z.string().nullable().optional().default(null),
+  observerAgentIds: z.array(z.string()).optional().default([]),
+}))
+
+export const ProtocolParallelConfigSchema = z.object({
+  branches: z.array(ProtocolParallelBranchDefinitionSchema).min(1),
+})
+
 export const ProtocolStepDefinitionSchema: z.ZodTypeAny = z.lazy(() => z.object({
   id: z.string().min(1),
   kind: z.enum([
@@ -270,6 +345,11 @@ export const ProtocolStepDefinitionSchema: z.ZodTypeAny = z.lazy(() => z.object(
     'parallel',
     'join',
     'complete',
+    'for_each',
+    'subflow',
+    'swarm_claim',
+    'dispatch_task',
+    'dispatch_delegation',
   ]),
   label: z.string().min(1),
   instructions: z.string().nullable().optional().default(null),
@@ -281,25 +361,12 @@ export const ProtocolStepDefinitionSchema: z.ZodTypeAny = z.lazy(() => z.object(
   repeat: ProtocolRepeatConfigSchema.nullable().optional().default(null),
   parallel: ProtocolParallelConfigSchema.nullable().optional().default(null),
   join: ProtocolJoinConfigSchema.nullable().optional().default(null),
+  dependsOnStepIds: z.array(z.string()).optional().default([]),
+  outputKey: z.string().nullable().optional().default(null),
+  forEach: ProtocolForEachConfigSchema.nullable().optional().default(null),
+  subflow: ProtocolSubflowConfigSchema.nullable().optional().default(null),
+  swarm: ProtocolSwarmConfigSchema.nullable().optional().default(null),
 }))
-
-export const ProtocolParallelBranchDefinitionSchema = z.object({
-  id: z.string().min(1),
-  label: z.string().min(1),
-  steps: z.array(ProtocolStepDefinitionSchema).min(1),
-  entryStepId: z.string().nullable().optional().default(null),
-  participantAgentIds: z.array(z.string()).optional().default([]),
-  facilitatorAgentId: z.string().nullable().optional().default(null),
-  observerAgentIds: z.array(z.string()).optional().default([]),
-})
-
-export const ProtocolParallelConfigSchema = z.object({
-  branches: z.array(ProtocolParallelBranchDefinitionSchema).min(1),
-})
-
-export const ProtocolJoinConfigSchema = z.object({
-  parallelStepId: z.string().nullable().optional().default(null),
-})
 
 export const ProtocolRunCreateSchema = z.object({
   title: z.string().min(1, 'A session title is required'),
@@ -353,13 +420,35 @@ export const ProtocolTemplateUpsertSchema = z.object({
       message: 'Provide at least one phase or one step.',
     })
   }
+  if (value.steps.length > 0) {
+    const steps = value.steps as ProtocolStepDefinition[]
+    const dagResult = validateStepDag(steps)
+    if (!dagResult.valid) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['steps'],
+        message: `Cycle detected in step dependencies: ${dagResult.cycle?.join(' → ')}`,
+      })
+    }
+    const invalidRefs = validateStepRefs(steps)
+    for (const ref of invalidRefs) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['steps'],
+        message: `Step references unknown step ID: "${ref}"`,
+      })
+    }
+  }
 })
 
 export const ProtocolRunActionSchema = z.object({
-  action: z.enum(['start', 'pause', 'resume', 'retry_phase', 'skip_phase', 'cancel', 'archive', 'inject_context']),
+  action: z.enum(['start', 'pause', 'resume', 'retry_phase', 'skip_phase', 'cancel', 'archive', 'inject_context', 'claim_work']),
   reason: z.string().nullable().optional().default(null),
   phaseId: z.string().nullable().optional().default(null),
   context: z.string().nullable().optional().default(null),
+  stepId: z.string().nullable().optional().default(null),
+  agentId: z.string().nullable().optional().default(null),
+  workItemId: z.string().nullable().optional().default(null),
 })
 
 /** Format ZodError into a 400-friendly payload */

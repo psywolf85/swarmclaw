@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage, sleep } from '@/lib/shared-utils'
@@ -450,9 +450,9 @@ async function executeSubagentAction(args: unknown, context: ActionContext) {
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const SubagentPlugin: Plugin = {
+const SubagentExtension: Extension = {
   name: 'Core Subagents',
   description: 'Delegate tasks to other specialized agents with resumable job handles.',
   hooks: {
@@ -472,7 +472,7 @@ const SubagentPlugin: Plugin = {
       '- Only use subagents when the task genuinely requires another agent\'s specialization or parallel execution.',
       '- If you can answer directly from your own knowledge, do NOT spawn a subagent.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'spawn_subagent',
@@ -531,13 +531,13 @@ const SubagentPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('subagent', SubagentPlugin)
+registerNativeCapability('subagent', SubagentExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildSubagentTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.ctx?.delegationEnabled || !bctx.hasPlugin('spawn_subagent')) return []
+  if (!bctx.ctx?.delegationEnabled || !bctx.hasExtension('spawn_subagent')) return []
   return [
     tool(
       async (args) => executeSubagentAction(args, {
@@ -548,7 +548,7 @@ export function buildSubagentTools(bctx: ToolBuildContext): StructuredToolInterf
       }),
       {
         name: 'spawn_subagent',
-        description: SubagentPlugin.tools![0].description,
+        description: SubagentExtension.tools![0].description,
         schema: subagentToolSchema
       }
     )

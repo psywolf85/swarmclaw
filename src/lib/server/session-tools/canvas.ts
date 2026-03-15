@@ -3,7 +3,7 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { loadSessions, saveSessions } from '../storage'
 import { notify } from '../ws-hub'
 import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { normalizeCanvasContent, summarizeCanvasContent } from '@/lib/canvas-content'
@@ -61,12 +61,12 @@ async function executeCanvasAction(args: Record<string, unknown>, context: { ses
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const CanvasPlugin: Plugin = {
+const CanvasExtension: Extension = {
   name: 'Core Canvas',
   description: 'Present live HTML/CSS/JS content to the user in an interactive canvas panel.',
-  hooks: {} as PluginHooks,
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'canvas',
@@ -85,19 +85,19 @@ const CanvasPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('canvas', CanvasPlugin)
+registerNativeCapability('canvas', CanvasExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildCanvasTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('canvas')) return []
+  if (!bctx.hasExtension('canvas')) return []
   return [
     tool(
       async (args) => executeCanvasAction(args, { sessionId: bctx.ctx?.sessionId || undefined }),
       {
         name: 'canvas',
-        description: CanvasPlugin.tools![0].description,
+        description: CanvasExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

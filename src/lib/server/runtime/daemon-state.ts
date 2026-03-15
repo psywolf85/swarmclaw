@@ -35,7 +35,7 @@ import { pingProvider, OPENAI_COMPATIBLE_DEFAULTS } from '@/lib/server/provider-
 import { runIntegrityMonitor } from '@/lib/server/integrity-monitor'
 import { recoverStaleDelegationJobs } from '@/lib/server/agents/delegation-jobs'
 import { pruneMainLoopState } from '@/lib/server/agents/main-agent-loop'
-import { ensureProtocolEngineRecovered } from '@/lib/server/protocols/protocol-service'
+import { checkSwarmTimeouts, ensureProtocolEngineRecovered } from '@/lib/server/protocols/protocol-service'
 import { sweepManagedProcesses, reapOrphanedSandboxContainers } from '@/lib/server/runtime/process-manager'
 import { drainIdleWindowCallbacks } from '@/lib/server/runtime/idle-window'
 import {
@@ -89,6 +89,7 @@ interface DaemonState {
   memoryConsolidationTimeoutId: ReturnType<typeof setTimeout> | null
   memoryConsolidationIntervalId: ReturnType<typeof setInterval> | null
   evalSchedulerIntervalId: ReturnType<typeof setInterval> | null
+  swarmTimeoutIntervalId: ReturnType<typeof setInterval> | null
   /** Session IDs we've already alerted as stale (alert-once semantics). */
   staleSessionIds: Set<string>
   /** OpenClaw gateway agent IDs currently considered down. */
@@ -114,6 +115,7 @@ const ds: DaemonState = hmrSingleton<DaemonState>('__swarmclaw_daemon__', () => 
   memoryConsolidationTimeoutId: null,
   memoryConsolidationIntervalId: null,
   evalSchedulerIntervalId: null,
+  swarmTimeoutIntervalId: null,
   staleSessionIds: new Set<string>(),
   openclawDownAgentIds: new Set<string>(),
   openclawRepairState: new Map<string, { attempts: number; lastAttemptAt: number; cooldownUntil: number }>(),
@@ -143,6 +145,7 @@ if (ds.manualStopRequested === undefined) ds.manualStopRequested = false
 if (ds.memoryConsolidationTimeoutId === undefined) ds.memoryConsolidationTimeoutId = null
 if (ds.memoryConsolidationIntervalId === undefined) ds.memoryConsolidationIntervalId = null
 if (ds.evalSchedulerIntervalId === undefined) ds.evalSchedulerIntervalId = null
+if (ds.swarmTimeoutIntervalId === undefined) ds.swarmTimeoutIntervalId = null
 if (ds.healthCheckRunning === undefined) ds.healthCheckRunning = false
 if (ds.connectorHealthCheckRunning === undefined) ds.connectorHealthCheckRunning = false
 if (ds.shuttingDown === undefined) ds.shuttingDown = false
@@ -175,6 +178,7 @@ export function startDaemon(options?: { source?: string; manualStart?: boolean }
     startBrowserSweep()
     startHeartbeatService()
     startMemoryConsolidation()
+    startSwarmTimeoutChecker()
     syncDaemonBackgroundServices({ runConnectorHealthCheckImmediately: false })
     return
   }
@@ -193,6 +197,7 @@ export function startDaemon(options?: { source?: string; manualStart?: boolean }
     startBrowserSweep()
     startHeartbeatService()
     startMemoryConsolidation()
+    startSwarmTimeoutChecker()
     syncDaemonBackgroundServices({ runConnectorHealthCheckImmediately: false })
   } catch (err: unknown) {
     ds.running = false
@@ -226,6 +231,7 @@ export async function stopDaemon(options?: { source?: string; manualStop?: boole
   stopConnectorOutboxWorker()
   stopHeartbeatService()
   stopMemoryConsolidation()
+  stopSwarmTimeoutChecker()
   stopEvalScheduler()
   try {
     await Promise.race([
@@ -920,7 +926,7 @@ async function runHealthChecks() {
     console.error('[daemon] OpenClaw gateway health check failed:', errorMessage(err))
   }
 
-  // Integrity drift monitoring for identity/config/plugin files.
+  // Integrity drift monitoring for identity/config/extension files.
   try {
     const integrity = runIntegrityMonitor(loadSettings())
     ds.lastIntegrityCheckAt = integrity.checkedAt
@@ -1039,16 +1045,20 @@ function stopConnectorHealthMonitor() {
 }
 
 function runConsolidationTick() {
-  import('@/lib/server/memory/memory-consolidation').then(({ runDailyConsolidation }) =>
-    runDailyConsolidation().then((stats) => {
+  import('@/lib/server/memory/memory-consolidation').then(({ runDailyConsolidation, registerConsolidationIdleCallback, registerCompactionIdleCallback }) => {
+    // Wire idle-window callbacks so consolidation and compaction run during quiet periods
+    registerConsolidationIdleCallback()
+    registerCompactionIdleCallback()
+
+    return runDailyConsolidation().then((stats) => {
       if (stats.digests > 0 || stats.pruned > 0 || stats.deduped > 0) {
         console.log(`[daemon] Memory consolidation: ${stats.digests} digest(s), ${stats.pruned} pruned, ${stats.deduped} deduped`)
       }
       if (stats.errors.length > 0) {
         console.warn(`[daemon] Memory consolidation errors: ${stats.errors.join('; ')}`)
       }
-    }),
-  ).catch((err: unknown) => {
+    })
+  }).catch((err: unknown) => {
     console.error('[daemon] Memory consolidation failed:', errorMessage(err))
   })
 }
@@ -1129,6 +1139,27 @@ function stopEvalScheduler() {
   }
 }
 
+const SWARM_TIMEOUT_CHECK_INTERVAL = 30_000
+
+function startSwarmTimeoutChecker() {
+  if (ds.swarmTimeoutIntervalId) return
+  ds.swarmTimeoutIntervalId = setInterval(() => {
+    if (!ds.running || ds.shuttingDown) return
+    try {
+      checkSwarmTimeouts()
+    } catch (err: unknown) {
+      console.error(`[daemon] Swarm timeout check error: ${errorMessage(err)}`)
+    }
+  }, SWARM_TIMEOUT_CHECK_INTERVAL)
+}
+
+function stopSwarmTimeoutChecker() {
+  if (ds.swarmTimeoutIntervalId) {
+    clearInterval(ds.swarmTimeoutIntervalId)
+    ds.swarmTimeoutIntervalId = null
+  }
+}
+
 function refreshDaemonTimersForHotReload() {
   if (!ds.running) return
 
@@ -1161,6 +1192,11 @@ function refreshDaemonTimersForHotReload() {
 
   if (ds.evalSchedulerIntervalId) {
     stopEvalScheduler()
+  }
+
+  if (ds.swarmTimeoutIntervalId) {
+    stopSwarmTimeoutChecker()
+    startSwarmTimeoutChecker()
   }
 
   syncDaemonBackgroundServices()

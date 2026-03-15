@@ -93,56 +93,56 @@ describe('integrity-monitor', () => {
   })
 
   it('detects file modification as drift', () => {
-    // Create a plugin file in the data/plugins dir
-    const pluginDir = path.join(process.env.DATA_DIR!, 'plugins')
-    fs.mkdirSync(pluginDir, { recursive: true })
-    const pluginFile = path.join(pluginDir, 'test-integrity-plugin.js')
-    fs.writeFileSync(pluginFile, 'module.exports = { name: "test" }')
+    // Create an extension file in the data/plugins dir
+    const extDir = path.join(process.env.DATA_DIR!, 'plugins')
+    fs.mkdirSync(extDir, { recursive: true })
+    const extFile = path.join(extDir, 'test-integrity-extension.js')
+    fs.writeFileSync(extFile, 'module.exports = { name: "test" }')
 
     // First run: baseline
     integrityMonitor.runIntegrityMonitor({ integrityMonitorEnabled: true })
 
     // Modify the file
-    fs.writeFileSync(pluginFile, 'module.exports = { name: "modified" }')
+    fs.writeFileSync(extFile, 'module.exports = { name: "modified" }')
 
     // Second run: should detect drift
     const result = integrityMonitor.runIntegrityMonitor({ integrityMonitorEnabled: true })
-    const drift = result.drifts.find((d) => d.filePath === path.resolve(pluginFile))
-    assert.ok(drift, 'should detect modified plugin file')
+    const drift = result.drifts.find((d) => d.filePath === path.resolve(extFile))
+    assert.ok(drift, 'should detect modified extension file')
     assert.equal(drift!.type, 'modified')
     assert.ok(drift!.previousHash)
     assert.ok(drift!.nextHash)
     assert.notEqual(drift!.previousHash, drift!.nextHash)
   })
 
-  it('deleted plugin file is no longer in watch targets (no drift)', () => {
+  it('deleted extension file is no longer in watch targets (no drift)', () => {
     // pushIfExists skips non-existent files, so deletion means the file
     // simply drops out of the watch targets — no drift is generated.
-    const pluginDir = path.join(process.env.DATA_DIR!, 'plugins')
-    fs.mkdirSync(pluginDir, { recursive: true })
-    const pluginFile = path.join(pluginDir, 'test-delete-plugin.js')
-    fs.writeFileSync(pluginFile, 'module.exports = {}')
+    const extDir = path.join(process.env.DATA_DIR!, 'plugins')
+    fs.mkdirSync(extDir, { recursive: true })
+    const extFile = path.join(extDir, 'test-delete-extension.js')
+    fs.writeFileSync(extFile, 'module.exports = {}')
 
     // Baseline
     integrityMonitor.runIntegrityMonitor({ integrityMonitorEnabled: true })
 
     // Delete
-    fs.unlinkSync(pluginFile)
+    fs.unlinkSync(extFile)
 
     const result = integrityMonitor.runIntegrityMonitor({ integrityMonitorEnabled: true })
-    const drift = result.drifts.find((d) => d.filePath === path.resolve(pluginFile))
+    const drift = result.drifts.find((d) => d.filePath === path.resolve(extFile))
     assert.equal(drift, undefined, 'deleted file should not appear as drift')
   })
 
-  it('new plugin file is baselined without drift on first run', () => {
-    const pluginDir = path.join(process.env.DATA_DIR!, 'plugins')
-    fs.mkdirSync(pluginDir, { recursive: true })
-    const pluginFile = path.join(pluginDir, 'brand-new-plugin.js')
-    fs.writeFileSync(pluginFile, 'module.exports = { name: "new" }')
+  it('new extension file is baselined without drift on first run', () => {
+    const extDir = path.join(process.env.DATA_DIR!, 'plugins')
+    fs.mkdirSync(extDir, { recursive: true })
+    const extFile = path.join(extDir, 'brand-new-extension.js')
+    fs.writeFileSync(extFile, 'module.exports = { name: "new" }')
 
     const result = integrityMonitor.runIntegrityMonitor({ integrityMonitorEnabled: true })
     // First time seeing the file — establishes baseline, no drift
-    const drift = result.drifts.find((d) => d.filePath === path.resolve(pluginFile))
+    const drift = result.drifts.find((d) => d.filePath === path.resolve(extFile))
     assert.equal(drift, undefined, 'new file on first run should not produce drift')
     assert.ok(result.checkedFiles > 0)
   })

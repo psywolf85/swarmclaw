@@ -3,10 +3,10 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { spawn, spawnSync, type ChildProcess } from 'child_process'
 import type { ToolBuildContext } from './context'
 import { truncate, findBinaryOnPath, MAX_OUTPUT } from './context'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
-import { canonicalizePluginId } from '../tool-aliases'
+import { canonicalizeExtensionId } from '../tool-aliases'
 import { errorMessage, sleep } from '@/lib/shared-utils'
 import {
   appendDelegationCheckpoint,
@@ -43,8 +43,8 @@ interface DelegateContext {
     agentId?: string | null
     sessionId?: string | null
   }
-  hasPlugin?: (name: string) => boolean
-  /** @deprecated Use hasPlugin */
+  hasExtension?: (name: string) => boolean
+  /** @deprecated Use hasExtension */
   hasTool?: (name: string) => boolean
 }
 
@@ -265,10 +265,10 @@ function resolveDirectLocalToolDelegationTarget(
   if (!trimmed) return null
   if (coerceDelegateBackend(trimmed)) return null
 
-  const canonical = canonicalizePluginId(trimmed) || trimmed.toLowerCase()
+  const canonical = canonicalizeExtensionId(trimmed) || trimmed.toLowerCase()
   if (canonical === 'delegate') return null
-  const hasLocalTool = bctx.hasPlugin?.(trimmed)
-    || bctx.hasPlugin?.(canonical)
+  const hasLocalTool = bctx.hasExtension?.(trimmed)
+    || bctx.hasExtension?.(canonical)
     || bctx.hasTool?.(trimmed)
     || bctx.hasTool?.(canonical)
   return hasLocalTool ? canonical : null
@@ -899,15 +899,15 @@ async function runClaudeDelegate(binary: string, task: string, resume: boolean, 
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const DelegatePlugin: Plugin = {
+const DelegateExtension: Extension = {
   name: 'Core Delegate',
   description: 'Delegate complex multi-file tasks to specialized CLI backends or other agents.',
   hooks: {
     getCapabilityDescription: () => 'I can hand off coding work to Claude Code, Codex, OpenCode, or Gemini CLI (`delegate`) for file creation, refactoring, debugging, code generation, and multi-file edits. Resume IDs may come back via `[delegate_meta]`.',
     getOperatingGuidance: () => ['CRITICAL: `execute_command` (not delegation) for running servers, installs, scripts. Delegation sessions end and kill processes.', 'Delegate for code tasks: writing/creating files, refactors, debugging, generation, test suites, data exports to files.'],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'delegate',
@@ -932,22 +932,22 @@ const DelegatePlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('delegate', DelegatePlugin)
+registerNativeCapability('delegate', DelegateExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildDelegateTools(bctx: ToolBuildContext): StructuredToolInterface[] {
   const tools: StructuredToolInterface[] = []
-  const { hasPlugin } = bctx
+  const { hasExtension } = bctx
 
-  if (bctx.ctx?.delegationEnabled && hasPlugin('delegate')) {
+  if (bctx.ctx?.delegationEnabled && hasExtension('delegate')) {
     tools.push(
       tool(
         async (args) => executeDelegateAction(args, bctx),
         {
           name: 'delegate',
-          description: DelegatePlugin.tools![0].description,
+          description: DelegateExtension.tools![0].description,
           schema: z.object({}).passthrough()
         }
       )

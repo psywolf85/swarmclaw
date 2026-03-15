@@ -26,14 +26,14 @@ describe('connector_message_tool contract', () => {
 
     assert.ok(entry, 'connector_message_tool should be registered for manage_connectors')
 
-    const schemaHolder = entry as unknown as { schema?: { shape?: Record<string, { unwrap?: () => { options?: string[]; _def?: { values?: string[] } }; _def?: { values?: string[] } }> } }
+    const schemaHolder = entry as unknown as { schema?: { shape?: Record<string, any> } }
     const shape = schemaHolder.schema?.shape ?? {}
     const actionSchema = shape.action
     const unwrappedActionSchema = typeof actionSchema?.unwrap === 'function' ? actionSchema.unwrap() : actionSchema
     const actionValues = Array.isArray(unwrappedActionSchema?.options)
       ? unwrappedActionSchema.options
       : unwrappedActionSchema?._def?.values
-    const props = CONNECTOR_MESSAGE_TOOL_PARAMETERS.properties as Record<string, { type?: string; enum?: string[] }>
+    const props = (CONNECTOR_MESSAGE_TOOL_PARAMETERS as any).properties as Record<string, { type?: string; enum?: string[] }>
     assert.deepEqual(actionValues, [...CONNECTOR_MESSAGE_TOOL_ACTIONS])
     assert.equal(props.approved?.type, 'boolean')
     assert.equal(props.ptt?.type, 'boolean')

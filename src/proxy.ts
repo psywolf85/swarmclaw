@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
 import { AUTH_COOKIE_NAME } from '@/lib/auth'
 import {
-  buildPluginInstallCorsHeaders,
-  isPluginInstallCorsPath,
-  resolvePluginInstallCorsOrigin,
-} from '@/lib/plugin-install-cors'
+  buildExtensionInstallCorsHeaders,
+  isExtensionInstallCorsPath,
+  resolveExtensionInstallCorsOrigin,
+} from '@/lib/extension-install-cors'
 import { isProductionRuntime } from '@/lib/runtime/runtime-env'
 import { hmrSingleton } from '@/lib/shared-utils'
 
@@ -51,8 +51,8 @@ function getClientIp(request: NextRequest): string {
 
 function withPluginInstallCorsHeaders(pathname: string, origin: string | null, headers?: HeadersInit): Headers {
   const merged = new Headers(headers)
-  if (!isPluginInstallCorsPath(pathname)) return merged
-  const corsHeaders = buildPluginInstallCorsHeaders(origin)
+  if (!isExtensionInstallCorsPath(pathname)) return merged
+  const corsHeaders = buildExtensionInstallCorsHeaders(origin)
   new Headers(corsHeaders).forEach((value, key) => {
     merged.set(key, value)
   })
@@ -71,19 +71,19 @@ function withPluginInstallCorsHeaders(pathname: string, origin: string | null, h
 export function proxy(request: NextRequest) {
   const rateLimitEnabled = isRateLimitEnabled()
   const { pathname } = request.nextUrl
-  const corsOrigin = resolvePluginInstallCorsOrigin(request.headers.get('origin'))
+  const corsOrigin = resolveExtensionInstallCorsOrigin(request.headers.get('origin'))
   const isWebhookTrigger = request.method === 'POST'
     && /^\/api\/webhooks\/[^/]+\/?$/.test(pathname)
   const isConnectorWebhook = request.method === 'POST'
     && /^\/api\/connectors\/[^/]+\/webhook\/?$/.test(pathname)
 
-  if (request.method === 'OPTIONS' && isPluginInstallCorsPath(pathname)) {
+  if (request.method === 'OPTIONS' && isExtensionInstallCorsPath(pathname)) {
     if (!corsOrigin) {
       return NextResponse.json({ error: 'Origin not allowed' }, { status: 403 })
     }
     return new NextResponse(null, {
       status: 204,
-      headers: buildPluginInstallCorsHeaders(corsOrigin),
+      headers: buildExtensionInstallCorsHeaders(corsOrigin),
     })
   }
 

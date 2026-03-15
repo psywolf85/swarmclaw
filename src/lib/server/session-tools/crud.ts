@@ -1,10 +1,6 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import fs from 'fs'
-import path from 'path'
 import { genId } from '@/lib/id'
-import { spawnSync } from 'child_process'
-import * as cheerio from 'cheerio'
 import {
   loadAgents, saveAgents,
   loadProjects, saveProjects,
@@ -12,10 +8,9 @@ import {
   loadSchedules, saveSchedules,
   loadSkills, saveSkills,
   loadConnectors, saveConnectors,
-  loadDocuments, saveDocuments,
   loadWebhooks, saveWebhooks,
   loadSecrets, saveSecrets,
-  loadSessions, saveSessions,
+  loadSessions,
   loadSettings,
   encryptKey,
   decryptKey,
@@ -44,75 +39,12 @@ import {
 } from '@/lib/server/tasks/task-service'
 import { ensureMissionForTask, enrichTaskWithMissionSummary } from '@/lib/server/missions/mission-service'
 import type { ToolBuildContext } from './context'
-import { safePath, findBinaryOnPath } from './context'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { BoardTask } from '@/types'
 import { dedup } from '@/lib/shared-utils'
 import { isDirectConnectorSession } from '../connectors/session-kind'
 import { buildManageSkillsDescription, executeManageSkillsAction } from './skills'
 import { isMainSession } from '@/lib/server/agents/main-agent-loop'
-
-// ---------------------------------------------------------------------------
-// Document helpers
-// ---------------------------------------------------------------------------
-
-const MAX_DOCUMENT_TEXT_CHARS = 500_000
-
-function extractDocumentText(filePath: string): { text: string; method: string } {
-  const ext = path.extname(filePath).toLowerCase()
-
-  const readUtf8Text = (): string => {
-    const raw = fs.readFileSync(filePath, 'utf-8')
-    const cleaned = raw.replace(/\u0000/g, '')
-    return cleaned
-  }
-
-  if (ext === '.pdf') {
-    const pdftotextBinary = findBinaryOnPath('pdftotext')
-    if (!pdftotextBinary) throw new Error('pdftotext is not installed. Install poppler to index PDF files.')
-    const out = spawnSync(pdftotextBinary, ['-layout', '-nopgbrk', '-q', filePath, '-'], {
-      encoding: 'utf-8',
-      maxBuffer: 25 * 1024 * 1024,
-      timeout: 20_000,
-    })
-    if ((out.status ?? 1) !== 0) {
-      throw new Error(`pdftotext failed: ${(out.stderr || out.stdout || '').trim() || 'unknown error'}`)
-    }
-    return { text: out.stdout || '', method: 'pdftotext' }
-  }
-
-  if (['.txt', '.md', '.markdown', '.json', '.csv', '', '.tsx', '.js', '.jsx', '.mjs', '.cjs', '.py', '.go', '.rs', '.java', '.yaml', '.yml'].includes(ext)) {
-    return { text: readUtf8Text(), method: 'utf8' }
-  }
-
-  if (ext === '.html' || ext === '.htm') {
-    const html = fs.readFileSync(filePath, 'utf-8')
-    const $ = cheerio.load(html)
-    const text = $('body').text() || $.text()
-    return { text, method: 'html-strip' }
-  }
-
-  if (['.doc', '.docx', '.rtf'].includes(ext)) {
-    const out = spawnSync('/usr/bin/textutil', ['-convert', 'txt', '-stdout', filePath], {
-      encoding: 'utf-8',
-      maxBuffer: 25 * 1024 * 1024,
-      timeout: 20_000,
-    })
-    if ((out.status ?? 1) === 0 && out.stdout?.trim()) {
-      return { text: out.stdout, method: 'textutil' }
-    }
-  }
-
-  const fallback = readUtf8Text()
-  if (fallback.trim()) return { text: fallback, method: 'utf8-fallback' }
-  throw new Error(`Unsupported document type: ${ext || '(no extension)'}`)
-}
-
-function trimDocumentContent(text: string): string {
-  const normalized = text.replace(/\r\n/g, '\n').replace(/\u0000/g, '').trim()
-  if (normalized.length <= MAX_DOCUMENT_TEXT_CHARS) return normalized
-  return normalized.slice(0, MAX_DOCUMENT_TEXT_CHARS)
-}
 
 function validateAgentSoulPayload(value: unknown): string | null {
   if (value === undefined) return null
@@ -383,7 +315,6 @@ const PLATFORM_RESOURCES: Record<string, {
   manage_skills: { toolId: 'manage_skills', label: 'skills', load: loadSkills, save: saveSkills },
   manage_connectors: { toolId: 'manage_connectors', label: 'connectors', load: loadConnectors, save: saveConnectors },
   manage_webhooks: { toolId: 'manage_webhooks', label: 'webhooks', load: loadWebhooks, save: saveWebhooks },
-  manage_sessions: { toolId: 'manage_sessions', label: 'sessions', load: loadSessions, save: saveSessions, readOnly: true },
   manage_secrets: { toolId: 'manage_secrets', label: 'secrets', load: loadSecrets, save: saveSecrets },
 }
 
@@ -393,7 +324,7 @@ const PLATFORM_RESOURCES: Record<string, {
 
 export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[] {
   const tools: StructuredToolInterface[] = []
-  const { cwd, ctx, hasPlugin } = bctx
+  const { cwd, ctx, hasExtension } = bctx
   const buildCrudPayload = (normalized: Record<string, unknown>, action: string | undefined, data: string | undefined): Record<string, unknown> => {
     if (data) return JSON.parse(data)
     if (action !== 'create' && action !== 'update') return {}
@@ -406,7 +337,7 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
   // Build dynamic agent summary for tools that need agent awareness
   const canAssignOtherAgents = ctx?.delegationEnabled === true
   let agentSummary = ''
-  if (hasPlugin('manage_tasks') || hasPlugin('manage_schedules')) {
+  if (hasExtension('manage_tasks') || hasExtension('manage_schedules')) {
     if (canAssignOtherAgents) {
       try {
         const agents = loadAgents()
@@ -419,7 +350,7 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
   }
 
   for (const [toolKey, res] of Object.entries(PLATFORM_RESOURCES)) {
-    if (!hasPlugin(toolKey)) continue
+    if (!hasExtension(toolKey)) continue
 
     let description = `Manage SwarmClaw ${res.label}. ${res.readOnly ? 'List and get only.' : 'List, get, create, update, or delete.'} Returns JSON.`
     if (toolKey.startsWith('manage_') && toolKey !== 'manage_platform') {
@@ -978,175 +909,6 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                 id: z.string().optional().describe('Resource ID (required for get, update, delete)'),
                 data: z.string().optional().describe('JSON string of fields for create/update'),
               }).passthrough(),
-        },
-      ),
-    )
-  }
-
-  if (hasPlugin('manage_documents')) {
-    tools.push(
-      tool(
-        async (rawArgs) => {
-          const normalized = normalizeToolInputArgs((rawArgs ?? {}) as Record<string, unknown>)
-          const action = normalized.action as string | undefined
-          const id = normalized.id as string | undefined
-          const filePath = (normalized.filePath ?? normalized.path) as string | undefined
-          const query = normalized.query as string | undefined
-          const limit = normalized.limit as number | undefined
-          const metadata = normalized.metadata as string | undefined
-          const title = normalized.title as string | undefined
-          try {
-            const documents = loadDocuments()
-
-            if (action === 'list') {
-              const rows = Object.values(documents)
-                .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0))
-                .slice(0, Math.max(1, Math.min(limit || 100, 500)))
-                .map((doc: any) => ({
-                  id: doc.id,
-                  title: doc.title,
-                  fileName: doc.fileName,
-                  sourcePath: doc.sourcePath,
-                  textLength: doc.textLength,
-                  method: doc.method,
-                  metadata: doc.metadata || {},
-                  createdAt: doc.createdAt,
-                  updatedAt: doc.updatedAt,
-                }))
-              return JSON.stringify(rows)
-            }
-
-            if (action === 'get') {
-              if (!id) return 'Error: id is required for get.'
-              const doc = documents[id]
-              if (!doc) return `Not found: document "${id}"`
-              const maxContentChars = 60_000
-              return JSON.stringify({
-                ...doc,
-                content: typeof doc.content === 'string' && doc.content.length > maxContentChars
-                  ? `${doc.content.slice(0, maxContentChars)}\n... [truncated]`
-                  : (doc.content || ''),
-              })
-            }
-
-            if (action === 'delete') {
-              if (!id) return 'Error: id is required for delete.'
-              if (!documents[id]) return `Not found: document "${id}"`
-              delete documents[id]
-              saveDocuments(documents)
-              return JSON.stringify({ ok: true, id })
-            }
-
-            if (action === 'upload') {
-              if (!filePath?.trim()) return 'Error: filePath is required for upload.'
-              const sourcePath = path.isAbsolute(filePath) ? filePath : safePath(cwd, filePath, bctx.filesystemScope)
-              if (!fs.existsSync(sourcePath)) return `Error: file not found: ${filePath}`
-              const stat = fs.statSync(sourcePath)
-              if (!stat.isFile()) return 'Error: upload expects a file path.'
-
-              const extracted = extractDocumentText(sourcePath)
-              const content = trimDocumentContent(extracted.text)
-              if (!content) return 'Error: extracted document text is empty.'
-
-              const docId = genId(6)
-              const now = Date.now()
-              const parsedMetadata = metadata && typeof metadata === 'string'
-                ? (() => {
-                    try {
-                      const m = JSON.parse(metadata)
-                      return (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}
-                    } catch {
-                      return {}
-                    }
-                  })()
-                : {}
-
-              const entry = {
-                id: docId,
-                title: title?.trim() || path.basename(sourcePath),
-                fileName: path.basename(sourcePath),
-                sourcePath,
-                method: extracted.method,
-                textLength: content.length,
-                content,
-                metadata: parsedMetadata,
-                uploadedByAgentId: ctx?.agentId || null,
-                uploadedInSessionId: ctx?.sessionId || null,
-                createdAt: now,
-                updatedAt: now,
-              }
-              documents[docId] = entry
-              saveDocuments(documents)
-              return JSON.stringify({
-                id: entry.id,
-                title: entry.title,
-                fileName: entry.fileName,
-                textLength: entry.textLength,
-                method: entry.method,
-              })
-            }
-
-            if (action === 'search') {
-              const q = (query || '').trim().toLowerCase()
-              if (!q) return 'Error: query is required for search.'
-              const terms = q.split(/\s+/).filter(Boolean)
-              const max = Math.max(1, Math.min(limit || 5, 50))
-
-              const matches = Object.values(documents)
-                .map((doc: any) => {
-                  const hay = (doc.content || '').toLowerCase()
-                  if (!hay) return null
-                  if (!terms.every((term) => hay.includes(term))) return null
-                  let score = hay.includes(q) ? 10 : 0
-                  for (const term of terms) {
-                    let pos = hay.indexOf(term)
-                    while (pos !== -1) {
-                      score += 1
-                      pos = hay.indexOf(term, pos + term.length)
-                    }
-                  }
-                  const firstTerm = terms[0] || q
-                  const at = firstTerm ? hay.indexOf(firstTerm) : -1
-                  const start = at >= 0 ? Math.max(0, at - 120) : 0
-                  const end = Math.min((doc.content || '').length, start + 320)
-                  const snippet = ((doc.content || '').slice(start, end) || '').replace(/\s+/g, ' ').trim()
-                  return {
-                    id: doc.id,
-                    title: doc.title,
-                    score,
-                    snippet,
-                    textLength: doc.textLength,
-                    updatedAt: doc.updatedAt,
-                  }
-                })
-                .filter(Boolean)
-                .sort((a: any, b: any) => b.score - a.score)
-                .slice(0, max)
-
-              return JSON.stringify({
-                query,
-                total: matches.length,
-                matches,
-              })
-            }
-
-            return 'Unknown action. Use list, upload, search, get, or delete.'
-          } catch (err: any) {
-            return `Error: ${err.message || String(err)}`
-          }
-        },
-        {
-          name: 'manage_documents',
-          description: 'Upload and index documents, then search/get/delete them for long-term retrieval. Supports PDFs (via pdftotext) and common text/doc formats.',
-          schema: z.object({
-            action: z.enum(['list', 'upload', 'search', 'get', 'delete']).describe('Document action'),
-            id: z.string().optional().describe('Document id (for get/delete)'),
-            filePath: z.string().optional().describe('Path to document file for upload (relative to working directory or absolute)'),
-            title: z.string().optional().describe('Optional title override for upload'),
-            query: z.string().optional().describe('Search query text (for search)'),
-            limit: z.number().optional().describe('Max results (default 5 for search, 100 for list)'),
-            metadata: z.string().optional().describe('Optional JSON string metadata for upload'),
-          }),
         },
       ),
     )

@@ -2,7 +2,7 @@
 
 import { SidebarPanelShell } from '@/components/layout/sidebar-panel-shell'
 import { MainContent } from '@/components/layout/main-content'
-import { PluginList } from '@/components/plugins/plugin-list'
+import { ExtensionList } from '@/components/extensions/extension-list'
 import { useAppStore } from '@/stores/use-app-store'
 
 export default function ExtensionsLayout({ children }: { children: React.ReactNode }) {
@@ -11,9 +11,9 @@ export default function ExtensionsLayout({ children }: { children: React.ReactNo
       <SidebarPanelShell
         title="Extensions"
         createLabel="Extension"
-        onNew={() => useAppStore.getState().setPluginSheetOpen(true)}
+        onNew={() => useAppStore.getState().setExtensionSheetOpen(true)}
       >
-        <PluginList inSidebar />
+        <ExtensionList inSidebar />
       </SidebarPanelShell>
       <MainContent>{children}</MainContent>
     </>

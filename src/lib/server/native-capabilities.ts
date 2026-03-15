@@ -1,30 +1,30 @@
 import type {
   Message,
-  Plugin,
-  PluginBeforeMessageWriteResult,
-  PluginHooks,
-  PluginMeta,
-  PluginModelResolveResult,
-  PluginPromptBuildResult,
-  PluginSubagentSpawningResult,
-  PluginToolCallResult,
+  Extension,
+  ExtensionBeforeMessageWriteResult,
+  ExtensionHooks,
+  ExtensionMeta,
+  ExtensionModelResolveResult,
+  ExtensionPromptBuildResult,
+  ExtensionSubagentSpawningResult,
+  ExtensionToolCallResult,
   Session,
 } from '@/types'
 import { hmrSingleton } from '@/lib/shared-utils'
 import { errorMessage } from '@/lib/shared-utils'
-import { buildPluginHooks } from './plugins-approval-guidance'
-import { expandPluginIds } from './tool-aliases'
+import { buildExtensionHooks } from './extensions-approval-guidance'
+import { expandExtensionIds } from './tool-aliases'
 import { log } from './logger'
-import { getPluginManager, type HookExecutionOptions } from './plugins'
+import { getExtensionManager, type HookExecutionOptions } from './extensions'
 
 type NativeCapabilityRecord = {
   id: string
-  plugin: Plugin
-  hooks: PluginHooks
+  extension: Extension
+  hooks: ExtensionHooks
 }
 
-type HookContext<K extends keyof PluginHooks> =
-  PluginHooks[K] extends ((ctx: infer C) => unknown) | undefined ? C : never
+type HookContext<K extends keyof ExtensionHooks> =
+  ExtensionHooks[K] extends ((ctx: infer C) => unknown) | undefined ? C : never
 
 const registry = hmrSingleton<Map<string, NativeCapabilityRecord>>(
   '__swarmclaw_native_capabilities__',
@@ -33,7 +33,7 @@ const registry = hmrSingleton<Map<string, NativeCapabilityRecord>>(
 
 function resolveEnabledFilter(enabledIds?: string[]): Set<string> | null {
   if (!Array.isArray(enabledIds) || enabledIds.length === 0) return null
-  return new Set(expandPluginIds(enabledIds))
+  return new Set(expandExtensionIds(enabledIds))
 }
 
 function enabledEntries(enabledIds?: string[]): NativeCapabilityRecord[] {
@@ -49,9 +49,9 @@ function concatOptionalTextSegments(...segments: Array<string | null | undefined
 }
 
 function mergePromptBuildResults(
-  current: PluginPromptBuildResult | null,
-  next: PluginPromptBuildResult | null,
-): PluginPromptBuildResult | null {
+  current: ExtensionPromptBuildResult | null,
+  next: ExtensionPromptBuildResult | null,
+): ExtensionPromptBuildResult | null {
   if (!current) return next
   if (!next) return current
   return {
@@ -63,9 +63,9 @@ function mergePromptBuildResults(
 }
 
 function mergeModelResolveResults(
-  current: PluginModelResolveResult | null,
-  next: PluginModelResolveResult | null,
-): PluginModelResolveResult | null {
+  current: ExtensionModelResolveResult | null,
+  next: ExtensionModelResolveResult | null,
+): ExtensionModelResolveResult | null {
   if (!current) return next
   if (!next) return current
   return {
@@ -79,7 +79,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function isToolCallControlResult(value: unknown): value is PluginToolCallResult {
+function isToolCallControlResult(value: unknown): value is ExtensionToolCallResult {
   if (!isRecord(value)) return false
   return 'input' in value || 'params' in value || 'block' in value || 'blockReason' in value || 'warning' in value
 }
@@ -91,11 +91,11 @@ function isMessageLike(value: unknown): value is Message {
     && typeof value.time === 'number'
 }
 
-function isBeforeMessageWriteResult(value: unknown): value is PluginBeforeMessageWriteResult {
+function isBeforeMessageWriteResult(value: unknown): value is ExtensionBeforeMessageWriteResult {
   return isRecord(value) && ('message' in value || 'block' in value)
 }
 
-function isSubagentSpawningResult(value: unknown): value is PluginSubagentSpawningResult {
+function isSubagentSpawningResult(value: unknown): value is ExtensionSubagentSpawningResult {
   return isRecord(value) && (value.status === 'ok' || value.status === 'error')
 }
 
@@ -111,43 +111,43 @@ function mergeToolCallInput(
   return nextInput
 }
 
-export function registerNativeCapability(id: string, plugin: Plugin): void {
+export function registerNativeCapability(id: string, extension: Extension): void {
   registry.set(id, {
     id,
-    plugin,
-    hooks: buildPluginHooks(id, plugin.name, plugin.hooks, plugin.tools),
+    extension,
+    hooks: buildExtensionHooks(id, extension.name, extension.hooks, extension.tools),
   })
 }
 
-export function listNativeCapabilities(): PluginMeta[] {
-  return Array.from(registry.values()).map(({ id, plugin, hooks }) => ({
-    name: plugin.name,
-    description: plugin.description || '',
+export function listNativeCapabilities(): ExtensionMeta[] {
+  return Array.from(registry.values()).map(({ id, extension, hooks }) => ({
+    name: extension.name,
+    description: extension.description || '',
     filename: id,
     enabled: true,
     isBuiltin: true,
-    author: plugin.author || 'SwarmClaw',
-    version: plugin.version || '1.0.0',
+    author: extension.author || 'SwarmClaw',
+    version: extension.version || '1.0.0',
     source: 'local',
     sourceLabel: 'builtin',
     installSource: 'builtin',
-    toolCount: Array.isArray(plugin.tools) ? plugin.tools.length : 0,
+    toolCount: Array.isArray(extension.tools) ? extension.tools.length : 0,
     hookCount: Object.values(hooks || {}).filter((fn) => typeof fn === 'function').length,
-    hasUI: !!plugin.ui,
-    providerCount: Array.isArray(plugin.providers) ? plugin.providers.length : 0,
-    connectorCount: Array.isArray(plugin.connectors) ? plugin.connectors.length : 0,
+    hasUI: !!extension.ui,
+    providerCount: Array.isArray(extension.providers) ? extension.providers.length : 0,
+    connectorCount: Array.isArray(extension.connectors) ? extension.connectors.length : 0,
   }))
 }
 
-export function getNativeCapabilityTools(enabledIds: string[]): Array<{ capabilityId: string; tool: NonNullable<Plugin['tools']>[number] }> {
+export function getNativeCapabilityTools(enabledIds: string[]): Array<{ capabilityId: string; tool: NonNullable<Extension['tools']>[number] }> {
   return enabledEntries(enabledIds).flatMap((entry) =>
-    (Array.isArray(entry.plugin.tools) ? entry.plugin.tools : [])
-      .filter((tool): tool is NonNullable<Plugin['tools']>[number] => !!tool && typeof tool.name === 'string' && typeof tool.execute === 'function')
+    (Array.isArray(entry.extension.tools) ? entry.extension.tools : [])
+      .filter((tool): tool is NonNullable<Extension['tools']>[number] => !!tool && typeof tool.name === 'string' && typeof tool.execute === 'function')
       .map((tool) => ({ capabilityId: entry.id, tool })),
   )
 }
 
-export async function runNativeHook<K extends keyof PluginHooks>(
+export async function runNativeHook<K extends keyof ExtensionHooks>(
   hookName: K,
   ctx: HookContext<K>,
   options?: HookExecutionOptions,
@@ -160,7 +160,7 @@ export async function runNativeHook<K extends keyof PluginHooks>(
     } catch (err: unknown) {
       log.error('native-capabilities', 'Capability hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         hookName: String(hookName),
         error: errorMessage(err),
       })
@@ -177,8 +177,8 @@ async function runNativeBeforePromptBuild(
     messages: Message[]
   },
   options?: HookExecutionOptions,
-): Promise<PluginPromptBuildResult | null> {
-  let result: PluginPromptBuildResult | null = null
+): Promise<ExtensionPromptBuildResult | null> {
+  let result: ExtensionPromptBuildResult | null = null
 
   for (const entry of enabledEntries(options?.enabledIds)) {
     const hook = entry.hooks.beforePromptBuild
@@ -186,12 +186,12 @@ async function runNativeBeforePromptBuild(
     try {
       const next = await hook(params)
       if (next && typeof next === 'object' && !Array.isArray(next)) {
-        result = mergePromptBuildResults(result, next as PluginPromptBuildResult)
+        result = mergePromptBuildResults(result, next as ExtensionPromptBuildResult)
       }
     } catch (err: unknown) {
       log.error('native-capabilities', 'beforePromptBuild hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
@@ -210,8 +210,8 @@ async function runNativeBeforeModelResolve(
     apiEndpoint?: string | null
   },
   options?: HookExecutionOptions,
-): Promise<PluginModelResolveResult | null> {
-  let result: PluginModelResolveResult | null = null
+): Promise<ExtensionModelResolveResult | null> {
+  let result: ExtensionModelResolveResult | null = null
 
   for (const entry of enabledEntries(options?.enabledIds)) {
     const hook = entry.hooks.beforeModelResolve
@@ -219,12 +219,12 @@ async function runNativeBeforeModelResolve(
     try {
       const next = await hook(params)
       if (next && typeof next === 'object' && !Array.isArray(next)) {
-        result = mergeModelResolveResults(result, next as PluginModelResolveResult)
+        result = mergeModelResolveResults(result, next as ExtensionModelResolveResult)
       }
     } catch (err: unknown) {
       log.error('native-capabilities', 'beforeModelResolve hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
@@ -283,7 +283,7 @@ async function runNativeBeforeToolCall(
       } catch (err: unknown) {
         log.error('native-capabilities', 'beforeToolCall hook failed', {
           capabilityId: entry.id,
-          capabilityName: entry.plugin.name,
+          capabilityName: entry.extension.name,
           toolName: params.toolName,
           error: errorMessage(err),
         })
@@ -300,7 +300,7 @@ async function runNativeBeforeToolCall(
     } catch (err: unknown) {
       log.error('native-capabilities', 'beforeToolExec hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         toolName: params.toolName,
         error: errorMessage(err),
       })
@@ -343,7 +343,7 @@ async function runNativeToolResultPersist(
     } catch (err: unknown) {
       log.error('native-capabilities', 'toolResultPersist hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
@@ -386,7 +386,7 @@ async function runNativeBeforeMessageWrite(
     } catch (err: unknown) {
       log.error('native-capabilities', 'beforeMessageWrite hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
@@ -406,7 +406,7 @@ async function runNativeSubagentSpawning(
     threadRequested: boolean
   },
   options?: HookExecutionOptions,
-): Promise<PluginSubagentSpawningResult> {
+): Promise<ExtensionSubagentSpawningResult> {
   for (const entry of enabledEntries(options?.enabledIds)) {
     const hook = entry.hooks.subagentSpawning
     if (!hook) continue
@@ -423,7 +423,7 @@ async function runNativeSubagentSpawning(
     } catch (err: unknown) {
       log.error('native-capabilities', 'subagentSpawning hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
@@ -432,13 +432,13 @@ async function runNativeSubagentSpawning(
   return { status: 'ok' }
 }
 
-export async function runCapabilityHook<K extends keyof PluginHooks>(
+export async function runCapabilityHook<K extends keyof ExtensionHooks>(
   hookName: K,
   ctx: HookContext<K>,
   options?: HookExecutionOptions,
 ): Promise<void> {
   await runNativeHook(hookName, ctx, options)
-  await getPluginManager().runHook(hookName, ctx, options)
+  await getExtensionManager().runHook(hookName, ctx, options)
 }
 
 export async function runCapabilityBeforePromptBuild(
@@ -450,10 +450,10 @@ export async function runCapabilityBeforePromptBuild(
     messages: Message[]
   },
   options?: HookExecutionOptions,
-): Promise<PluginPromptBuildResult | null> {
+): Promise<ExtensionPromptBuildResult | null> {
   const nativeResult = await runNativeBeforePromptBuild(params, options)
-  const pluginResult = await getPluginManager().runBeforePromptBuild(params, options)
-  return mergePromptBuildResults(nativeResult, pluginResult)
+  const extensionResult = await getExtensionManager().runBeforePromptBuild(params, options)
+  return mergePromptBuildResults(nativeResult, extensionResult)
 }
 
 export async function runCapabilityBeforeModelResolve(
@@ -466,10 +466,10 @@ export async function runCapabilityBeforeModelResolve(
     apiEndpoint?: string | null
   },
   options?: HookExecutionOptions,
-): Promise<PluginModelResolveResult | null> {
+): Promise<ExtensionModelResolveResult | null> {
   const nativeResult = await runNativeBeforeModelResolve(params, options)
-  const pluginResult = await getPluginManager().runBeforeModelResolve(params, options)
-  return mergeModelResolveResults(nativeResult, pluginResult)
+  const extensionResult = await getExtensionManager().runBeforeModelResolve(params, options)
+  return mergeModelResolveResults(nativeResult, extensionResult)
 }
 
 export async function runCapabilityBeforeToolCall(
@@ -484,7 +484,7 @@ export async function runCapabilityBeforeToolCall(
 ): Promise<{ input: Record<string, unknown> | null; blockReason: string | null; warning: string | null }> {
   const nativeResult = await runNativeBeforeToolCall(params, options)
   if (nativeResult.blockReason) return nativeResult
-  const pluginResult = await getPluginManager().runBeforeToolCall(
+  const extensionResult = await getExtensionManager().runBeforeToolCall(
     {
       ...params,
       input: nativeResult.input,
@@ -492,9 +492,9 @@ export async function runCapabilityBeforeToolCall(
     options,
   )
   return {
-    input: pluginResult.input,
-    blockReason: pluginResult.blockReason,
-    warning: pluginResult.warning || nativeResult.warning,
+    input: extensionResult.input,
+    blockReason: extensionResult.blockReason,
+    warning: extensionResult.warning || nativeResult.warning,
   }
 }
 
@@ -509,7 +509,7 @@ export async function runCapabilityToolResultPersist(
   options?: HookExecutionOptions,
 ): Promise<Message> {
   const afterNative = await runNativeToolResultPersist(params, options)
-  return getPluginManager().runToolResultPersist(
+  return getExtensionManager().runToolResultPersist(
     {
       ...params,
       message: afterNative,
@@ -529,7 +529,7 @@ export async function runCapabilityBeforeMessageWrite(
 ): Promise<{ message: Message; block: boolean }> {
   const nativeResult = await runNativeBeforeMessageWrite(params, options)
   if (nativeResult.block) return nativeResult
-  return getPluginManager().runBeforeMessageWrite(
+  return getExtensionManager().runBeforeMessageWrite(
     {
       ...params,
       message: nativeResult.message,
@@ -549,10 +549,10 @@ export async function runCapabilitySubagentSpawning(
     threadRequested: boolean
   },
   options?: HookExecutionOptions,
-): Promise<PluginSubagentSpawningResult> {
+): Promise<ExtensionSubagentSpawningResult> {
   const nativeResult = await runNativeSubagentSpawning(params, options)
   if (nativeResult.status === 'error') return nativeResult
-  return getPluginManager().runSubagentSpawning(params, options)
+  return getExtensionManager().runSubagentSpawning(params, options)
 }
 
 export async function transformCapabilityText(
@@ -570,13 +570,13 @@ export async function transformCapabilityText(
     } catch (err: unknown) {
       log.error('native-capabilities', 'transform hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         hookName,
         error: errorMessage(err),
       })
     }
   }
-  return getPluginManager().transformText(hookName, { ...params, text }, options)
+  return getExtensionManager().transformText(hookName, { ...params, text }, options)
 }
 
 export async function collectCapabilityAgentContext(
@@ -591,19 +591,19 @@ export async function collectCapabilityAgentContext(
     const hook = entry.hooks.getAgentContext
     if (!hook) continue
     try {
-      const result = await hook({ session, enabledPlugins: enabledIds, message, history })
+      const result = await hook({ session, enabledExtensions: enabledIds, message, history })
       if (typeof result === 'string' && result.trim()) parts.push(result)
     } catch (err: unknown) {
       log.error('native-capabilities', 'getAgentContext hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
   }
 
-  const pluginParts = await getPluginManager().collectAgentContext(session, enabledIds, message, history)
-  return [...parts, ...pluginParts]
+  const extensionParts = await getExtensionManager().collectAgentContext(session, enabledIds, message, history)
+  return [...parts, ...extensionParts]
 }
 
 export function collectCapabilityDescriptions(enabledIds: string[]): string[] {
@@ -617,12 +617,12 @@ export function collectCapabilityDescriptions(enabledIds: string[]): string[] {
     } catch (err: unknown) {
       log.error('native-capabilities', 'getCapabilityDescription hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
   }
-  return [...lines, ...getPluginManager().collectCapabilityDescriptions(enabledIds)]
+  return [...lines, ...getExtensionManager().collectCapabilityDescriptions(enabledIds)]
 }
 
 export function collectCapabilityOperatingGuidance(enabledIds: string[]): string[] {
@@ -641,12 +641,12 @@ export function collectCapabilityOperatingGuidance(enabledIds: string[]): string
     } catch (err: unknown) {
       log.error('native-capabilities', 'getOperatingGuidance hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
   }
-  return [...lines, ...getPluginManager().collectOperatingGuidance(enabledIds)]
+  return [...lines, ...getExtensionManager().collectOperatingGuidance(enabledIds)]
 }
 
 export function collectCapabilityApprovalGuidance(
@@ -672,10 +672,10 @@ export function collectCapabilityApprovalGuidance(
     } catch (err: unknown) {
       log.error('native-capabilities', 'getApprovalGuidance hook failed', {
         capabilityId: entry.id,
-        capabilityName: entry.plugin.name,
+        capabilityName: entry.extension.name,
         error: errorMessage(err),
       })
     }
   }
-  return [...lines, ...getPluginManager().collectApprovalGuidance(enabledIds, ctx)]
+  return [...lines, ...getExtensionManager().collectApprovalGuidance(enabledIds, ctx)]
 }

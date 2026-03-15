@@ -1,5 +1,5 @@
 import { dedup } from '@/lib/shared-utils'
-import { getPluginManager } from './plugins'
+import { getExtensionManager } from './extensions'
 
 const UNIVERSAL_CORE_PLUGIN_IDS = [
   'shell',
@@ -9,7 +9,6 @@ const UNIVERSAL_CORE_PLUGIN_IDS = [
   'web',
   'browser',
   'memory',
-  'sandbox',
   'manage_platform',
   'manage_agents',
   'manage_projects',
@@ -25,7 +24,6 @@ const UNIVERSAL_CORE_PLUGIN_IDS = [
   'spawn_subagent',
   'canvas',
   'http_request',
-  'git',
   'wallet',
   'monitor',
   'openclaw_workspace',
@@ -33,35 +31,30 @@ const UNIVERSAL_CORE_PLUGIN_IDS = [
   'schedule_wake',
   'context_mgmt',
   'discovery',
-  'plugin_creator',
+  'extension_creator',
   'image_gen',
   'email',
-  'calendar',
   'replicate',
   'mailbox',
   'ask_human',
-  'document',
-  'extract',
-  'table',
-  'crawl',
 ] as const
 
-function normalizePluginList(value: string[] | undefined | null): string[] {
+function normalizeExtensionList(value: string[] | undefined | null): string[] {
   if (!Array.isArray(value)) return []
   return value
     .map((entry) => (typeof entry === 'string' ? entry.trim() : ''))
     .filter(Boolean)
 }
 
-export function listUniversalToolAccessPluginIds(extraPlugins?: string[] | null): string[] {
-  const installedPluginIds = getPluginManager()
-    .listPlugins()
+export function listUniversalToolAccessExtensionIds(extraExtensions?: string[] | null): string[] {
+  const installedExtensionIds = getExtensionManager()
+    .listExtensions()
     .filter((meta) => meta.isBuiltin || meta.enabled !== false)
     .map((meta) => meta.filename)
 
   return dedup([
     ...UNIVERSAL_CORE_PLUGIN_IDS,
-    ...installedPluginIds,
-    ...normalizePluginList(extraPlugins),
+    ...installedExtensionIds,
+    ...normalizeExtensionList(extraExtensions),
   ])
 }

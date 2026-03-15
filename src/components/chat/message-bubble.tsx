@@ -1,6 +1,6 @@
 'use client'
 
-import { memo, useState, useCallback, useMemo } from 'react'
+import { isValidElement, memo, useState, useCallback, useMemo } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -179,6 +179,14 @@ interface LiveStreamState {
   toolEvents: ToolEvent[]
 }
 
+type ToolMediaEntryKind = 'image' | 'video' | 'pdf' | 'file'
+
+interface ToolMediaEntry {
+  kind: ToolMediaEntryKind
+  name: string
+  url: string
+}
+
 // AttachmentChip, parseAttachmentUrl, regex constants, and FILE_TYPE_COLORS
 // are now imported from @/components/shared/attachment-chip
 
@@ -226,6 +234,111 @@ function renderAttachments(
   )
 }
 
+function countDisplayParagraphs(text: string): number {
+  return text
+    .split(/\n\s*\n/g)
+    .map((block) => block.trim())
+    .filter((block) => block.length > 0)
+    .length
+}
+
+function normalizeLiveStreamingMarkdown(text: string, options: { active: boolean; structured: boolean }): string {
+  if (!options.active || options.structured || !text) return text
+  const normalized = text.replace(/\r\n/g, '\n').trim()
+  if (!normalized.includes('\n') || /\n\s*\n/.test(normalized)) return normalized
+  return normalized.replace(/\n+/g, '\n\n')
+}
+
+function renderToolMediaEntry(
+  media: ToolMediaEntry,
+  key: string,
+  onOpenImage?: (image: { url: string; name: string }) => void,
+) {
+  if (media.kind === 'image') {
+    return (
+      <div key={key} className="relative group/img">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={media.url}
+          alt={media.name}
+          loading="lazy"
+          className="max-w-[400px] rounded-[10px] border border-white/10 cursor-pointer hover:border-white/25 transition-all"
+          onClick={() => onOpenImage?.({ url: media.url, name: media.name })}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
+        />
+        <a
+          href={media.url}
+          download
+          onClick={(e) => e.stopPropagation()}
+          className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm rounded-[8px] p-1.5 hover:bg-black/80 opacity-0 group-hover/img:opacity-100 transition-opacity"
+          title="Download"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </a>
+      </div>
+    )
+  }
+
+  if (media.kind === 'video') {
+    return (
+      <video
+        key={key}
+        src={media.url}
+        controls
+        playsInline
+        preload="none"
+        className="max-w-full rounded-[10px] border border-white/10"
+      />
+    )
+  }
+
+  if (media.kind === 'pdf') {
+    return (
+      <div key={key} className="rounded-[10px] border border-white/10 overflow-hidden">
+        <iframe src={media.url} loading="lazy" className="w-full h-[400px] bg-white" title={media.name} />
+        <a
+          href={media.url}
+          download
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center gap-2 px-3 py-2 bg-surface/80 border-t border-white/10 text-[12px] text-text-2 hover:text-text no-underline transition-colors"
+        >
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+          {media.name}
+        </a>
+      </div>
+    )
+  }
+
+  return (
+    <a
+      key={key}
+      href={media.url}
+      download
+      onClick={(e) => e.stopPropagation()}
+      className="flex items-center gap-2 px-3 py-2 rounded-[10px] border border-white/10 bg-surface/60 hover:bg-surface-2 transition-colors text-[13px] text-text-2 hover:text-text no-underline"
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+      </svg>
+      {media.name}
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="ml-auto opacity-50">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+      </svg>
+    </a>
+  )
+}
+
 interface Props {
   message: Message
   assistantName?: string
@@ -245,12 +358,12 @@ interface Props {
 export const MessageBubble = memo(function MessageBubble({ message, assistantName, agentAvatarSeed, agentAvatarUrl, agentName, liveStream, isLast, onRetry, messageIndex, onToggleBookmark, onEditResend, onTransferToAgent, momentOverlay }: Props) {
   const isUser = message.role === 'user'
   const isHeartbeat = !isUser && (message.kind === 'heartbeat' || /^\s*HEARTBEAT_OK\b/i.test(message.text || ''))
-  const isPluginUI = !isUser && message.kind === 'plugin-ui'
+  const isExtensionUI = !isUser && message.kind === 'extension-ui'
   const scaffoldRequest = useMemo(() => {
     if (isUser) return null
     try {
       const data = JSON.parse(message.text)
-      if (data.type === 'plugin_scaffold_result') return data
+      if (data.type === 'extension_scaffold_result') return data
     } catch { /* ignore */ }
     return null
   }, [message.text, isUser])
@@ -259,7 +372,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     if (isUser) return null
     try {
       const data = JSON.parse(message.text)
-      if (data.type === 'plugin_install_result') return data
+      if (data.type === 'extension_install_result') return data
     } catch { /* ignore */ }
     return null
   }, [message.text, isUser])
@@ -268,7 +381,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     if (isUser) return null
     try {
       const data = JSON.parse(message.text)
-      if (data.type === 'plugin_wallet_transfer_request') return data
+      if (data.type === 'extension_wallet_transfer_request') return data
     } catch { /* ignore */ }
     return null
   }, [message.text, isUser])
@@ -277,7 +390,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     if (isUser) return null
     try {
       const data = JSON.parse(message.text)
-      if (data.type === 'plugin_wallet_action_request') return data
+      if (data.type === 'extension_wallet_action_request') return data
     } catch { /* ignore */ }
     return null
   }, [message.text, isUser])
@@ -334,10 +447,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
   // Extract ALL media from ALL tool events for inline display after the message text.
   // Covers send_file, browser screenshots, file tool outputs — everything.
   const allToolMedia = useMemo(() => {
-    const images: { name: string; url: string }[] = []
-    const videos: { name: string; url: string }[] = []
-    const pdfs: { name: string; url: string }[] = []
-    const files: { name: string; url: string }[] = []
+    const ordered: ToolMediaEntry[] = []
     const seen = new Set<string>()
 
     for (const ev of toolEventsForMedia) {
@@ -345,26 +455,40 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
       if (!isExplicitScreenshot(ev.name, ev.input)) continue
       const m = extractMedia(ev.output)
       for (const url of m.images) {
-        if (!seen.has(url)) { seen.add(url); images.push({ name: url.split('/').pop() || 'Image', url }) }
+        if (!seen.has(url)) {
+          seen.add(url)
+          ordered.push({ kind: 'image', name: url.split('/').pop() || 'Image', url })
+        }
       }
       for (const url of m.videos) {
-        if (!seen.has(url)) { seen.add(url); videos.push({ name: url.split('/').pop() || 'Video', url }) }
+        if (!seen.has(url)) {
+          seen.add(url)
+          ordered.push({ kind: 'video', name: url.split('/').pop() || 'Video', url })
+        }
       }
       for (const p of m.pdfs) {
-        if (!seen.has(p.url)) { seen.add(p.url); pdfs.push(p) }
+        if (!seen.has(p.url)) {
+          seen.add(p.url)
+          ordered.push({ kind: 'pdf', name: p.name, url: p.url })
+        }
       }
       for (const f of m.files) {
         // Reclassify image-extension files as images (send_file uses [label](url) not ![](url))
         if (/\.(png|jpe?g|gif|webp|svg|avif)$/i.test(f.url)) {
-          if (!seen.has(f.url)) { seen.add(f.url); images.push(f) }
+          if (!seen.has(f.url)) {
+            seen.add(f.url)
+            ordered.push({ kind: 'image', name: f.name, url: f.url })
+          }
         } else {
-          if (!seen.has(f.url)) { seen.add(f.url); files.push(f) }
+          if (!seen.has(f.url)) {
+            seen.add(f.url)
+            ordered.push({ kind: 'file', name: f.name, url: f.url })
+          }
         }
       }
     }
 
-    if (!images.length && !videos.length && !pdfs.length && !files.length) return null
-    return { images, videos, pdfs, files }
+    return ordered.length > 0 ? ordered : null
   }, [toolEventsForMedia])
   const isStructured = !isUser && !isHeartbeat && isStructuredMarkdown(sourceText)
 
@@ -390,22 +514,43 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     ? rawDisplayText.split('\n').filter((l) => !/\[(MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]/.test(l)).join('\n').trim()
     : ''
   const hasDisplayText = displayText.length > 0
+  const normalizedDisplayText = useMemo(
+    () => normalizeLiveStreamingMarkdown(displayText, { active: liveStreamActive, structured: isStructured }),
+    [displayText, isStructured, liveStreamActive],
+  )
   const referencedUploadMediaKeys = useMemo(
     () => extractReferencedUploadMediaKeys(displayText),
     [displayText],
   )
   const unreferencedToolMedia = useMemo(() => {
     if (!allToolMedia) return null
-    const images = allToolMedia.images.filter((img) => !referencedUploadMediaKeys.has(normalizeUploadMediaKey(img.url)))
-    const videos = allToolMedia.videos.filter((vid) => !referencedUploadMediaKeys.has(normalizeUploadMediaKey(vid.url)))
-    const pdfs = allToolMedia.pdfs.filter((file) => !referencedUploadMediaKeys.has(normalizeUploadMediaKey(file.url)))
-    const files = allToolMedia.files
-    if (!images.length && !videos.length && !pdfs.length && !files.length) return null
-    return { images, videos, pdfs, files }
+    const filtered = allToolMedia.filter((media) => (
+      media.kind === 'file'
+        ? true
+        : !referencedUploadMediaKeys.has(normalizeUploadMediaKey(media.url))
+    ))
+    return filtered.length > 0 ? filtered : null
   }, [allToolMedia, referencedUploadMediaKeys])
+
+  const liveInlineToolMedia = useMemo(() => {
+    if (!liveStreamActive || !unreferencedToolMedia || referencedUploadMediaKeys.size > 0 || !hasDisplayText) return null
+    const inlineCount = Math.min(unreferencedToolMedia.length, countDisplayParagraphs(normalizedDisplayText))
+    return inlineCount > 0 ? unreferencedToolMedia.slice(0, inlineCount) : null
+  }, [hasDisplayText, liveStreamActive, normalizedDisplayText, referencedUploadMediaKeys, unreferencedToolMedia])
+
+  const trailingToolMedia = useMemo(() => {
+    if (!unreferencedToolMedia) return null
+    if (!liveInlineToolMedia) return unreferencedToolMedia
+    const remaining = unreferencedToolMedia.slice(liveInlineToolMedia.length)
+    return remaining.length > 0 ? remaining : null
+  }, [liveInlineToolMedia, unreferencedToolMedia])
 
   const handleOpenAttachmentImage = useCallback(({ url, filename }: { url: string; filename: string }) => {
     setPreviewContent({ type: 'image', url, title: filename })
+  }, [setPreviewContent])
+
+  const handleOpenToolMediaImage = useCallback(({ url, name }: { url: string; name: string }) => {
+    setPreviewContent({ type: 'image', url, title: name })
   }, [setPreviewContent])
 
   const handleCopy = useCallback(() => {
@@ -424,7 +569,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     || Boolean(walletActionRequest)
     || Boolean(installRequest)
     || Boolean(scaffoldRequest)
-    || isPluginUI
+    || isExtensionUI
     || isHeartbeat
     || hasDisplayText
   const canCopy = copySourceText.trim().length > 0
@@ -433,6 +578,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     || (isUser && typeof messageIndex === 'number' && Boolean(onEditResend))
     || (!isUser && isLast && Boolean(onRetry))
     || (!isUser && typeof messageIndex === 'number' && Boolean(onTransferToAgent))
+  const safeMomentOverlay = isValidElement(momentOverlay) ? momentOverlay : null
 
   return (
     <div
@@ -446,12 +592,12 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
       {/* Avatar on spine (assistant) */}
       {!isUser && (
         <div className="absolute left-[4px] top-0">
-          <div style={momentOverlay ? { animation: 'avatar-moment-pulse 0.6s ease' } : undefined}>
+          <div style={safeMomentOverlay ? { animation: 'avatar-moment-pulse 0.6s ease' } : undefined}>
             {agentName
               ? <AgentAvatar seed={agentAvatarSeed || null} avatarUrl={agentAvatarUrl} name={agentName} size={28} />
               : <AiAvatar size="sm" mood={liveStream?.phase === 'tool' ? 'tool' : liveStreamActive ? 'thinking' : undefined} />}
           </div>
-          {momentOverlay}
+          {safeMomentOverlay}
         </div>
       )}
       {/* Sender label + timestamp */}
@@ -639,12 +785,12 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                   <line x1="12" y1="3" x2="12" y2="15" />
                 </svg>
               </div>
-              <span className="text-[11px] font-700 uppercase tracking-wider text-emerald-400/80">Plugin Installed</span>
+              <span className="text-[11px] font-700 uppercase tracking-wider text-emerald-400/80">Extension Installed</span>
             </div>
             <p className="text-[13px] text-text-2/90 leading-relaxed">{installRequest.message}</p>
             <div className="p-3 rounded-[12px] bg-black/40 border border-white/5 flex flex-col gap-1">
-              <div className="text-[11px] text-text-3/60 font-600 uppercase tracking-tight">Plugin</div>
-              <div className="text-[12px] font-mono text-emerald-200/70">{installRequest.filename || installRequest.pluginId || 'plugin'}</div>
+              <div className="text-[11px] text-text-3/60 font-600 uppercase tracking-tight">Extension</div>
+              <div className="text-[12px] font-mono text-emerald-200/70">{installRequest.filename || installRequest.extensionId || 'extension'}</div>
               <div className="text-[11px] text-text-3/60 font-600 uppercase tracking-tight mt-2">Source URL</div>
               <div className="text-[12px] font-mono text-emerald-200/70 truncate">{installRequest.url}</div>
             </div>
@@ -657,7 +803,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                 </svg>
               </div>
-              <span className="text-[11px] font-700 uppercase tracking-wider text-amber-400/80">Plugin Created</span>
+              <span className="text-[11px] font-700 uppercase tracking-wider text-amber-400/80">Extension Created</span>
             </div>
             <p className="text-[13px] text-text-2/90 leading-relaxed">{scaffoldRequest.message}</p>
             <div className="p-3 rounded-[12px] bg-black/40 border border-white/5">
@@ -669,7 +815,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
               )}
             </div>
           </div>
-        ) : isPluginUI ? (
+        ) : isExtensionUI ? (
           <div className="flex flex-col gap-2 p-4 rounded-[18px] bg-emerald-500/[0.03] border border-emerald-500/10 shadow-[0_0_20px_rgba(16,185,129,0.05)]">
             <div className="flex items-center gap-2 mb-2">
               <div className="w-5 h-5 rounded-full bg-emerald-500/20 flex items-center justify-center">
@@ -677,7 +823,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                   <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5" />
                 </svg>
               </div>
-              <span className="text-[11px] font-700 uppercase tracking-wider text-emerald-400/80">Plugin UI Extension</span>
+              <span className="text-[11px] font-700 uppercase tracking-wider text-emerald-400/80">Extension UI Extension</span>
             </div>
             <div className="text-[14px] text-text-2/90 leading-relaxed">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>{message.text}</ReactMarkdown>
@@ -772,6 +918,9 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                 )}
               </div>
             )}
+            {(() => {
+              let liveInlineToolMediaIndex = 0
+              return (
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}
@@ -781,7 +930,10 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                 },
                 p({ node, children }) {
                   const previews = collectInlinePreviewLinks(node)
-                  if (previews.length === 0) return <p>{children}</p>
+                  const streamedInlineMedia = previews.length === 0
+                    ? liveInlineToolMedia?.[liveInlineToolMediaIndex++] ?? null
+                    : null
+                  if (previews.length === 0 && !streamedInlineMedia) return <p>{children}</p>
                   return (
                     <>
                       <p>{children}</p>
@@ -810,6 +962,11 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                             )}
                           </span>
                         ))}
+                        {streamedInlineMedia && renderToolMediaEntry(
+                          streamedInlineMedia,
+                          `inline-tool-media-${liveInlineToolMediaIndex}-${streamedInlineMedia.url}`,
+                          handleOpenToolMediaImage,
+                        )}
                       </div>
                     </>
                   )
@@ -928,87 +1085,19 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
                 },
               }}
             >
-              {displayText}
+              {normalizedDisplayText}
             </ReactMarkdown>
+              )
+            })()}
           </div>
           ) : null
           }
 
           {renderAttachments(message, isDesktop ? handleOpenAttachmentImage : undefined)}
 
-          {unreferencedToolMedia && (
+          {trailingToolMedia && (
             <div className={`flex flex-col gap-2 ${hasDisplayText || hasPrimaryAttachments ? 'mt-3' : ''}`}>
-              {unreferencedToolMedia.images.map((img, i) => (
-                <div key={`tm-img-${i}`} className="relative group/img">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={img.url}
-                    alt={img.name}
-                    loading="lazy"
-                    className="max-w-[400px] rounded-[10px] border border-white/10 cursor-pointer hover:border-white/25 transition-all"
-                    onClick={() => {
-                      import('@/stores/use-chat-store').then(({ useChatStore }) =>
-                        useChatStore.getState().setPreviewContent({ type: 'image', url: img.url, title: img.name })
-                      )
-                    }}
-                    onError={(e) => { (e.target as HTMLImageElement).style.display = 'none' }}
-                  />
-                  <a
-                    href={img.url}
-                    download
-                    onClick={(e) => e.stopPropagation()}
-                    className="absolute top-2 right-2 bg-black/60 backdrop-blur-sm rounded-[8px] p-1.5 hover:bg-black/80 opacity-0 group-hover/img:opacity-100 transition-opacity"
-                    title="Download"
-                  >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                  </a>
-                </div>
-              ))}
-              {unreferencedToolMedia.videos.map((vid, i) => (
-                <video key={`tm-vid-${i}`} src={vid.url} controls playsInline preload="none" className="max-w-full rounded-[10px] border border-white/10" />
-              ))}
-              {unreferencedToolMedia.pdfs.map((file, i) => (
-                <div key={`tm-pdf-${i}`} className="rounded-[10px] border border-white/10 overflow-hidden">
-                  <iframe src={file.url} loading="lazy" className="w-full h-[400px] bg-white" title={file.name} />
-                  <a
-                    href={file.url}
-                    download
-                    onClick={(e) => e.stopPropagation()}
-                    className="flex items-center gap-2 px-3 py-2 bg-surface/80 border-t border-white/10 text-[12px] text-text-2 hover:text-text no-underline transition-colors"
-                  >
-                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                      <polyline points="7 10 12 15 17 10" />
-                      <line x1="12" y1="15" x2="12" y2="3" />
-                    </svg>
-                    {file.name}
-                  </a>
-                </div>
-              ))}
-              {unreferencedToolMedia.files.map((file, i) => (
-                <a
-                  key={`tm-file-${i}`}
-                  href={file.url}
-                  download
-                  onClick={(e) => e.stopPropagation()}
-                  className="flex items-center gap-2 px-3 py-2 rounded-[10px] border border-white/10 bg-surface/60 hover:bg-surface-2 transition-colors text-[13px] text-text-2 hover:text-text no-underline"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                  </svg>
-                  {file.name}
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="ml-auto opacity-50">
-                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                    <polyline points="7 10 12 15 17 10" />
-                    <line x1="12" y1="15" x2="12" y2="3" />
-                  </svg>
-                </a>
-              ))}
+              {trailingToolMedia.map((media, i) => renderToolMediaEntry(media, `tm-${i}-${media.url}`, handleOpenToolMediaImage))}
             </div>
           )}
         </div>

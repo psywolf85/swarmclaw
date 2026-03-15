@@ -85,7 +85,9 @@ function toTemplateDraft(template: ProtocolTemplate | null): TemplateDraft {
 }
 
 function parseStepJson(value: string): ProtocolStepDefinition[] {
-  const parsed = JSON.parse(value) as unknown
+  let parsed: unknown
+  try { parsed = JSON.parse(value) }
+  catch { throw new Error('Steps JSON is not valid JSON. Please check the syntax.') }
   if (!Array.isArray(parsed)) throw new Error('Steps JSON must be an array.')
   return parsed as ProtocolStepDefinition[]
 }
@@ -176,11 +178,15 @@ export default function ProtocolsPage() {
     setMissions(Array.isArray(missionList) ? missionList : [])
     setTasks(taskList || {})
     setSelectedRunId((current) => {
-      if (requestedRunId && normalizedRuns.some((run) => run.id === requestedRunId)) return requestedRunId
       if (current && normalizedRuns.some((run) => run.id === current)) return current
       return normalizedRuns[0]?.id || null
     })
     setLoading(false)
+  }, [])
+
+  // Apply URL-requested run selection separately so WS refreshes don't snap back
+  useEffect(() => {
+    if (requestedRunId) setSelectedRunId(requestedRunId)
   }, [requestedRunId])
 
   const loadDetail = useCallback(async (runId: string | null) => {
@@ -983,34 +989,195 @@ export default function ProtocolsPage() {
                         </div>
                       )}
 
+                      {!!Object.keys(detail.run.forEachState || {}).length && (
+                        <div className="rounded-[20px] border border-white/[0.06] bg-white/[0.03] p-4">
+                          <div className="text-[12px] font-700 uppercase tracking-[0.12em] text-text-3/55">For-Each Branches</div>
+                          <div className="mt-3 space-y-3">
+                            {Object.values(detail.run.forEachState || {}).map((state) => (
+                              <div key={state.stepId} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-[13px] font-700 text-text">{stepsForRun(detail.run).find((s) => s.id === state.stepId)?.label || state.stepId}</div>
+                                    <div className="mt-1 text-[11px] text-text-3/62">
+                                      {state.items.length} item{state.items.length === 1 ? '' : 's'} • {state.joinReady ? 'all done' : `${state.waitingOnBranchIds?.length || 0} running`}
+                                    </div>
+                                  </div>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] ${state.joinReady ? statusTone('completed') : statusTone('waiting')}`}>
+                                    {state.joinReady ? 'done' : 'waiting'}
+                                  </span>
+                                </div>
+                                <div className="mt-3 space-y-2">
+                                  {state.branches.map((branch) => (
+                                    <div key={branch.runId} className="rounded-[14px] border border-white/[0.06] bg-black/15 p-3">
+                                      <div className="flex flex-wrap items-start justify-between gap-3">
+                                        <div className="min-w-0 flex-1">
+                                          <div className="text-[13px] font-700 text-text">{branch.label}</div>
+                                        </div>
+                                        <span className={`rounded-full border px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] ${statusTone(branch.status)}`}>
+                                          {branch.status}
+                                        </span>
+                                      </div>
+                                      {(branch.summary || branch.lastError) && (
+                                        <div className="mt-2 whitespace-pre-wrap text-[12px] leading-relaxed text-text-2">
+                                          {branch.summary || branch.lastError}
+                                        </div>
+                                      )}
+                                      <div className="mt-3">
+                                        <button
+                                          type="button"
+                                          onClick={() => handleSelectRun(branch.runId)}
+                                          className="rounded-[10px] border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[11px] font-700 text-text-2 cursor-pointer"
+                                        >
+                                          Open branch
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!Object.keys(detail.run.subflowState || {}).length && (
+                        <div className="rounded-[20px] border border-white/[0.06] bg-white/[0.03] p-4">
+                          <div className="text-[12px] font-700 uppercase tracking-[0.12em] text-text-3/55">Subflows</div>
+                          <div className="mt-3 space-y-3">
+                            {Object.values(detail.run.subflowState || {}).map((state) => (
+                              <div key={state.stepId} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-[13px] font-700 text-text">{stepsForRun(detail.run).find((s) => s.id === state.stepId)?.label || state.templateId}</div>
+                                    <div className="mt-1 text-[11px] text-text-3/62">Template: {state.templateId}</div>
+                                    {state.summary && <div className="mt-1 text-[12px] text-text-2">{state.summary}</div>}
+                                    {state.lastError && <div className="mt-1 text-[12px] text-red-300">{state.lastError}</div>}
+                                  </div>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] ${statusTone(state.status)}`}>
+                                    {state.status}
+                                  </span>
+                                </div>
+                                <div className="mt-3">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleSelectRun(state.childRunId)}
+                                    className="rounded-[10px] border border-white/[0.08] bg-white/[0.04] px-3 py-1.5 text-[11px] font-700 text-text-2 cursor-pointer"
+                                  >
+                                    Open subflow
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {!!Object.keys(detail.run.swarmState || {}).length && (
+                        <div className="rounded-[20px] border border-white/[0.06] bg-white/[0.03] p-4">
+                          <div className="text-[12px] font-700 uppercase tracking-[0.12em] text-text-3/55">Swarm Claims</div>
+                          <div className="mt-3 space-y-3">
+                            {Object.values(detail.run.swarmState || {}).map((state) => (
+                              <div key={state.stepId} className="rounded-[16px] border border-white/[0.06] bg-white/[0.02] p-3">
+                                <div className="flex flex-wrap items-center justify-between gap-3">
+                                  <div>
+                                    <div className="text-[13px] font-700 text-text">{stepsForRun(detail.run).find((s) => s.id === state.stepId)?.label || state.stepId}</div>
+                                    <div className="mt-1 text-[11px] text-text-3/62">
+                                      {state.workItems.length} work item{state.workItems.length === 1 ? '' : 's'} • {state.claims.length} claimed • {state.unclaimedItemIds.length} unclaimed
+                                      {state.timedOut && ' • timed out'}
+                                    </div>
+                                  </div>
+                                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-700 uppercase tracking-[0.12em] ${
+                                    state.closedAt ? statusTone('completed') : state.timedOut ? statusTone('failed') : statusTone('waiting')
+                                  }`}>
+                                    {state.closedAt ? 'closed' : state.timedOut ? 'timed out' : 'open'}
+                                  </span>
+                                </div>
+                                <div className="mt-3 space-y-1">
+                                  {state.claims.map((claim) => (
+                                    <div key={claim.id} className="flex items-center justify-between rounded-[10px] border border-white/[0.06] bg-black/15 px-3 py-2">
+                                      <div className="text-[12px] text-text">{claim.workItemLabel}</div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[11px] text-text-3/62">{agents[claim.agentId]?.name || claim.agentId}</span>
+                                        <span className={`rounded-full border px-1.5 py-0.5 text-[9px] font-700 uppercase ${
+                                          claim.status === 'completed' ? 'border-emerald-500/30 text-emerald-300' :
+                                          claim.status === 'failed' ? 'border-red-500/30 text-red-300' :
+                                          'border-accent-bright/30 text-accent-bright'
+                                        }`}>
+                                          {claim.status}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
                       <div className="rounded-[20px] border border-white/[0.06] bg-white/[0.03] p-4">
                       <div className="text-[12px] font-700 uppercase tracking-[0.12em] text-text-3/55">Protocol</div>
                       <div className="mt-3 space-y-2">
                           {stepsForRun(detail.run).map((step, index) => {
-                            const done = detail.run.status === 'completed' ? true : index < currentStepIndex(detail.run)
-                            const active = index === currentStepIndex(detail.run) && detail.run.status !== 'completed'
+                            const isDagMode = Object.keys(detail.run.stepState || {}).length > 0
+                            const dagStatus = detail.run.stepState?.[step.id]?.status
+                            const done = isDagMode
+                              ? dagStatus === 'completed'
+                              : detail.run.status === 'completed' ? true : index < currentStepIndex(detail.run)
+                            const active = isDagMode
+                              ? dagStatus === 'running'
+                              : index === currentStepIndex(detail.run) && detail.run.status !== 'completed'
+                            const isReady = isDagMode && dagStatus === 'ready'
+                            const isWaiting = isDagMode && dagStatus === 'waiting'
+                            const isFailed = isDagMode && dagStatus === 'failed'
                             const iterationCount = detail.run.loopState?.[step.id]?.iterationCount || 0
                             const parallelState = detail.run.parallelState?.[step.id] || null
+                            const forEachState = detail.run.forEachState?.[step.id] || null
+                            const subflowState = detail.run.subflowState?.[step.id] || null
+                            const swarmState = detail.run.swarmState?.[step.id] || null
                             const joinSource = step.kind === 'join'
                               ? detail.run.parallelState?.[step.join?.parallelStepId || ''] || null
                               : null
+                            const depLabels = (step.dependsOnStepIds || [])
+                              .map((depId) => stepsForRun(detail.run).find((s) => s.id === depId)?.label || depId)
+                            const statusColor = isFailed ? 'text-red-400' : done ? 'text-emerald-300' : active ? 'text-accent-bright' : isReady ? 'text-blue-300' : isWaiting ? 'text-amber-300' : 'text-text-3/55'
+                            const statusLabel = isFailed ? 'failed' : done ? 'done' : active ? 'running' : isReady ? 'ready' : isWaiting ? 'waiting' : 'pending'
+                            const borderClass = isFailed ? 'border-red-500/20 bg-red-500/10' : active ? 'border-accent-bright/20 bg-accent-soft/35' : isReady ? 'border-blue-400/20 bg-blue-500/10' : isWaiting ? 'border-amber-400/20 bg-amber-500/10' : 'border-white/[0.06] bg-white/[0.02]'
                             return (
-                              <div key={step.id} className={`rounded-[14px] border px-4 py-3 ${
-                                active ? 'border-accent-bright/20 bg-accent-soft/35' : 'border-white/[0.06] bg-white/[0.02]'
-                              }`}>
+                              <div key={step.id} className={`rounded-[14px] border px-4 py-3 ${borderClass}`}>
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="text-[13px] font-600 text-text">{step.label}</div>
-                                  <span className={`text-[11px] ${done ? 'text-emerald-300' : active ? 'text-accent-bright' : 'text-text-3/55'}`}>
-                                    {done ? 'done' : active ? 'current' : 'pending'}
-                                  </span>
+                                  <span className={`text-[11px] ${statusColor}`}>{statusLabel}</span>
                                 </div>
                                 <div className="mt-1 text-[12px] text-text-3/68">{step.kind.replace(/_/g, ' ')}</div>
+                                {depLabels.length > 0 && (
+                                  <div className="mt-1 text-[11px] text-text-3/50">depends on: {depLabels.join(', ')}</div>
+                                )}
+                                {isFailed && detail.run.stepState?.[step.id]?.error && (
+                                  <div className="mt-2 text-[11px] text-red-300">{detail.run.stepState[step.id].error}</div>
+                                )}
                                 {step.kind === 'repeat' && (
                                   <div className="mt-2 text-[11px] text-text-3/58">Iteration {iterationCount}/{step.repeat?.maxIterations || 0}</div>
                                 )}
                                 {step.kind === 'parallel' && parallelState && (
                                   <div className="mt-2 text-[11px] text-text-3/58">
                                     {parallelState.branches.length} branch{parallelState.branches.length === 1 ? '' : 'es'} • {parallelState.joinReady ? 'join ready' : `${parallelState.waitingOnBranchIds?.length || 0} pending`}
+                                  </div>
+                                )}
+                                {step.kind === 'for_each' && forEachState && (
+                                  <div className="mt-2 text-[11px] text-text-3/58">
+                                    {forEachState.items.length} item{forEachState.items.length === 1 ? '' : 's'} • {forEachState.joinReady ? 'all done' : `${forEachState.waitingOnBranchIds?.length || 0} pending`}
+                                  </div>
+                                )}
+                                {step.kind === 'subflow' && subflowState && (
+                                  <div className="mt-2 text-[11px] text-text-3/58">
+                                    template: {subflowState.templateId} • {subflowState.status}
+                                  </div>
+                                )}
+                                {step.kind === 'swarm_claim' && swarmState && (
+                                  <div className="mt-2 text-[11px] text-text-3/58">
+                                    {swarmState.claims.length} claim{swarmState.claims.length === 1 ? '' : 's'} • {swarmState.unclaimedItemIds.length} unclaimed
+                                    {swarmState.timedOut && ' • timed out'}
                                   </div>
                                 )}
                                 {step.kind === 'join' && (

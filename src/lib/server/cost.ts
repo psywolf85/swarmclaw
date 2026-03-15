@@ -1,4 +1,4 @@
-import type { Agent, UsageRecord, PluginDefinitionCost } from '@/types'
+import type { Agent, UsageRecord, ExtensionDefinitionCost } from '@/types'
 import type { StructuredToolInterface } from '@langchain/core/tools'
 import { loadSessions, loadUsage } from './storage'
 
@@ -80,20 +80,20 @@ export function estimateToolDefinitionTokens(t: StructuredToolInterface): number
 }
 
 /**
- * Build per-plugin definition cost estimates from a set of tools and their plugin mapping.
+ * Build per-extension definition cost estimates from a set of tools and their extension mapping.
  */
-export function buildPluginDefinitionCosts(
+export function buildExtensionDefinitionCosts(
   tools: StructuredToolInterface[],
-  toolToPluginMap: Record<string, string>,
-): PluginDefinitionCost[] {
+  toolToExtensionMap: Record<string, string>,
+): ExtensionDefinitionCost[] {
   const totals = new Map<string, number>()
   for (const t of tools) {
-    const pluginId = toolToPluginMap[t.name] || '_unknown'
+    const extensionId = toolToExtensionMap[t.name] || '_unknown'
     const tokens = estimateToolDefinitionTokens(t)
-    totals.set(pluginId, (totals.get(pluginId) || 0) + tokens)
+    totals.set(extensionId, (totals.get(extensionId) || 0) + tokens)
   }
-  return Array.from(totals.entries()).map(([pluginId, estimatedTokens]) => ({
-    pluginId,
+  return Array.from(totals.entries()).map(([extensionId, estimatedTokens]) => ({
+    extensionId,
     estimatedTokens,
   }))
 }

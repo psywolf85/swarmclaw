@@ -163,7 +163,7 @@ describe('schedule normalization', () => {
         lastActiveAt: now,
         sessionType: 'human',
         agentId: 'agent-1',
-        plugins: [],
+        extensions: [],
       },
     })
 

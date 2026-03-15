@@ -657,7 +657,7 @@ function initDb() {
     getByIds: (ids: string[]) => {
       if (!ids.length) return []
       const placeholders = ids.map(() => '?').join(',')
-      return db.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`).all(...ids) as any[]
+      return db.prepare(`SELECT * FROM memories WHERE id IN (${placeholders})`).all(...ids) as Record<string, unknown>[]
     },
     listAll: db.prepare(`SELECT * FROM memories ORDER BY updatedAt DESC LIMIT ?`),
     listByAgent: db.prepare(`SELECT * FROM memories WHERE agentId=? ORDER BY updatedAt DESC LIMIT ?`),
@@ -716,6 +716,9 @@ function initDb() {
     `),
     bumpAccessCount: db.prepare(`
       UPDATE memories SET accessCount = accessCount + 1, lastAccessedAt = ? WHERE id = ?
+    `),
+    frequentlyAccessedByAgent: db.prepare(`
+      SELECT * FROM memories WHERE agentId = ? AND accessCount >= ? AND lastAccessedAt >= ? ORDER BY accessCount DESC LIMIT 100
     `),
   }
 
@@ -1208,9 +1211,7 @@ function initDb() {
 
     getFrequentlyAccessedByAgent(agentId: string, minAccessCount = 3, sinceDays = 7): MemoryEntry[] {
       const cutoff = Date.now() - sinceDays * 86_400_000
-      const rows = db.prepare(
-        `SELECT * FROM memories WHERE agentId = ? AND accessCount >= ? AND lastAccessedAt >= ? ORDER BY accessCount DESC LIMIT 100`,
-      ).all(agentId, minAccessCount, cutoff) as any[]
+      const rows = stmts.frequentlyAccessedByAgent.all(agentId, minAccessCount, cutoff) as Record<string, unknown>[]
       return rows.map(rowToEntry)
     },
 

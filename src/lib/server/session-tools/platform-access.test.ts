@@ -10,12 +10,12 @@ afterEach(() => {
   saveSettings(originalSettings)
 })
 
-function buildTestContext(hasPlugin: (name: string) => boolean): ToolBuildContext {
+function buildTestContext(hasExtension: (name: string) => boolean): ToolBuildContext {
   return {
     cwd: process.cwd(),
     ctx: undefined,
-    hasPlugin,
-    hasTool: hasPlugin,
+    hasExtension,
+    hasTool: hasExtension,
     cleanupFns: [],
     commandTimeoutMs: 1_000,
     claudeTimeoutMs: 1_000,
@@ -23,7 +23,7 @@ function buildTestContext(hasPlugin: (name: string) => boolean): ToolBuildContex
     persistDelegateResumeId: () => {},
     readStoredDelegateResumeId: () => null,
     resolveCurrentSession: () => null,
-    activePlugins: ['manage_platform'],
+    activeExtensions: ['manage_platform'],
   }
 }
 

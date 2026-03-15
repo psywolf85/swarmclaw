@@ -96,20 +96,20 @@ export function ChatArea() {
   const [heartbeatHistoryOpen, setHeartbeatHistoryOpen] = useState(false)
   const [messagesLoading, setMessagesLoading] = useState(true)
   const [connectorFilter, setConnectorFilter] = useState<string | null>(null)
-  const [pluginChatActions, setPluginChatActions] = useState<Array<{ id: string; label: string; action: string; value: string; tooltip?: string }>>([])
-  const sessionHasBrowserPlugin = getEnabledToolIds(session).includes('browser')
+  const [extensionChatActions, setExtensionChatActions] = useState<Array<{ id: string; label: string; action: string; value: string; tooltip?: string }>>([])
+  const sessionHasBrowserExtension = getEnabledToolIds(session).includes('browser')
 
-  const refreshPluginChatActions = useCallback(() => {
+  const refreshExtensionChatActions = useCallback(() => {
     api<Array<{ id: string; label: string; action: string; value: string; tooltip?: string }>>('GET', '/extensions/ui?type=chat_actions').then((actions) => {
-      if (Array.isArray(actions)) setPluginChatActions(actions)
+      if (Array.isArray(actions)) setExtensionChatActions(actions)
     }).catch(() => {})
   }, [])
 
   useEffect(() => {
-    void refreshPluginChatActions()
-  }, [refreshPluginChatActions])
+    void refreshExtensionChatActions()
+  }, [refreshExtensionChatActions])
 
-  useWs('extensions', refreshPluginChatActions)
+  useWs('extensions', refreshExtensionChatActions)
 
   // Collect unique connector sources from messages for filter UI
   const { connectorSources, hasDirectMessages } = useMemo(() => {
@@ -211,7 +211,7 @@ export function ChatArea() {
   useEffect(() => {
     if (!sessionId || messagesLoading) return
     let cancelled = false
-    if (!sessionHasBrowserPlugin) {
+    if (!sessionHasBrowserExtension) {
       setBrowserActive(false)
       return
     }
@@ -226,7 +226,7 @@ export function ChatArea() {
     return () => {
       cancelled = true
     }
-  }, [messagesLoading, sessionHasBrowserPlugin, sessionId])
+  }, [messagesLoading, sessionHasBrowserExtension, sessionId])
 
   // Auto-poll messages for sessions that are actively running on the server
   const isServerActive = session?.active === true
@@ -552,7 +552,7 @@ export function ChatArea() {
         busy={streamingForThisSession || session.active === true}
         onSend={sendMessage}
         onStop={stopStreaming}
-        pluginChatActions={pluginChatActions}
+        extensionChatActions={extensionChatActions}
       />
 
       <Dropdown open={menuOpen} onClose={() => setMenuOpen(false)}>

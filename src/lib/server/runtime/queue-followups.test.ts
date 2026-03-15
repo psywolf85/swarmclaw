@@ -537,8 +537,8 @@ describe('task resume context', () => {
       sessionType: 'human',
       agentId: 'agent-a',
       parentSessionId: null,
-      plugins: ['delegate'],
-    } satisfies Session
+      extensions: ['delegate'],
+    } as Session
 
     const changed = applyTaskResumeStateToSession(session, {
       claudeSessionId: 'claude-resume-1',

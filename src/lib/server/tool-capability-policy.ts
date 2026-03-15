@@ -9,15 +9,15 @@ export interface CapabilityPolicyBlock {
   source: 'safety' | 'policy'
 }
 
-export interface PluginPolicyDecision {
+export interface ExtensionPolicyDecision {
   mode: CapabilityPolicyMode
-  requestedPlugins: string[]
-  enabledPlugins: string[]
-  blockedPlugins: CapabilityPolicyBlock[]
+  requestedExtensions: string[]
+  enabledExtensions: string[]
+  blockedExtensions: CapabilityPolicyBlock[]
 }
 
-/** @deprecated Use PluginPolicyDecision */
-export type SessionToolPolicyDecision = PluginPolicyDecision
+/** @deprecated Use ExtensionPolicyDecision */
+export type SessionToolPolicyDecision = ExtensionPolicyDecision
 
 type CapabilityCategory =
   | 'filesystem'
@@ -57,9 +57,8 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   opencode_cli: { categories: ['delegation', 'execution'], concreteTools: ['delegate_to_opencode_cli'] },
   gemini_cli: { categories: ['delegation', 'execution'], concreteTools: ['delegate_to_gemini_cli'] },
   memory: { categories: ['memory'], concreteTools: ['memory', 'memory_tool', 'memory_search', 'memory_get', 'memory_store', 'memory_update', 'context_status', 'context_summarize'] },
-  sandbox: { categories: ['execution', 'filesystem'], concreteTools: ['sandbox', 'sandbox_exec', 'sandbox_list_runtimes'] },
-  git: { categories: ['execution', 'filesystem'], concreteTools: ['git'] },
-  http_request: { categories: ['network'], concreteTools: ['http_request'] },
+  // sandbox_exec/sandbox_list_runtimes routed through shell; git uses shell
+  // http_request consolidated into web 'api' action — no separate descriptor
   canvas: { categories: ['filesystem'], concreteTools: ['canvas'] },
   wallet: { categories: ['outbound'], concreteTools: ['wallet', 'wallet_tool'] },
   monitor: { categories: ['execution'], concreteTools: ['monitor', 'monitor_tool'] },
@@ -82,13 +81,9 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   manage_chatrooms: { categories: ['platform'], concreteTools: ['manage_chatrooms', 'chatroom'] },
   spawn_subagent: { categories: ['delegation', 'platform'], concreteTools: ['spawn_subagent', 'delegate_to_agent'] },
   context_mgmt: { categories: ['memory'], concreteTools: ['context_mgmt', 'context_status', 'context_summarize'] },
-  plugin_creator: { categories: ['filesystem', 'execution'], concreteTools: ['plugin_creator', 'plugin_creator_tool'] },
+  extension_creator: { categories: ['filesystem', 'execution'], concreteTools: ['extension_creator', 'extension_creator_tool'] },
   mailbox: { categories: ['network', 'platform', 'outbound'], concreteTools: ['mailbox', 'inbox'] },
   ask_human: { categories: ['platform'], concreteTools: ['ask_human', 'human_loop'] },
-  document: { categories: ['filesystem', 'platform'], concreteTools: ['document', 'ocr_document', 'parse_document'] },
-  extract: { categories: ['filesystem', 'network'], concreteTools: ['extract', 'extract_structured'] },
-  table: { categories: ['filesystem'], concreteTools: ['table', 'dataframe'] },
-  crawl: { categories: ['network'], concreteTools: ['crawl', 'site_crawler'] },
   google_workspace: { categories: ['network'], concreteTools: ['google_workspace', 'gws'] },
 }
 
@@ -229,57 +224,57 @@ export function resolveSessionToolPolicy(
     blockedCategories,
   } = parsePolicyConfig(normalizedSettings)
 
-  const requestedPlugins = Array.isArray(sessionTools)
+  const requestedExtensions = Array.isArray(sessionTools)
     ? dedup(sessionTools.map((id) => normalizeName(id)).filter(Boolean))
     : []
 
-  const enabledPlugins: string[] = []
-  const blockedPlugins: CapabilityPolicyBlock[] = []
+  const enabledExtensions: string[] = []
+  const blockedExtensions: CapabilityPolicyBlock[] = []
 
-  for (const pluginName of requestedPlugins) {
-    const descriptor = TOOL_DESCRIPTORS[pluginName]
-    const settingsReason = settingsBlockReason(pluginName, normalizedSettings)
+  for (const extensionName of requestedExtensions) {
+    const descriptor = TOOL_DESCRIPTORS[extensionName]
+    const settingsReason = settingsBlockReason(extensionName, normalizedSettings)
 
     if (settingsReason) {
-      blockedPlugins.push({ tool: pluginName, reason: settingsReason, source: 'policy' })
+      blockedExtensions.push({ tool: extensionName, reason: settingsReason, source: 'policy' })
       continue
     }
 
-    if (safetyMatchesTool(safetyBlocked, pluginName, descriptor)) {
-      blockedPlugins.push({ tool: pluginName, reason: 'blocked by safety policy', source: 'safety' })
+    if (safetyMatchesTool(safetyBlocked, extensionName, descriptor)) {
+      blockedExtensions.push({ tool: extensionName, reason: 'blocked by safety policy', source: 'safety' })
       continue
     }
 
-    if (policyAllowedNames.has(pluginName)) {
-      enabledPlugins.push(pluginName)
+    if (policyAllowedNames.has(extensionName)) {
+      enabledExtensions.push(extensionName)
       continue
     }
 
-    if (policyMatchesTool(policyBlockedNames, pluginName, descriptor)) {
-      blockedPlugins.push({ tool: pluginName, reason: 'blocked by explicit policy rule', source: 'policy' })
+    if (policyMatchesTool(policyBlockedNames, extensionName, descriptor)) {
+      blockedExtensions.push({ tool: extensionName, reason: 'blocked by explicit policy rule', source: 'policy' })
       continue
     }
 
     const categoryReason = categoryBlockReason(blockedCategories, descriptor)
     if (categoryReason) {
-      blockedPlugins.push({ tool: pluginName, reason: categoryReason, source: 'policy' })
+      blockedExtensions.push({ tool: extensionName, reason: categoryReason, source: 'policy' })
       continue
     }
 
-    const modeReason = modeBlocksTool(mode, pluginName, descriptor)
+    const modeReason = modeBlocksTool(mode, extensionName, descriptor)
     if (modeReason) {
-      blockedPlugins.push({ tool: pluginName, reason: modeReason, source: 'policy' })
+      blockedExtensions.push({ tool: extensionName, reason: modeReason, source: 'policy' })
       continue
     }
 
-    enabledPlugins.push(pluginName)
+    enabledExtensions.push(extensionName)
   }
 
   return {
     mode,
-    requestedPlugins,
-    enabledPlugins,
-    blockedPlugins,
+    requestedExtensions,
+    enabledExtensions,
+    blockedExtensions,
   }
 }
 
@@ -314,15 +309,15 @@ export function resolveConcreteToolPolicyBlock(
   }
 
   if (mappedTools.length > 0) {
-    const enabledRoot = mappedTools.find((tool) => decision.enabledPlugins.includes(tool))
+    const enabledRoot = mappedTools.find((tool) => decision.enabledExtensions.includes(tool))
     if (enabledRoot) return null
 
     const blockedRoot = mappedTools
-      .map((tool) => decision.blockedPlugins.find((entry) => entry.tool === tool))
+      .map((tool) => decision.blockedExtensions.find((entry) => entry.tool === tool))
       .find(Boolean)
     if (blockedRoot) return blockedRoot.reason
 
-    return `plugin family "${mappedTools[0]}" is not enabled for this chat`
+    return `tool family "${mappedTools[0]}" is not enabled for this chat`
   }
 
   return null

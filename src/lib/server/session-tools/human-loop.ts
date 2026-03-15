@@ -1,8 +1,8 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import type { Plugin, PluginHooks } from '@/types'
+import type { Extension, ExtensionHooks } from '@/types'
 import type { ToolBuildContext } from './context'
-import { getPluginManager } from '../plugins'
+import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import {
   ackMailboxEnvelope,
@@ -195,7 +195,7 @@ async function executeHumanLoopAction(args: Record<string, unknown>, bctx: { ses
   }
 }
 
-const HumanLoopPlugin: Plugin = {
+const HumanLoopExtension: Extension = {
   name: 'Human Loop',
   enabledByDefault: false,
   description: 'Request structured human input or approvals, then wait durably for the response.',
@@ -221,7 +221,7 @@ const HumanLoopPlugin: Plugin = {
         'Do not call `ask_human` action `request_approval` again for the same exact question.',
       ]
     },
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'ask_human',
@@ -262,10 +262,10 @@ const HumanLoopPlugin: Plugin = {
   ],
 }
 
-getPluginManager().registerBuiltin('ask_human', HumanLoopPlugin)
+registerNativeCapability('ask_human', HumanLoopExtension)
 
 export function buildHumanLoopTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('ask_human')) return []
+  if (!bctx.hasExtension('ask_human')) return []
   return [
     tool(
       async (args) => executeHumanLoopAction(args, {
@@ -274,7 +274,7 @@ export function buildHumanLoopTools(bctx: ToolBuildContext): StructuredToolInter
       }),
       {
         name: 'ask_human',
-        description: HumanLoopPlugin.tools![0].description,
+        description: HumanLoopExtension.tools![0].description,
         schema: z.object({}).passthrough(),
       },
     ),

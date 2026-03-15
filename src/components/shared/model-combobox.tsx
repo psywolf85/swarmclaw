@@ -13,6 +13,7 @@ interface ModelComboboxProps {
   defaultModels?: string[]
   credentialId?: string | null
   apiEndpoint?: string | null
+  ollamaMode?: 'local' | 'cloud' | null
   supportsDiscovery?: boolean
   className?: string
 }
@@ -25,6 +26,7 @@ export function ModelCombobox({
   defaultModels = [],
   credentialId,
   apiEndpoint,
+  ollamaMode,
   supportsDiscovery = true,
   className,
 }: ModelComboboxProps) {
@@ -47,7 +49,7 @@ export function ModelCombobox({
 
   const isCustom = (m: string) => models.includes(m) && defaultModels.length > 0 && !defaultModels.includes(m)
   const showAdd = trimmedQuery && !availableModels.some((m) => m.toLowerCase() === trimmedQuery.toLowerCase())
-  const discoveryKey = `${providerId}::${credentialId || ''}::${apiEndpoint?.trim() || ''}`
+  const discoveryKey = `${providerId}::${credentialId || ''}::${apiEndpoint?.trim() || ''}::${ollamaMode || ''}`
 
   const persistModels = useCallback(async (next: string[]) => {
     await api('PUT', `/providers/${providerId}/models`, { models: next })
@@ -90,6 +92,7 @@ export function ModelCombobox({
         providerId,
         credentialId,
         endpoint: apiEndpoint,
+        ollamaMode,
         force,
       })
       lastDiscoveryKeyRef.current = discoveryKey
@@ -102,7 +105,7 @@ export function ModelCombobox({
       setDiscoveryState('notice')
       setDiscoveryMessage(message)
     }
-  }, [apiEndpoint, credentialId, discoveryKey, providerId, supportsDiscovery])
+  }, [apiEndpoint, credentialId, discoveryKey, ollamaMode, providerId, supportsDiscovery])
 
   const resetDiscoveryState = useEffectEvent(() => {
     lastDiscoveryKeyRef.current = null
@@ -130,7 +133,7 @@ export function ModelCombobox({
 
   useEffect(() => {
     resetDiscoveryState()
-  }, [providerId, credentialId, apiEndpoint])
+  }, [providerId, credentialId, apiEndpoint, ollamaMode])
 
   useEffect(() => {
     syncDiscoveryOnOpen()

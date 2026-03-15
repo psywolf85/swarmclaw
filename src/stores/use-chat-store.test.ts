@@ -20,7 +20,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     systemPrompt: '',
     provider: 'openai',
     model: 'gpt-5',
-    plugins: ['memory'],
+    extensions: ['memory'],
     createdAt: 1,
     updatedAt: 1,
     threadSessionId: 'session-1',
@@ -43,7 +43,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     messages: [],
     createdAt: 1,
     lastActiveAt: 1,
-    plugins: ['memory'],
+    extensions: ['memory'],
     ...overrides,
   } as Session
 }
@@ -219,7 +219,7 @@ describe('useChatStore control-token hygiene', () => {
       thinkingText: '',
       thinkingStartTime: 0,
       queuedMessages: [
-        { id: 'queued-1', sessionId: 'session-1', text: 'Queued hello' },
+        { runId: 'queued-1', sessionId: 'session-1', text: 'Queued hello', queuedAt: Date.now(), position: 0 },
       ],
       agentStatus: null,
       lastUsage: null,

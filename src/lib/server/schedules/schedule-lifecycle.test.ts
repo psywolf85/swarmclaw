@@ -72,7 +72,7 @@ function makeSession(overrides: Record<string, unknown> = {}) {
     lastActiveAt: now,
     sessionType: 'human',
     agentId: 'agent-1',
-    plugins: [],
+    extensions: [],
     heartbeatEnabled: true,
     ...overrides,
   }

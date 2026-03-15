@@ -1,13 +1,9 @@
-import { z } from 'zod'
-import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import fs from 'fs'
 import path from 'path'
 import { spawnSync } from 'child_process'
 import { UPLOAD_DIR } from '../storage'
 import { truncate, MAX_OUTPUT } from './context'
-import type { ToolBuildContext } from './context'
-import type { Plugin, PluginHooks, Session } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Session } from '@/types'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { detectDocker } from '@/lib/server/sandbox/docker-detect'
 import {
@@ -18,7 +14,7 @@ import {
 } from '@/lib/server/sandbox/session-runtime'
 import { buildDockerExecArgs } from '@/lib/server/runtime/process-manager'
 
-type SandboxContext = {
+export type SandboxContext = {
   sessionId?: string
   cwd?: string
   agentId?: string | null
@@ -37,7 +33,7 @@ function sandboxUnavailableError(reason: string): string {
     guidance: [
       'Install Docker Desktop to keep sandbox_exec inside a container.',
       'Use http_request for straightforward API calls.',
-      'Use plugin_creator plus manage_schedules for recurring automations.',
+      'Use extension_creator plus manage_schedules for recurring automations.',
     ],
   })
 }
@@ -177,7 +173,7 @@ async function executeContainerNode(params: {
   }
 }
 
-async function executeSandboxExec(args: unknown, context: SandboxContext) {
+export async function executeSandboxExec(args: unknown, context: SandboxContext) {
   const normalized = normalizeToolInputArgs((args ?? {}) as Record<string, unknown>)
   const language = normalized.language as string
   const code = normalized.code as string
@@ -250,7 +246,7 @@ async function executeSandboxExec(args: unknown, context: SandboxContext) {
   }
 }
 
-async function executeListRuntimes(context: SandboxContext) {
+export async function executeListRuntimes(context: SandboxContext) {
   const docker = detectDocker()
   const session = context.resolveCurrentSession?.() ?? null
   const status = resolveSandboxRuntimeStatus({
@@ -282,80 +278,4 @@ async function executeListRuntimes(context: SandboxContext) {
   })
 }
 
-const SandboxPlugin: Plugin = {
-  name: 'Core Sandbox',
-  description: 'Docker-preferred Node.js execution for JavaScript and TypeScript when custom code is necessary.',
-  hooks: {
-    getCapabilityDescription: () => 'I can run JavaScript or TypeScript with `sandbox_exec`, preferring the Docker sandbox and falling back to host Node when Docker is unavailable.',
-    getOperatingGuidance: () => [
-      'Use `http_request` for straightforward REST or JSON API calls instead of writing code in `sandbox_exec`.',
-      'Use `sandbox_exec` only when custom parsing or transformation code is actually needed.',
-      'For recurring automations, prefer `plugin_creator` plus `manage_schedules` over repeated sandbox runs.',
-    ],
-  } as PluginHooks,
-  tools: [
-    {
-      name: 'sandbox_exec',
-      description: 'Execute JavaScript or TypeScript with a Docker-backed Node.js sandbox when available.',
-      parameters: {
-        type: 'object',
-        properties: {
-          language: { type: 'string', enum: ['javascript', 'typescript'] },
-          code: { type: 'string' },
-          timeoutSec: { type: 'number' },
-        },
-        required: ['language', 'code'],
-      },
-      execute: async (args, context) => executeSandboxExec(args, {
-        sessionId: context.session.id,
-        cwd: context.session.cwd || process.cwd(),
-      }),
-    },
-    {
-      name: 'sandbox_list_runtimes',
-      description: 'Report Node.js, Docker, and session sandbox runtime availability.',
-      parameters: { type: 'object', properties: {} },
-      execute: async (_args, context) => executeListRuntimes({
-        sessionId: context.session.id,
-        cwd: context.session.cwd || process.cwd(),
-      }),
-    },
-  ],
-}
-
-getPluginManager().registerBuiltin('sandbox', SandboxPlugin)
-
-export function buildSandboxTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('sandbox')) return []
-
-  const context: SandboxContext = {
-    sessionId: bctx.ctx?.sessionId || undefined,
-    agentId: bctx.ctx?.agentId || null,
-    cwd: bctx.cwd,
-    config: bctx.sandboxConfig,
-    resolveCurrentSession: bctx.resolveCurrentSession,
-  }
-
-  return [
-    tool(
-      async (args) => executeSandboxExec(args, context),
-      {
-        name: 'sandbox_exec',
-        description: SandboxPlugin.tools![0].description,
-        schema: z.object({
-          language: z.enum(['javascript', 'typescript']),
-          code: z.string(),
-          timeoutSec: z.number().optional(),
-        }),
-      },
-    ),
-    tool(
-      async () => executeListRuntimes(context),
-      {
-        name: 'sandbox_list_runtimes',
-        description: SandboxPlugin.tools![1].description,
-        schema: z.object({}).passthrough(),
-      },
-    ),
-  ]
-}
+// Execution functions (executeSandboxExec, executeListRuntimes) are kept for shell.ts to import.

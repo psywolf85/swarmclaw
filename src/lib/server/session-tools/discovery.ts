@@ -1,14 +1,14 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import type { ToolBuildContext } from './context'
-import { getPluginManager, normalizeMarketplacePluginUrl } from '../plugins'
+import { getExtensionManager, normalizeMarketplaceExtensionUrl } from '../extensions'
 import { listNativeCapabilities, registerNativeCapability } from '../native-capabilities'
-import type { Plugin, PluginHooks, ClawHubSkill } from '@/types'
+import type { Extension, ExtensionHooks, ClawHubSkill } from '@/types'
 import { searchClawHub } from '@/lib/server/skills/clawhub-client'
 import { normalizeToolInputArgs } from './normalize-tool-args'
-import { pluginIdMatches } from '../tool-aliases'
+import { extensionIdMatches } from '../tool-aliases'
 import { loadSessions, patchAgent, patchSession } from '../storage'
-import { inferPluginPublisherSourceFromUrl } from '@/lib/plugin-sources'
+import { inferExtensionPublisherSourceFromUrl } from '@/lib/extension-sources'
 import { errorMessage } from '@/lib/shared-utils'
 import { getEnabledCapabilityIds, isExternalExtensionId, normalizeCapabilitySelection } from '@/lib/capability-selection'
 
@@ -45,11 +45,9 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
   const normalized = normalizeToolInputArgs(args)
   const action = normalized.action
   const approved = normalized.approved
-  const explicitPluginId = typeof normalized.pluginId === 'string'
-    ? normalized.pluginId.trim()
-    : typeof normalized.plugin_id === 'string'
-      ? normalized.plugin_id.trim()
-      : typeof normalized.toolId === 'string'
+  const explicitExtensionId = typeof normalized.extensionId === 'string'
+    ? normalized.extensionId.trim()
+    : typeof normalized.toolId === 'string'
         ? normalized.toolId.trim()
         : typeof normalized.tool_id === 'string'
           ? normalized.tool_id.trim()
@@ -60,11 +58,11 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
               : undefined
   const url = typeof normalized.url === 'string' ? normalized.url.trim() : undefined
   const reason = normalized.reason as string | undefined
-  const manager = getPluginManager()
+  const manager = getExtensionManager()
   const q = typeof normalized.query === 'string' ? normalized.query : ''
-  const pluginId = explicitPluginId || (action === 'request_access' ? q.trim() : '')
+  const extensionId = explicitExtensionId || (action === 'request_access' ? q.trim() : '')
 
-  console.log('[discovery] Executing action:', action, { query: q, pluginId })
+  console.log('[discovery] Executing action:', action, { query: q, extensionId })
 
   try {
     switch (action) {
@@ -72,16 +70,16 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
       case 'discover': {
         const nativeCapabilities = listNativeCapabilities()
         const nativeIds = new Set(nativeCapabilities.map((entry) => entry.filename))
-        const capabilities = [...nativeCapabilities, ...manager.listPlugins()]
+        const capabilities = [...nativeCapabilities, ...manager.listExtensions()]
         const currentSession = bctx?.ctx?.sessionId ? loadSessions()[bctx.ctx.sessionId] : null
-        const sessionPlugins = getEnabledCapabilityIds(currentSession)
+        const sessionExtensions = getEnabledCapabilityIds(currentSession)
         return JSON.stringify(capabilities.map(p => ({
           id: p.filename,
           name: p.name,
           description: p.description,
           enabled: p.enabled,
-          granted: pluginIdMatches(sessionPlugins, p.filename),
-          availableNow: pluginIdMatches(sessionPlugins, p.filename) && (nativeIds.has(p.filename) || !manager.isExplicitlyDisabled(p.filename)),
+          granted: extensionIdMatches(sessionExtensions, p.filename),
+          availableNow: extensionIdMatches(sessionExtensions, p.filename) && (nativeIds.has(p.filename) || !manager.isExplicitlyDisabled(p.filename)),
           isBuiltin: !isExternalExtensionId(p.filename)
         })), null, 2)
       }
@@ -110,25 +108,25 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
           console.log('[discovery] Searching SwarmClaw registry...')
           const registryResults = new Map<string, Record<string, unknown>>()
           const registries = [
-            { url: 'https://swarmclaw.ai/registry/plugins.json', catalogSource: 'swarmclaw-site' },
+            { url: 'https://swarmclaw.ai/registry/extensions.json', catalogSource: 'swarmclaw-site' },
             { url: 'https://raw.githubusercontent.com/swarmclawai/swarmforge/main/registry.json', catalogSource: 'swarmforge' },
           ] as const
           for (const registry of registries) {
             const scRes = await fetch(registry.url, { signal: AbortSignal.timeout(5000) })
             if (!scRes.ok) continue
-            const scPlugins = await scRes.json()
-            const filtered = (scPlugins as Record<string, unknown>[]).filter((p: Record<string, unknown>) =>
+            const scExtensions = await scRes.json()
+            const filtered = (scExtensions as Record<string, unknown>[]).filter((p: Record<string, unknown>) =>
               !q || (String(p.name || '')).toLowerCase().includes(q.toLowerCase()) || (String(p.description || '')).toLowerCase().includes(q.toLowerCase())
             )
             for (const p of filtered) {
               const id = String(p.id || p.name || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '_')
               if (!id || registryResults.has(id)) continue
-              const url = normalizeMarketplacePluginUrl(String(p.url || ''))
+              const url = normalizeMarketplaceExtensionUrl(String(p.url || ''))
               registryResults.set(id, {
                 ...p,
                 id,
                 url,
-                source: inferPluginPublisherSourceFromUrl(url) || 'swarmforge',
+                source: inferExtensionPublisherSourceFromUrl(url) || 'swarmforge',
                 catalogSource: registry.catalogSource,
               })
             }
@@ -139,33 +137,33 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
         }
 
         if (results.length === 0) {
-          return 'No marketplace plugins found for your query.'
+          return 'No marketplace extensions found for your query.'
         }
 
         return JSON.stringify(results, null, 2)
       }
       case 'request_access': {
-        if (!pluginId) {
-          return JSON.stringify({ error: 'pluginId is required for request_access. Use "discover" first to find the plugin filename.' })
+        if (!extensionId) {
+          return JSON.stringify({ error: 'extensionId is required for request_access. Use "discover" first to find the extension filename.' })
         }
         // Check if the agent already has access via alias expansion (e.g. manage_platform includes manage_secrets)
         if (bctx?.ctx?.sessionId) {
           const allSessions = loadSessions()
           const currentSession = allSessions[bctx.ctx.sessionId]
           const grantedTools = getEnabledCapabilityIds(currentSession)
-          if (currentSession && pluginIdMatches(grantedTools, pluginId)) {
+          if (currentSession && extensionIdMatches(grantedTools, extensionId)) {
             return JSON.stringify({
               alreadyGranted: true,
               alreadyAvailable: true,
-              pluginId,
-              message: `You already have access to "${pluginId}" in this session. Call "${pluginId}" directly now instead of using manage_capabilities again.`,
+              extensionId,
+              message: `You already have access to "${extensionId}" in this session. Call "${extensionId}" directly now instead of using manage_capabilities again.`,
             })
           }
         }
         if (bctx?.ctx?.sessionId) {
           patchSession(bctx.ctx.sessionId, (currentSession) => {
             if (!currentSession) return currentSession
-            const nextSelection = grantCapabilitySelection(currentSession, pluginId)
+            const nextSelection = grantCapabilitySelection(currentSession, extensionId)
             if (!nextSelection.changed) return currentSession
             currentSession.tools = nextSelection.tools
             currentSession.extensions = nextSelection.extensions
@@ -175,7 +173,7 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
         } else if (bctx?.ctx?.agentId) {
           patchAgent(bctx.ctx.agentId, (currentAgent) => {
             if (!currentAgent) return currentAgent
-            const nextSelection = grantCapabilitySelection(currentAgent, pluginId)
+            const nextSelection = grantCapabilitySelection(currentAgent, extensionId)
             if (!nextSelection.changed) return currentAgent
             currentAgent.tools = nextSelection.tools
             currentAgent.extensions = nextSelection.extensions
@@ -186,19 +184,19 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
         return JSON.stringify({
           type: 'capability_access_granted',
           alreadyGranted: true,
-          pluginId,
-          toolId: pluginId,
+          extensionId,
+          toolId: extensionId,
           reason,
-          message: `Access to "${pluginId}" was granted immediately. It will be available on the next agent turn.`,
+          message: `Access to "${extensionId}" was granted immediately. It will be available on the next agent turn.`,
         })
       }
       case 'install_request': {
         if (!url) {
           return JSON.stringify({ error: 'url is required for install_request.' })
         }
-        const safeName = (pluginId || url.split('/').pop() || 'plugin').replace(/[^a-zA-Z0-9._-]/g, '_')
+        const safeName = (extensionId || url.split('/').pop() || 'extension').replace(/[^a-zA-Z0-9._-]/g, '_')
         const resolvedFilename = safeName.endsWith('.js') || safeName.endsWith('.mjs') ? safeName : `${safeName}.js`
-        const installed = await manager.installPluginFromUrl(url, resolvedFilename, {
+        const installed = await manager.installExtensionFromUrl(url, resolvedFilename, {
           createdByAgentId: bctx?.ctx?.agentId || undefined,
           requestedByAgentId: bctx?.ctx?.agentId || undefined,
           installReason: reason || '',
@@ -216,11 +214,11 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
           })
         }
         return JSON.stringify({
-          type: 'plugin_install_result',
-          pluginId: pluginId || installed.filename,
+          type: 'extension_install_result',
+          extensionId: extensionId || installed.filename,
           filename: installed.filename,
           url: installed.sourceUrl,
-          message: `Installed plugin "${installed.filename}" from ${installed.sourceUrl}. It will be available on the next agent turn.`,
+          message: `Installed extension "${installed.filename}" from ${installed.sourceUrl}. It will be available on the next agent turn.`,
         })
       }
       default:
@@ -234,12 +232,12 @@ async function executeDiscoveryAction(args: Record<string, unknown>, bctx?: Tool
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const DiscoveryPlugin: Plugin = {
+const DiscoveryExtension: Extension = {
   name: 'Capability Discovery',
   description: 'Discover built-in tools and external extensions, search marketplaces, request access, or suggest new installs.',
-  hooks: {} as PluginHooks,
+  hooks: {} as ExtensionHooks,
   tools: [
     {
       name: 'manage_capabilities',
@@ -249,8 +247,8 @@ const DiscoveryPlugin: Plugin = {
         properties: {
           action: { type: 'string', enum: ['discover', 'search_marketplace', 'request_access', 'install_request'] },
           query: { type: 'string', description: 'Search term for marketplace, or the direct tool/extension name for request_access' },
-          pluginId: { type: 'string', description: 'The exact tool or extension name to request, such as "shell" or "manage_schedules"' },
-          url: { type: 'string', description: 'URL for new plugin install request' },
+          extensionId: { type: 'string', description: 'The exact tool or extension name to request, such as "shell" or "manage_schedules"' },
+          url: { type: 'string', description: 'URL for new extension install request' },
           reason: { type: 'string', description: 'Why you need this capability' }
         },
         required: ['action', 'reason']
@@ -260,7 +258,7 @@ const DiscoveryPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('discovery', DiscoveryPlugin)
+registerNativeCapability('discovery', DiscoveryExtension)
 
 export function buildDiscoveryTools(bctx: ToolBuildContext): StructuredToolInterface[] {
   // Always allow agents to discover what they can do
@@ -269,11 +267,11 @@ export function buildDiscoveryTools(bctx: ToolBuildContext): StructuredToolInter
       async (args) => executeDiscoveryAction(args, bctx),
       {
         name: 'manage_capabilities',
-        description: DiscoveryPlugin.tools![0].description,
+        description: DiscoveryExtension.tools![0].description,
         schema: z.object({
           action: z.enum(['discover', 'search_marketplace', 'request_access', 'install_request']).describe('The discovery action to perform'),
           query: z.string().optional().describe('The marketplace query, or the direct tool/extension name to request access to'),
-          pluginId: z.string().optional().describe('The exact tool or extension name to request, such as "shell" or "manage_schedules"'),
+          extensionId: z.string().optional().describe('The exact tool or extension name to request, such as "shell" or "manage_schedules"'),
           url: z.string().optional(),
           reason: z.string().describe('Why you need to perform this discovery action')
         })

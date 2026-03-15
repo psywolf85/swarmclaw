@@ -4,7 +4,7 @@ import { loadChatrooms, saveChatrooms, loadAgents } from '../storage'
 import { genId } from '@/lib/id'
 import { notify } from '../ws-hub'
 import type { ToolBuildContext } from './context'
-import type { Chatroom, Plugin, PluginHooks } from '@/types'
+import type { Chatroom, Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
@@ -103,14 +103,14 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const ChatroomPlugin: Plugin = {
+const ChatroomExtension: Extension = {
   name: 'Core Chatrooms',
   description: 'Manage SwarmClaw routing rules and multi-agent chatrooms.',
   hooks: {
     getCapabilityDescription: () => 'I can create and participate in chatrooms (`manage_chatrooms`) for multi-agent collaboration with @mention-based discussions.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'manage_chatrooms',
@@ -131,19 +131,19 @@ const ChatroomPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('chatroom', ChatroomPlugin)
+registerNativeCapability('chatroom', ChatroomExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildChatroomTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('manage_chatrooms')) return []
+  if (!bctx.hasExtension('manage_chatrooms')) return []
   return [
     tool(
       async (args) => executeChatroomAction(args, { agentId: bctx.ctx?.agentId }),
       {
         name: 'manage_chatrooms',
-        description: ChatroomPlugin.tools![0].description,
+        description: ChatroomExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     )

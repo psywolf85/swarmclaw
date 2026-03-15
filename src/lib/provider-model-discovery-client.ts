@@ -5,6 +5,7 @@ export interface DiscoverProviderModelsParams {
   providerId: string
   credentialId?: string | null
   endpoint?: string | null
+  ollamaMode?: 'local' | 'cloud' | null
   force?: boolean
   requiresApiKey?: boolean
 }
@@ -13,6 +14,7 @@ export function buildProviderModelDiscoveryPath(params: DiscoverProviderModelsPa
   const searchParams = new URLSearchParams()
   if (params.credentialId) searchParams.set('credentialId', params.credentialId)
   if (params.endpoint?.trim()) searchParams.set('endpoint', params.endpoint.trim())
+  if (params.ollamaMode) searchParams.set('ollamaMode', params.ollamaMode)
   if (params.force) searchParams.set('force', '1')
   if (typeof params.requiresApiKey === 'boolean') {
     searchParams.set('requiresApiKey', params.requiresApiKey ? '1' : '0')

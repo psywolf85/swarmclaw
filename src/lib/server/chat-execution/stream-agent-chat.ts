@@ -6,8 +6,8 @@ import { DEFAULT_HEARTBEAT_INTERVAL_SEC } from '@/lib/runtime/heartbeat-defaults
 import { buildSessionTools } from '@/lib/server/session-tools'
 import { buildChatModel } from '@/lib/server/build-llm'
 import { loadSettings, loadAgents, loadSkills, appendUsage } from '@/lib/server/storage'
-import { estimateCost, buildPluginDefinitionCosts } from '@/lib/server/cost'
-import { getPluginManager } from '@/lib/server/plugins'
+import { estimateCost, buildExtensionDefinitionCosts } from '@/lib/server/cost'
+import { getExtensionManager } from '@/lib/server/extensions'
 import {
   collectCapabilityAgentContext,
   collectCapabilityDescriptions,
@@ -21,8 +21,8 @@ import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/serve
 
 import { logExecution } from '@/lib/server/execution-log'
 import { buildCurrentDateTimePromptContext } from '@/lib/server/prompt-runtime-context'
-import { canonicalizePluginId, expandPluginIds, pluginIdMatches } from '@/lib/server/tool-aliases'
-import type { Session, Message, UsageRecord, PluginInvocationRecord, MessageToolEvent, PluginPromptBuildResult } from '@/types'
+import { canonicalizeExtensionId, expandExtensionIds, extensionIdMatches } from '@/lib/server/tool-aliases'
+import type { Session, Message, UsageRecord, ExtensionInvocationRecord, MessageToolEvent, ExtensionPromptBuildResult } from '@/types'
 import { extractSuggestions } from '@/lib/server/suggestions'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
@@ -163,7 +163,7 @@ export function shouldSkipToolSummaryForShortResponse(params: {
   if (!Array.isArray(params.toolEvents) || params.toolEvents.length === 0) return false
   const toolNames = Array.from(new Set(
     params.toolEvents
-      .map((event) => canonicalizePluginId(event.name) || event.name)
+      .map((event) => canonicalizeExtensionId(event.name) || event.name)
       .filter((name): name is string => typeof name === 'string' && name.trim().length > 0),
   ))
   if (toolNames.length === 0) return false
@@ -209,11 +209,11 @@ function extractProviderErrorInfo(err: unknown): { statusCode: number; retryAfte
   return { statusCode, retryAfterMs }
 }
 
-function buildPluginCapabilityLines(enabledPlugins: string[], opts?: { delegationEnabled?: boolean }): string[] {
-  const lines = collectCapabilityDescriptions(enabledPlugins)
+function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { delegationEnabled?: boolean }): string[] {
+  const lines = collectCapabilityDescriptions(enabledExtensions)
 
-  // Context tools are available to any session with plugins
-  if (enabledPlugins.length > 0) {
+  // Context tools are available to any session with extensions
+  if (enabledExtensions.length > 0) {
     lines.push('- I can monitor my own context usage (`context_status`) and compact my conversation history (`context_summarize`) when I\'m running low on space.')
     if (opts?.delegationEnabled) {
       lines.push('- I can delegate tasks to other agents (`delegate_to_agent`) based on their strengths and availability.')
@@ -222,23 +222,23 @@ function buildPluginCapabilityLines(enabledPlugins: string[], opts?: { delegatio
   return lines
 }
 
-function buildExactToolNameList(enabledPlugins: string[]): string[] {
-  const planning = getEnabledToolPlanningView(enabledPlugins)
-  const pluginToolNames = getPluginManager()
-    .getTools(enabledPlugins)
+function buildExactToolNameList(enabledExtensions: string[]): string[] {
+  const planning = getEnabledToolPlanningView(enabledExtensions)
+  const extensionToolNames = getExtensionManager()
+    .getTools(enabledExtensions)
     .map(({ tool }) => tool.name)
   const combined = [
     ...planning.displayToolIds,
     ...planning.entries.map((entry) => entry.toolName),
-    ...pluginToolNames,
+    ...extensionToolNames,
   ]
   return dedup(combined.filter((toolName) => typeof toolName === 'string' && toolName.trim()))
     .map((toolName) => toolName.trim())
     .sort()
 }
 
-export function buildToolAvailabilityLines(enabledPlugins: string[]): string[] {
-  const toolNames = buildExactToolNameList(enabledPlugins)
+export function buildToolAvailabilityLines(enabledExtensions: string[]): string[] {
+  const toolNames = buildExactToolNameList(enabledExtensions)
   if (toolNames.length === 0) return []
 
   return [
@@ -247,12 +247,12 @@ export function buildToolAvailabilityLines(enabledPlugins: string[]): string[] {
   ]
 }
 
-export function buildToolDisciplineLines(enabledPlugins: string[]): string[] {
-  const planning = getEnabledToolPlanningView(enabledPlugins)
-  const uniqueTools = buildExactToolNameList(enabledPlugins)
+export function buildToolDisciplineLines(enabledExtensions: string[]): string[] {
+  const planning = getEnabledToolPlanningView(enabledExtensions)
+  const uniqueTools = buildExactToolNameList(enabledExtensions)
   if (uniqueTools.length === 0) return []
-  const walletTools = getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.walletInspect)
-  const httpTools = getToolsForCapability(enabledPlugins, 'network.http')
+  const walletTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.walletInspect)
+  const httpTools = getToolsForCapability(enabledExtensions, 'network.http')
 
   const lines = [
     `Enabled tools in this session: ${uniqueTools.map((toolId) => `\`${toolId}\``).join(', ')}.`,
@@ -269,9 +269,9 @@ export function buildToolDisciplineLines(enabledPlugins: string[]): string[] {
 
   lines.push(...planning.disciplineGuidance)
 
-  const researchSearchTools = getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.researchSearch)
-  const researchFetchTools = getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.researchFetch)
-  const browserCaptureTools = getToolsForCapability(enabledPlugins, TOOL_CAPABILITY.browserCapture)
+  const researchSearchTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.researchSearch)
+  const researchFetchTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.researchFetch)
+  const browserCaptureTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserCapture)
 
   if ((researchSearchTools.length || researchFetchTools.length) && browserCaptureTools.length) {
     const researchLabel = [...researchSearchTools, ...researchFetchTools].map((toolName) => `\`${toolName}\``).join('/')
@@ -311,29 +311,29 @@ const OPEN_ENDED_REVISION_BLOCK = [
   'If `files` is available, use it with explicit actions and paths to inspect and revise the artifacts.',
 ].join('\n')
 
-function getEnabledDisplayTool(enabledPlugins: string[], canonicalPluginId: string): string | null {
-  return getEnabledToolPlanningView(enabledPlugins).displayToolIds.find((toolId) => toolId === canonicalPluginId) || null
+function getEnabledDisplayTool(enabledExtensions: string[], canonicalExtensionId: string): string | null {
+  return getEnabledToolPlanningView(enabledExtensions).displayToolIds.find((toolId) => toolId === canonicalExtensionId) || null
 }
 
 export function shouldForceAttachmentFollowthrough(params: {
   userMessage: string
-  enabledPlugins: string[]
+  enabledExtensions: string[]
   hasToolCalls: boolean
   hasAttachmentContext: boolean
 }): boolean {
   if (!params.hasAttachmentContext) return false
   if (params.hasToolCalls) return false
-  const decision = routeTaskIntent(params.userMessage, params.enabledPlugins, null)
+  const decision = routeTaskIntent(params.userMessage, params.enabledExtensions, null)
   if (decision.intent !== 'research' && decision.intent !== 'browsing') return false
-  return decision.preferredTools.some((toolName) => pluginIdMatches(params.enabledPlugins, toolName))
+  return decision.preferredTools.some((toolName) => extensionIdMatches(params.enabledExtensions, toolName))
 }
 
-export function buildExternalWalletExecutionBlock(enabledPlugins: string[]): string {
+export function buildExternalWalletExecutionBlock(enabledExtensions: string[]): string {
   const hasExecutionContext = Boolean(
-    getFirstToolForCapability(enabledPlugins, TOOL_CAPABILITY.walletInspect)
-    || getFirstToolForCapability(enabledPlugins, 'network.http')
-    || getEnabledDisplayTool(enabledPlugins, 'browser')
-    || getEnabledDisplayTool(enabledPlugins, 'manage_capabilities'),
+    getFirstToolForCapability(enabledExtensions, TOOL_CAPABILITY.walletInspect)
+    || getFirstToolForCapability(enabledExtensions, 'network.http')
+    || getEnabledDisplayTool(enabledExtensions, 'browser')
+    || getEnabledDisplayTool(enabledExtensions, 'manage_capabilities'),
   )
   if (!hasExecutionContext) return ''
   const lines = [
@@ -412,7 +412,7 @@ const GOAL_DECOMPOSITION_BLOCK = [
 ].join('\n')
 
 function buildAgenticExecutionPolicy(opts: {
-  enabledPlugins: string[]
+  enabledExtensions: string[]
   loopMode: 'bounded' | 'ongoing'
   heartbeatPrompt: string
   heartbeatIntervalSec: number
@@ -425,10 +425,10 @@ function buildAgenticExecutionPolicy(opts: {
   responseStyle?: 'concise' | 'normal' | 'detailed' | null
   responseMaxChars?: number | null
 }) {
-  const hasTooling = opts.enabledPlugins.length > 0
-  const pluginLines = buildPluginCapabilityLines(opts.enabledPlugins, { delegationEnabled: opts.delegationEnabled })
-  const toolDisciplineLines = buildToolDisciplineLines(opts.enabledPlugins)
-  const hasMemoryTools = opts.enabledPlugins.some((toolId) => (canonicalizePluginId(toolId) || toolId) === 'memory')
+  const hasTooling = opts.enabledExtensions.length > 0
+  const extensionLines = buildExtensionCapabilityLines(opts.enabledExtensions, { delegationEnabled: opts.delegationEnabled })
+  const toolDisciplineLines = buildToolDisciplineLines(opts.enabledExtensions)
+  const hasMemoryTools = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'memory')
 
   const parts: string[] = []
 
@@ -471,7 +471,7 @@ function buildAgenticExecutionPolicy(opts: {
       'Prefer `use_skill` action `run` for executable skills and `use_skill` action `load` only when the skill is guidance-only.',
     )
   }
-  if (opts.enabledPlugins.some((toolId) => (canonicalizePluginId(toolId) || toolId) === 'manage_skills')) {
+  if (opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_skills')) {
     parts.push(
       '## Skill Resolution',
       'When you are blocked on a missing capability, binary, or environment setup, call `manage_skills` before repeating generic exploration.',
@@ -488,7 +488,7 @@ function buildAgenticExecutionPolicy(opts: {
   }
 
   // Tool-specific operating guidance (native capabilities first, then extensions)
-  const guidanceLines = collectCapabilityOperatingGuidance(opts.enabledPlugins)
+  const guidanceLines = collectCapabilityOperatingGuidance(opts.enabledExtensions)
   if (guidanceLines.length) parts.push(...guidanceLines)
 
   // Response behavior
@@ -512,13 +512,13 @@ function buildAgenticExecutionPolicy(opts: {
   )
 
   if (toolDisciplineLines.length) parts.push('## Tool Discipline', ...toolDisciplineLines)
-  if (pluginLines.length) parts.push('What I can do:\n' + pluginLines.join('\n'))
+  if (extensionLines.length) parts.push('What I can do:\n' + extensionLines.join('\n'))
   if (opts.userMessage && isBroadGoal(opts.userMessage)) parts.push(GOAL_DECOMPOSITION_BLOCK)
   if (opts.userMessage && looksLikeExternalWalletTask(opts.userMessage)) {
-    const externalExecutionBlock = buildExternalWalletExecutionBlock(opts.enabledPlugins)
+    const externalExecutionBlock = buildExternalWalletExecutionBlock(opts.enabledExtensions)
     if (externalExecutionBlock) parts.push(externalExecutionBlock)
   }
-  if (opts.userMessage && looksLikeOpenEndedDeliverableTask(opts.userMessage) && opts.enabledPlugins.some((toolId) => toolId === 'files' || toolId === 'edit_file')) {
+  if (opts.userMessage && looksLikeOpenEndedDeliverableTask(opts.userMessage) && opts.enabledExtensions.some((toolId) => toolId === 'files' || toolId === 'edit_file')) {
     parts.push(OPEN_ENDED_REVISION_BLOCK)
   }
   if (opts.userMessage) {
@@ -577,7 +577,7 @@ function joinPromptSegments(...segments: Array<string | null | undefined>): stri
 
 function applyBeforePromptBuildResult(
   basePrompt: string,
-  hookResult: PluginPromptBuildResult | null | undefined,
+  hookResult: ExtensionPromptBuildResult | null | undefined,
 ): string {
   if (!hookResult) return basePrompt
 
@@ -625,12 +625,13 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   const startTs = Date.now()
   const { session, message, imagePath, imageUrl, attachedFiles, apiKey, systemPrompt, extraSystemContext, write, history, fallbackCredentialIds, signal } = opts
   const isConnectorSession = isDirectConnectorSession(session)
-  const rawPlugins = getEnabledCapabilityIds(session)
-  const hasShellCapability = rawPlugins.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
-  const sessionPlugins = expandPluginIds([
-    ...rawPlugins,
+  const rawExtensions = getEnabledCapabilityIds(session)
+  const hasShellCapability = rawExtensions.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
+  const extensionManager = getExtensionManager()
+  const sessionExtensions = expandExtensionIds([
+    ...rawExtensions,
     ...(hasShellCapability ? ['process'] : []),
-  ])
+  ]).filter((id) => !extensionManager.isExplicitlyDisabled(id))
 
   // fallbackCredentialIds is intentionally accepted for compatibility with caller signatures.
   void fallbackCredentialIds
@@ -656,8 +657,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   const settings = loadSettings()
   const requestedToolPreflightResponse = resolveRequestedToolPreflightResponse({
     message,
-    enabledPlugins: sessionPlugins,
-    toolPolicy: resolveSessionToolPolicy(sessionPlugins, settings),
+    enabledExtensions: sessionExtensions,
+    toolPolicy: resolveSessionToolPolicy(sessionExtensions, settings),
     appSettings: settings,
     internal: false,
     source: 'chat',
@@ -739,7 +740,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         const allSkills = loadSkills()
         const runtimeSkills = resolveRuntimeSkills({
           cwd: session.cwd,
-          enabledPlugins: sessionPlugins,
+          enabledExtensions: sessionExtensions,
           agentId: agent?.id || null,
           sessionId: session.id,
           userId: session.user,
@@ -778,7 +779,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   }
 
   // Inject agent awareness only if agent has delegation capabilities
-  const hasDelegation = sessionPlugins.some(p => p === 'delegate' || p === 'spawn_subagent')
+  const hasDelegation = sessionExtensions.some(p => p === 'delegate' || p === 'spawn_subagent')
   if (hasDelegation && session.agentId) {
     try {
       const { buildAgentAwarenessBlock } = await import('@/lib/server/agents/agent-registry')
@@ -817,8 +818,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   // Collect dynamic context from enabled native capabilities and extensions.
   try {
-    const pluginContextParts = await collectCapabilityAgentContext(session, sessionPlugins, message, history)
-    promptParts.push(...pluginContextParts)
+    const extensionContextParts = await collectCapabilityAgentContext(session, sessionExtensions, message, history)
+    promptParts.push(...extensionContextParts)
   } catch (err: unknown) {
     console.error('[stream-agent-chat] Capability context injection failed:', err instanceof Error ? err.message : String(err))
   }
@@ -862,15 +863,15 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   // Tell the LLM about available tools/extensions and their access status
   {
-    const agentEnabledSet = new Set(sessionPlugins)
-    const { getPluginManager } = await import('@/lib/server/plugins')
-    const allPlugins = [...listNativeCapabilities(), ...getPluginManager().listPlugins()]
+    const agentEnabledSet = new Set(sessionExtensions)
+    const { getExtensionManager } = await import('@/lib/server/extensions')
+    const allExtensions = [...listNativeCapabilities(), ...getExtensionManager().listExtensions()]
     const mcpDisabled = agentMcpDisabledTools ?? []
 
     // Categorize native tools and extensions
     const globallyDisabled: string[] = [] // Disabled site-wide by admin
     const enabledButNoAccess: string[] = [] // Enabled globally but agent doesn't have access
-    for (const p of allPlugins) {
+    for (const p of allExtensions) {
       if (!p.enabled) {
         globallyDisabled.push(`${p.name} (${p.filename})`)
       } else if (!agentEnabledSet.has(p.filename)) {
@@ -907,7 +908,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   promptParts.push(
     buildAgenticExecutionPolicy({
-      enabledPlugins: sessionPlugins,
+      enabledExtensions: sessionExtensions,
       loopMode: runtime.loopMode,
       heartbeatPrompt,
       heartbeatIntervalSec,
@@ -1161,7 +1162,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         },
       ],
     },
-    { enabledIds: sessionPlugins },
+    { enabledIds: sessionExtensions },
   )
   prompt = applyBeforePromptBuildResult(prompt, promptHookResult)
 
@@ -1209,11 +1210,11 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       historyMessages: effectiveHistory,
       imagesCount: imagePath ? 1 : 0,
     },
-    { enabledIds: sessionPlugins },
+    { enabledIds: sessionExtensions },
   )
 
   const endToolBuildPerf = perf.start('stream-agent-chat', 'buildSessionTools', { sessionId: session.id })
-  const { tools, cleanup, toolToPluginMap, abortSignalRef } = await buildSessionTools(session.cwd, sessionPlugins, {
+  const { tools, cleanup, toolToExtensionMap, abortSignalRef } = await buildSessionTools(session.cwd, sessionExtensions, {
     agentId: session.agentId,
     sessionId: session.id,
     runId,
@@ -1294,14 +1295,14 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   let totalInputTokens = 0
   let totalOutputTokens = 0
   let accumulatedThinking = ''
-  const pluginInvocations: PluginInvocationRecord[] = []
+  const extensionInvocations: ExtensionInvocationRecord[] = []
   const streamedToolEvents: MessageToolEvent[] = []
   let currentToolInputTokens = 0
   const boundedExternalExecutionTask = looksLikeBoundedExternalExecutionTask(message)
-  const routingDecision = routeTaskIntent(message, sessionPlugins, null)
+  const routingDecision = routeTaskIntent(message, sessionExtensions, null)
   const likelyResearchSynthesisTask = routingDecision.intent === 'research' || routingDecision.intent === 'browsing'
 
-  await runCapabilityHook('beforeAgentStart', { session, message }, { enabledIds: sessionPlugins })
+  await runCapabilityHook('beforeAgentStart', { session, message }, { enabledIds: sessionExtensions })
 
   const abortController = new AbortController()
   abortSignalRef.signal = abortController.signal
@@ -1352,7 +1353,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   let unfinishedToolFollowthroughCount = 0
   let toolErrorFollowthroughCount = 0
   let toolSummaryRetryCount = 0
-  const explicitRequiredToolNames = getExplicitRequiredToolNames(message, sessionPlugins)
+  const explicitRequiredToolNames = getExplicitRequiredToolNames(message, sessionExtensions)
   const shouldEnforceEarlyRequiredToolKickoff = explicitRequiredToolNames.length > 0
     && looksLikeOpenEndedDeliverableTask(message)
   const usedToolNames = new Set<string>()
@@ -1530,14 +1531,14 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
             const settledSegment = extractSuggestions(lastSegment).clean.trim()
             if (settledSegment) lastSettledSegment = settledSegment
             lastSegment = ''
-            usedToolNames.add(canonicalizePluginId(toolName) || toolName)
+            usedToolNames.add(canonicalizeExtensionId(toolName) || toolName)
             // Shell-based HTTP (curl/wget/gh) satisfies research tool requirements —
             // don't force the agent to also use web_search when shell already fetched the data.
-            if ((canonicalizePluginId(toolName) || toolName) === 'shell' && inputStr) {
+            if ((canonicalizeExtensionId(toolName) || toolName) === 'shell' && inputStr) {
               const cmdMatch = /curl|wget|http|gh\s+(issue|pr|api|repo|release|search|run)/.test(inputStr)
               if (cmdMatch) usedToolNames.add('web')
             }
-            // Estimate input tokens for plugin invocation tracking
+            // Estimate input tokens for extension invocation tracking
             currentToolInputTokens = Math.ceil((inputStr?.length || 0) / 4)
             logExecution(session.id, 'tool_call', `${toolName} invoked`, {
               agentId: session.agentId,
@@ -1596,10 +1597,10 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
                 })
               }
             }
-            // Track plugin invocation token estimates
-            const pluginId = toolToPluginMap[toolName] || '_unknown'
-            pluginInvocations.push({
-              pluginId,
+            // Track extension invocation token estimates
+            const extensionId = toolToExtensionMap[toolName] || '_unknown'
+            extensionInvocations.push({
+              extensionId,
               toolName,
               inputTokens: currentToolInputTokens,
               outputTokens: Math.ceil((outputStr?.length || 0) / 4),
@@ -1772,7 +1773,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
           hasToolCalls = iterationStartState.hasToolCalls
           streamedToolEvents.length = iterationStartState.toolEventCount
           requiredToolReminderNames = explicitRequiredToolNames.filter((toolName) => {
-            const canonical = canonicalizePluginId(toolName) || toolName
+            const canonical = canonicalizeExtensionId(toolName) || toolName
             return !usedToolNames.has(toolName) && !usedToolNames.has(canonical)
           })
           if (requiredToolReminderNames.length === 0) requiredToolReminderNames = [...explicitRequiredToolNames]
@@ -1916,7 +1917,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         // Canonicalize required tool names before comparing — tool planning uses
         // alias names (e.g. web_search) while LangGraph emits canonical names (e.g. web).
         requiredToolReminderNames = explicitRequiredToolNames.filter((toolName) => {
-          const canonical = canonicalizePluginId(toolName) || toolName
+          const canonical = canonicalizeExtensionId(toolName) || toolName
           return !usedToolNames.has(toolName) && !usedToolNames.has(canonical)
         })
         if (requiredToolReminderNames.length > 0) {
@@ -1954,7 +1955,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         && attachmentFollowthroughCount < MAX_ATTACHMENT_FOLLOWTHROUGHS
         && shouldForceAttachmentFollowthrough({
           userMessage: message,
-          enabledPlugins: sessionPlugins,
+          enabledExtensions: sessionExtensions,
           hasToolCalls,
           hasAttachmentContext,
         })) {
@@ -2059,7 +2060,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
             toolEvents: streamedToolEvents,
           }),
           toolEvents: streamedToolEvents,
-          enabledPlugins: sessionPlugins,
+          enabledExtensions: sessionExtensions,
         })
       ) {
         shouldContinue = 'required_tool'
@@ -2240,7 +2241,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
             }
           : undefined,
       },
-      { enabledIds: sessionPlugins },
+      { enabledIds: sessionExtensions },
     )
   }
 
@@ -2298,7 +2299,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   const totalTokens = totalInputTokens + totalOutputTokens
   if (totalTokens > 0) {
     const cost = estimateCost(session.model, totalInputTokens, totalOutputTokens)
-    const pluginDefinitionCosts = buildPluginDefinitionCosts(tools, toolToPluginMap)
+    const extensionDefinitionCosts = buildExtensionDefinitionCosts(tools, toolToExtensionMap)
     const usageRecord: UsageRecord = {
       sessionId: session.id,
       messageIndex: history.length,
@@ -2310,8 +2311,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       estimatedCost: cost,
       timestamp: Date.now(),
       durationMs: Date.now() - startTs,
-      pluginDefinitionCosts,
-      pluginInvocations: pluginInvocations.length > 0 ? pluginInvocations : undefined,
+      extensionDefinitionCosts,
+      extensionInvocations: extensionInvocations.length > 0 ? extensionInvocations : undefined,
     }
     appendUsage(session.id, usageRecord)
     // Send usage metadata to client
@@ -2352,7 +2353,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   await emitLlmOutputHook(finalResponse)
 
-  await runCapabilityHook('afterAgentComplete', { session, response: fullText }, { enabledIds: sessionPlugins })
+  await runCapabilityHook('afterAgentComplete', { session, response: fullText }, { enabledIds: sessionExtensions })
 
   // OpenClaw auto-sync: push memory if enabled
   try {

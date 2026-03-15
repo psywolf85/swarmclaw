@@ -2,6 +2,8 @@ import type { SessionQueueSnapshot, SessionQueuedTurn } from '@/types'
 
 export interface QueuedSessionMessage extends SessionQueuedTurn {
   optimistic?: boolean
+  /** Set when the server has consumed the message but the chat hasn't shown it yet */
+  sending?: boolean
 }
 
 export interface QueueMessageDraft {
@@ -44,8 +46,17 @@ export function replaceQueuedMessagesForSession(
   sessionId: string,
   nextItems: QueuedSessionMessage[],
 ): QueuedSessionMessage[] {
+  const otherSessions = queue.filter((item) => item.sessionId !== sessionId)
+  const previousForSession = queue.filter((item) => item.sessionId === sessionId && !item.sending)
+  // Detect consumed messages: items in local state but not in server snapshot.
+  // Keep them visible as "sending" so they don't vanish from the UI.
+  const nextRunIds = new Set(nextItems.map((item) => item.runId))
+  const consumed = previousForSession
+    .filter((item) => !item.optimistic && !nextRunIds.has(item.runId))
+    .map((item) => ({ ...item, sending: true }))
   return [
-    ...queue.filter((item) => item.sessionId !== sessionId),
+    ...otherSessions,
+    ...consumed,
     ...nextItems,
   ]
 }

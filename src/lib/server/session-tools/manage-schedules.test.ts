@@ -63,7 +63,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd,
         ctx: { sessionId: 'session-1', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       const raw = await tool.invoke({
@@ -130,7 +130,7 @@ describe('manage_schedules tool', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'default',
-          plugins: [],
+          extensions: [],
           connectorContext: {
             connectorId: 'conn-wa',
             platform: 'whatsapp',
@@ -145,7 +145,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-wa', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       await tool.invoke({
@@ -219,7 +219,7 @@ describe('manage_schedules tool', () => {
           lastActiveAt: now,
           sessionType: 'human',
           agentId: 'default',
-          plugins: [],
+          extensions: [],
           connectorContext: {
             connectorId: 'conn-wa',
             platform: 'whatsapp',
@@ -234,7 +234,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-main', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       await tool.invoke({
@@ -280,7 +280,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-main', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       const createdRaw = await tool.invoke({
@@ -333,7 +333,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-2', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       const raw = await tool.invoke({
@@ -377,7 +377,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-reminder', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       await tool.invoke({
@@ -466,7 +466,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-reminder', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       const raw = await tool.invoke({
@@ -540,7 +540,7 @@ describe('manage_schedules tool', () => {
       const tools = crud.buildCrudTools({
         cwd: process.env.WORKSPACE_DIR,
         ctx: { sessionId: 'session-reminder', agentId: 'default', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-        hasPlugin: (name) => name === 'manage_schedules',
+        hasExtension: (name) => name === 'manage_schedules',
       })
       const tool = tools.find((entry) => entry.name === 'manage_schedules')
       const raw = await tool.invoke({
@@ -557,7 +557,7 @@ describe('manage_schedules tool', () => {
     const parsed = JSON.parse(String(output.raw))
     assert.deepEqual(new Set(parsed.archivedIds), new Set(['one', 'two']))
     assert.deepEqual(
-      Object.fromEntries(Object.entries(output.schedules).map(([id, schedule]) => [id, schedule.status])),
+      Object.fromEntries(Object.entries(output.schedules).map(([id, schedule]: [string, any]) => [id, schedule.status])),
       { one: 'archived', two: 'archived' },
     )
   })

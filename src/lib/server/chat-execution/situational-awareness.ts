@@ -120,7 +120,7 @@ function buildPredictiveSignalsSection(incidents: SupervisorIncident[], now: num
   const warnings: string[] = []
   for (const [family, { count, lastRemedy }] of familyCounts) {
     if (count < 3) continue
-    let line = `- ⚠ ${family} (${count}x in 72h) — recurring pattern, likely to recur`
+    let line = `- WARNING: ${family} (${count}x in 72h) — recurring pattern, likely to recur`
     if (lastRemedy) line += `. Suggested: ${lastRemedy.slice(0, 100)}`
     warnings.push(line)
   }

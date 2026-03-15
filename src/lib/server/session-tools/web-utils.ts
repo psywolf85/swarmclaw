@@ -172,8 +172,10 @@ export function inferWebActionFromArgs(params: {
   action?: string
   query?: string
   url?: string
-}): 'search' | 'fetch' | undefined {
-  if (params.action === 'search' || params.action === 'fetch') return params.action
+  method?: string
+}): 'search' | 'fetch' | 'api' | undefined {
+  if (params.action === 'search' || params.action === 'fetch' || params.action === 'api') return params.action
+  if (typeof params.method === 'string' && params.method.trim()) return 'api'
   if (typeof params.url === 'string' && /^https?:\/\//i.test(params.url.trim())) return 'fetch'
   if (typeof params.query === 'string' && params.query.trim()) return 'search'
   if (typeof params.url === 'string' && params.url.trim()) return 'search'

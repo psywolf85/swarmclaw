@@ -255,8 +255,8 @@ describe('discovery tool access flows', () => {
       })
       const tool = built.tools.find((entry) => entry.name === 'manage_capabilities')
       const raw = await tool.invoke({ action: 'discover', reason: 'Check runtime tool availability.' })
-      const plugins = JSON.parse(raw)
-      const email = plugins.find((entry) => entry.id === 'email')
+      const extensions = JSON.parse(raw)
+      const email = extensions.find((entry) => entry.id === 'email')
       console.log(JSON.stringify({
         email,
       }))

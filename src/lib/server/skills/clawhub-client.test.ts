@@ -183,7 +183,7 @@ describe('fetchSkillContent', () => {
     const archive = new JSZip()
     archive.file('SKILL.md', '# Palaia\n\nUse this skill for persistent memory.')
     archive.file('README.md', 'fallback readme')
-    const zipBuffer = await archive.generateAsync({ type: 'nodebuffer' })
+    const zipBuffer = new Uint8Array(await archive.generateAsync({ type: 'nodebuffer' }))
     const requestedUrls: string[] = []
 
     mockFetch(async (input: RequestInfo | URL) => {
@@ -205,7 +205,7 @@ describe('fetchSkillContent', () => {
     const JSZip = (await import('jszip')).default
     const archive = new JSZip()
     archive.file('README.md', '# Owner Route Skill')
-    const zipBuffer = await archive.generateAsync({ type: 'nodebuffer' })
+    const zipBuffer = new Uint8Array(await archive.generateAsync({ type: 'nodebuffer' }))
     let requestedUrl = ''
 
     mockFetch(async (input: RequestInfo | URL) => {

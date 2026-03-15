@@ -147,12 +147,20 @@ export async function runDailyConsolidation(): Promise<{
   }
 
   // Run maintenance: dedupe + prune stale working entries
-  const maintenance = memDb.maintain({ dedupe: true, pruneWorking: true, ttlHours: 24 })
+  let pruned = 0
+  let deduped = 0
+  try {
+    const maintenance = memDb.maintain({ dedupe: true, pruneWorking: true, ttlHours: 24 })
+    pruned = maintenance.pruned
+    deduped = maintenance.deduped
+  } catch (err: unknown) {
+    errors.push(`Maintenance: ${errorMessage(err)}`)
+  }
 
   return {
     digests: digestsCreated,
-    pruned: maintenance.pruned,
-    deduped: maintenance.deduped,
+    pruned,
+    deduped,
     errors,
   }
 }

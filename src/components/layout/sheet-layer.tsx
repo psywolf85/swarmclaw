@@ -16,7 +16,7 @@ const ChatroomSheet = dynamic(() => import('@/components/chatrooms/chatroom-shee
 const WebhookSheet = dynamic(() => import('@/components/webhooks/webhook-sheet').then(m => m.WebhookSheet), { ssr: false })
 const McpServerSheet = dynamic(() => import('@/components/mcp-servers/mcp-server-sheet').then(m => m.McpServerSheet), { ssr: false })
 const KnowledgeSheet = dynamic(() => import('@/components/knowledge/knowledge-sheet').then(m => m.KnowledgeSheet), { ssr: false })
-const PluginSheet = dynamic(() => import('@/components/plugins/plugin-sheet').then(m => m.PluginSheet), { ssr: false })
+const ExtensionSheet = dynamic(() => import('@/components/extensions/extension-sheet').then(m => m.ExtensionSheet), { ssr: false })
 const ProjectSheet = dynamic(() => import('@/components/projects/project-sheet').then(m => m.ProjectSheet), { ssr: false })
 const SearchDialog = dynamic(() => import('@/components/shared/search-dialog').then(m => m.SearchDialog), { ssr: false })
 const AgentSwitchDialog = dynamic(() => import('@/components/shared/agent-switch-dialog').then(m => m.AgentSwitchDialog), { ssr: false })
@@ -39,7 +39,7 @@ export function SheetLayer({ profileSheetOpen, setProfileSheetOpen }: { profileS
       <WebhookSheet />
       <McpServerSheet />
       <KnowledgeSheet />
-      <PluginSheet />
+      <ExtensionSheet />
       <ProjectSheet />
       <SearchDialog />
       <AgentSwitchDialog />

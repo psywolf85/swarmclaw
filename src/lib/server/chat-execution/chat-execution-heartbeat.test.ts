@@ -44,7 +44,7 @@ describe('pruneSuppressedHeartbeatStreamMessage', () => {
     assert.equal(shouldApplySessionFreshnessReset('eval'), false)
   })
 
-  it('does not advertise tool capabilities when no plugins are enabled', () => {
+  it('does not advertise tool capabilities when no extensions are enabled', () => {
     assert.deepEqual(buildAgentRuntimeCapabilities([]), ['heartbeats', 'autonomous_loop', 'multi_agent_chat'])
     assert.deepEqual(buildAgentRuntimeCapabilities(['web']), ['tools', 'heartbeats', 'autonomous_loop', 'multi_agent_chat'])
   })

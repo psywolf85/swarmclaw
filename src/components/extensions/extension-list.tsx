@@ -4,21 +4,21 @@ import { useEffect, useState, useCallback, useMemo } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
 import { useNavigate } from '@/lib/app/navigation'
 import { api } from '@/lib/app/api-client'
-import { getPluginSourceLabel } from '@/lib/plugin-sources'
+import { getExtensionSourceLabel } from '@/lib/extension-sources'
 import { toast } from 'sonner'
 import { useMountedRef } from '@/hooks/use-mounted-ref'
-import type { Agent, MarketplacePlugin, PluginMeta } from '@/types'
+import type { Agent, MarketplaceExtension, ExtensionMeta } from '@/types'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { dedup } from '@/lib/shared-utils'
 
 type TopTab = 'extensions' | 'marketplace'
 
-export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
+export function ExtensionList({ inSidebar }: { inSidebar?: boolean }) {
   const extensions = useAppStore((s) => s.extensions)
   const loadExtensions = useAppStore((s) => s.loadExtensions)
-  const setPluginSheetOpen = useAppStore((s) => s.setPluginSheetOpen)
-  const setEditingPluginFilename = useAppStore((s) => s.setEditingPluginFilename)
+  const setExtensionSheetOpen = useAppStore((s) => s.setExtensionSheetOpen)
+  const setEditingExtensionFilename = useAppStore((s) => s.setEditingExtensionFilename)
   const agents = useAppStore((s) => s.agents)
   const setCurrentAgent = useAppStore((s) => s.setCurrentAgent)
   const navigateTo = useNavigate()
@@ -30,7 +30,7 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
   }, [])
 
   const [tab, setTab] = useState<TopTab>('extensions')
-  const [marketplace, setMarketplace] = useState<MarketplacePlugin[]>([])
+  const [marketplace, setMarketplace] = useState<MarketplaceExtension[]>([])
   const [mpLoading, setMpLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
   const [deleting, setDeleting] = useState(false)
@@ -48,7 +48,7 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
     if (!mountedRef.current) return
     setMpLoading(true)
     try {
-      const data = await api<MarketplacePlugin[]>('GET', '/extensions/marketplace')
+      const data = await api<MarketplaceExtension[]>('GET', '/extensions/marketplace')
       if (mountedRef.current && Array.isArray(data)) setMarketplace(data)
     } catch { /* ignore */ }
     if (mountedRef.current) setMpLoading(false)
@@ -60,11 +60,11 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
     return () => clearTimeout(timer)
   }, [tab, inSidebar, loadMarketplace])
 
-  const pluginList = Object.values(extensions)
-  const extensionPlugins = useMemo(() => pluginList.filter((p) => !p.isBuiltin), [pluginList])
+  const extensionList = Object.values(extensions)
+  const filteredExtensionList = useMemo(() => extensionList, [extensionList])
 
   // Search filtering for installed extensions
-  const filterInstalled = useCallback((list: PluginMeta[]) => {
+  const filterInstalled = useCallback((list: ExtensionMeta[]) => {
     if (!search.trim()) return list
     const q = search.toLowerCase()
     return list.filter((p) =>
@@ -74,11 +74,11 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
     )
   }, [search])
 
-  const filteredExtensions = useMemo(() => filterInstalled(extensionPlugins), [filterInstalled, extensionPlugins])
+  const filteredExtensions = useMemo(() => filterInstalled(filteredExtensionList), [filterInstalled, filteredExtensionList])
 
   const handleEdit = (filename: string) => {
-    setEditingPluginFilename(filename)
-    setPluginSheetOpen(true)
+    setEditingExtensionFilename(filename)
+    setExtensionSheetOpen(true)
   }
 
   const handleToggle = async (e: React.MouseEvent, filename: string, enabled: boolean) => {
@@ -112,7 +112,7 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
     }
   }
 
-  const installFromMarketplace = async (p: MarketplacePlugin) => {
+  const installFromMarketplace = async (p: MarketplaceExtension) => {
     setInstalling(p.id)
     const toastId = toast.loading(`Installing ${p.name}...`)
     try {
@@ -139,8 +139,8 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
     return (
       <div className="px-3 pb-4 flex-1 overflow-y-auto">
         <div className="space-y-2">
-          {pluginList.map((plugin) => (
-            <SidebarPluginCard key={plugin.filename} plugin={plugin} onEdit={handleEdit} />
+          {extensionList.map((ext) => (
+            <SidebarExtensionCard key={ext.filename} ext={ext} onEdit={handleEdit} />
           ))}
         </div>
       </div>
@@ -148,15 +148,15 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
   }
 
   // --- Full page mode ---
-  const enabledCount = pluginList.filter((p) => p.enabled).length
-  const totalTools = pluginList.reduce((acc, p) => acc + (p.toolCount ?? 0), 0)
-  const totalHooks = pluginList.reduce((acc, p) => acc + (p.hookCount ?? 0), 0)
+  const enabledCount = extensionList.filter((p) => p.enabled).length
+  const totalTools = extensionList.reduce((acc, p) => acc + (p.toolCount ?? 0), 0)
+  const totalHooks = extensionList.reduce((acc, p) => acc + (p.hookCount ?? 0), 0)
 
   return (
     <div className="flex-1 overflow-y-auto px-5 pb-6">
       {/* Stats bar */}
       <div className="flex items-center gap-3 mb-4">
-        <Stat label="Installed" value={pluginList.length} />
+        <Stat label="Installed" value={extensionList.length} />
         <Stat label="Enabled" value={enabledCount} accent />
         <Stat label="Tools" value={totalTools} />
         <Stat label="Hooks" value={totalHooks} />
@@ -178,7 +178,7 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
 
       {/* Tabs */}
       <div className="flex items-center gap-1 mb-5 border-b border-white/[0.06] pb-px">
-        <TabButton active={tab === 'extensions'} onClick={() => setTab('extensions')} count={extensionPlugins.length}>
+        <TabButton active={tab === 'extensions'} onClick={() => setTab('extensions')} count={extensionList.length}>
           Extensions
         </TabButton>
         <TabButton active={tab === 'marketplace'} onClick={() => setTab('marketplace')}>
@@ -189,7 +189,7 @@ export function PluginList({ inSidebar }: { inSidebar?: boolean }) {
       {/* Tab content */}
       {tab === 'extensions' && (
         <InstalledGrid
-          plugins={filteredExtensions}
+          extensions={filteredExtensions}
           allowDelete
           search={search}
           agents={agents}
@@ -276,28 +276,28 @@ function TabButton({ active, onClick, count, children }: {
   )
 }
 
-function pluginDescription(plugin: PluginMeta): string {
-  const raw = (plugin.description || '').trim()
+function extensionDescription(ext: ExtensionMeta): string {
+  const raw = (ext.description || '').trim()
   if (raw) return raw
-  const sourceLabel = plugin.isBuiltin ? 'built-in tool integration' : 'installed extension'
+  const sourceLabel = ext.isBuiltin ? 'built-in tool integration' : 'installed extension'
   return `No description provided. Click to view metadata and controls for this ${sourceLabel}.`
 }
 
-function pluginCapabilityBadges(plugin: PluginMeta): string[] {
+function extensionCapabilityBadges(ext: ExtensionMeta): string[] {
   const badges: string[] = []
-  if (plugin.toolCount && plugin.toolCount > 0) badges.push(`${plugin.toolCount} tool${plugin.toolCount === 1 ? '' : 's'}`)
-  if (plugin.hookCount && plugin.hookCount > 0) badges.push(`${plugin.hookCount} hook${plugin.hookCount === 1 ? '' : 's'}`)
-  if (plugin.hasUI) badges.push('UI')
-  if (plugin.providerCount && plugin.providerCount > 0) badges.push(`${plugin.providerCount} provider${plugin.providerCount === 1 ? '' : 's'}`)
-  if (plugin.connectorCount && plugin.connectorCount > 0) badges.push(`${plugin.connectorCount} connector${plugin.connectorCount === 1 ? '' : 's'}`)
-  if (plugin.hasDependencyManifest) badges.push(`${plugin.dependencyCount ?? 0} dep${plugin.dependencyCount === 1 ? '' : 's'}`)
+  if (ext.toolCount && ext.toolCount > 0) badges.push(`${ext.toolCount} tool${ext.toolCount === 1 ? '' : 's'}`)
+  if (ext.hookCount && ext.hookCount > 0) badges.push(`${ext.hookCount} hook${ext.hookCount === 1 ? '' : 's'}`)
+  if (ext.hasUI) badges.push('UI')
+  if (ext.providerCount && ext.providerCount > 0) badges.push(`${ext.providerCount} provider${ext.providerCount === 1 ? '' : 's'}`)
+  if (ext.connectorCount && ext.connectorCount > 0) badges.push(`${ext.connectorCount} connector${ext.connectorCount === 1 ? '' : 's'}`)
+  if (ext.hasDependencyManifest) badges.push(`${ext.dependencyCount ?? 0} dep${ext.dependencyCount === 1 ? '' : 's'}`)
   return badges
 }
 
 // --- Installed extensions grid ---
 
-function InstalledGrid({ plugins, allowDelete, search, agents, onEdit, onToggle, onDelete, onNavigateToAgent, emptyMessage, emptyAction }: {
-  plugins: PluginMeta[]
+function InstalledGrid({ extensions, allowDelete, search, agents, onEdit, onToggle, onDelete, onNavigateToAgent, emptyMessage, emptyAction }: {
+  extensions: ExtensionMeta[]
   allowDelete: boolean
   search: string
   agents: Record<string, Agent>
@@ -308,7 +308,7 @@ function InstalledGrid({ plugins, allowDelete, search, agents, onEdit, onToggle,
   emptyMessage: string
   emptyAction?: React.ReactNode
 }) {
-  if (plugins.length === 0) {
+  if (extensions.length === 0) {
     return (
       <div className="text-center py-16">
         <div className="inline-flex items-center justify-center w-12 h-12 rounded-full bg-white/[0.03] mb-3">
@@ -323,16 +323,16 @@ function InstalledGrid({ plugins, allowDelete, search, agents, onEdit, onToggle,
   }
 
   // Group enabled first, then disabled
-  const enabled = plugins.filter((p) => p.enabled)
-  const disabled = plugins.filter((p) => !p.enabled)
+  const enabled = extensions.filter((p) => p.enabled)
+  const disabled = extensions.filter((p) => !p.enabled)
   const sorted = [...enabled, ...disabled]
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-      {sorted.map((plugin) => (
-        <PluginCard
-          key={plugin.filename}
-          plugin={plugin}
+      {sorted.map((ext) => (
+        <ExtensionCard
+          key={ext.filename}
+          ext={ext}
           allowDelete={allowDelete}
           agents={agents}
           onEdit={onEdit}
@@ -346,10 +346,10 @@ function InstalledGrid({ plugins, allowDelete, search, agents, onEdit, onToggle,
   )
 }
 
-// --- Plugin card ---
+// --- Extension card ---
 
-function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, onNavigateToAgent, highlight }: {
-  plugin: PluginMeta
+function ExtensionCard({ ext, allowDelete, agents, onEdit, onToggle, onDelete, onNavigateToAgent, highlight }: {
+  ext: ExtensionMeta
   allowDelete: boolean
   agents: Record<string, Agent>
   onEdit: (filename: string) => void
@@ -358,17 +358,17 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
   onNavigateToAgent: (agentId: string) => void
   highlight: string
 }) {
-  const badges = pluginCapabilityBadges(plugin)
-  const agent = plugin.createdByAgentId ? agents[plugin.createdByAgentId] : null
+  const badges = extensionCapabilityBadges(ext)
+  const agent = ext.createdByAgentId ? agents[ext.createdByAgentId] : null
 
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onEdit(plugin.filename)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(plugin.filename) } }}
+      onClick={() => onEdit(ext.filename)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(ext.filename) } }}
       className={`group relative text-left p-4 rounded-[14px] border transition-all cursor-pointer
-        ${plugin.enabled
+        ${ext.enabled
           ? 'border-white/[0.06] bg-surface hover:bg-surface-2 hover:border-white/[0.1]'
           : 'border-white/[0.03] bg-surface/50 hover:bg-surface hover:border-white/[0.06] opacity-70 hover:opacity-100'
         }`}
@@ -380,7 +380,7 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
             <button
               type="button"
               title={`Created by ${agent.name}`}
-              onClick={(e) => { e.stopPropagation(); onNavigateToAgent(plugin.createdByAgentId!) }}
+              onClick={(e) => { e.stopPropagation(); onNavigateToAgent(ext.createdByAgentId!) }}
               className="shrink-0 rounded-full hover:ring-2 hover:ring-accent-bright/40 transition-all cursor-pointer bg-transparent border-none p-0"
             >
               <AgentAvatar
@@ -392,24 +392,24 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
             </button>
           )}
           <span className="font-display text-[14px] font-600 text-text truncate">
-            <HighlightText text={plugin.name} highlight={highlight} />
+            <HighlightText text={ext.name} highlight={highlight} />
           </span>
-          {plugin.version && (
-            <span className="text-[10px] font-mono text-text-3/40 shrink-0">v{plugin.version}</span>
+          {ext.version && (
+            <span className="text-[10px] font-mono text-text-3/40 shrink-0">v{ext.version}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
           <div
-            onClick={(e) => onToggle(e, plugin.filename, plugin.enabled)}
+            onClick={(e) => onToggle(e, ext.filename, ext.enabled)}
             className={`w-9 h-5 rounded-full transition-all relative cursor-pointer shrink-0
-              ${plugin.enabled ? 'bg-accent-bright' : 'bg-white/[0.08]'}`}
+              ${ext.enabled ? 'bg-accent-bright' : 'bg-white/[0.08]'}`}
           >
             <div className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all
-              ${plugin.enabled ? 'left-[18px]' : 'left-0.5'}`} />
+              ${ext.enabled ? 'left-[18px]' : 'left-0.5'}`} />
           </div>
           {allowDelete && (
             <button
-              onClick={(e) => onDelete(e, plugin.filename, plugin.name)}
+              onClick={(e) => onDelete(e, ext.filename, ext.name)}
               className="text-text-3/30 hover:text-red-400 transition-colors p-0.5 opacity-0 group-hover:opacity-100"
               title="Delete"
             >
@@ -423,7 +423,7 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
 
       {/* Description */}
       <p className="text-[12px] text-text-3/60 leading-relaxed line-clamp-2 mb-2.5">
-        {pluginDescription(plugin)}
+        {extensionDescription(ext)}
       </p>
 
       {/* Badges */}
@@ -433,36 +433,36 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
             {badge}
           </span>
         ))}
-        {plugin.sourceLabel && (
-          <SourceChip label={getPluginSourceLabel(plugin.sourceLabel)} tone="publisher" />
+        {ext.sourceLabel && (
+          <SourceChip label={getExtensionSourceLabel(ext.sourceLabel)} tone="publisher" />
         )}
-        {plugin.installSource && plugin.installSource !== plugin.sourceLabel && (
-          <SourceChip label={`via ${getPluginSourceLabel(plugin.installSource)}`} tone="catalog" />
+        {ext.installSource && ext.installSource !== ext.sourceLabel && (
+          <SourceChip label={`via ${getExtensionSourceLabel(ext.installSource)}`} tone="catalog" />
         )}
-        {plugin.hasDependencyManifest && (
+        {ext.hasDependencyManifest && (
           <span className={`text-[10px] font-700 px-1.5 py-0.5 rounded-full ${
-            plugin.dependencyInstallStatus === 'installed'
+            ext.dependencyInstallStatus === 'installed'
               ? 'text-emerald-400 bg-emerald-500/10'
-              : plugin.dependencyInstallStatus === 'error'
+              : ext.dependencyInstallStatus === 'error'
                 ? 'text-red-400 bg-red-500/10'
                 : 'text-amber-400 bg-amber-500/10'
           }`}>
-            deps {plugin.dependencyInstallStatus || 'ready'}
+            deps {ext.dependencyInstallStatus || 'ready'}
           </span>
         )}
-        {plugin.author && (
+        {ext.author && (
           <span className="text-[10px] text-text-3/40 ml-auto">
-            {plugin.author}
+            {ext.author}
           </span>
         )}
       </div>
 
       {/* Failure warning */}
-      {plugin.autoDisabled && (
+      {ext.autoDisabled && (
         <p className="mt-2 text-[11px] text-amber-400/90 line-clamp-2">
-          Auto-disabled after {plugin.failureCount ?? 0} failures
-          {plugin.lastFailureStage ? ` (${plugin.lastFailureStage})` : ''}.
-          {plugin.lastFailureError ? ` ${plugin.lastFailureError}` : ''}
+          Auto-disabled after {ext.failureCount ?? 0} failures
+          {ext.lastFailureStage ? ` (${ext.lastFailureStage})` : ''}.
+          {ext.lastFailureError ? ` ${ext.lastFailureError}` : ''}
         </p>
       )}
     </div>
@@ -471,24 +471,24 @@ function PluginCard({ plugin, allowDelete, agents, onEdit, onToggle, onDelete, o
 
 // --- Sidebar card (compact) ---
 
-function SidebarPluginCard({ plugin, onEdit }: { plugin: PluginMeta; onEdit: (filename: string) => void }) {
+function SidebarExtensionCard({ ext, onEdit }: { ext: ExtensionMeta; onEdit: (filename: string) => void }) {
   return (
     <div
       role="button"
       tabIndex={0}
-      onClick={() => onEdit(plugin.filename)}
-      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(plugin.filename) } }}
+      onClick={() => onEdit(ext.filename)}
+      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onEdit(ext.filename) } }}
       className="w-full text-left p-3 rounded-[12px] border border-white/[0.06] bg-surface hover:bg-surface-2 transition-all cursor-pointer"
     >
       <div className="flex items-center justify-between mb-0.5">
-        <span className="font-display text-[13px] font-600 text-text truncate">{plugin.name}</span>
+        <span className="font-display text-[13px] font-600 text-text truncate">{ext.name}</span>
         <span className={`text-[10px] font-600 px-1.5 py-0.5 rounded-full ${
-          plugin.enabled ? 'text-emerald-400 bg-emerald-400/10' : 'text-text-3/50 bg-white/[0.04]'
+          ext.enabled ? 'text-emerald-400 bg-emerald-400/10' : 'text-text-3/50 bg-white/[0.04]'
         }`}>
-          {plugin.enabled ? 'On' : 'Off'}
+          {ext.enabled ? 'On' : 'Off'}
         </span>
       </div>
-      <p className="text-[11px] text-text-3/50 line-clamp-1">{pluginDescription(plugin)}</p>
+      <p className="text-[11px] text-text-3/50 line-clamp-1">{extensionDescription(ext)}</p>
     </div>
   )
 }
@@ -511,7 +511,7 @@ function HighlightText({ text, highlight }: { text: string; highlight: string })
 // --- Marketplace tab ---
 
 function MarketplaceTab({ marketplace, loading, installing, installedFilenames, search, activeTag, setActiveTag, sort, setSort, onInstall }: {
-  marketplace: MarketplacePlugin[]
+  marketplace: MarketplaceExtension[]
   loading: boolean
   installing: string | null
   installedFilenames: Set<string>
@@ -520,7 +520,7 @@ function MarketplaceTab({ marketplace, loading, installing, installedFilenames, 
   setActiveTag: (v: string | null) => void
   sort: 'name' | 'downloads'
   setSort: (v: 'name' | 'downloads') => void
-  onInstall: (p: MarketplacePlugin) => void
+  onInstall: (p: MarketplaceExtension) => void
 }) {
   if (loading) return <p className="text-[12px] text-text-3/70 py-8 text-center">Loading marketplace...</p>
 
@@ -542,7 +542,7 @@ function MarketplaceTab({ marketplace, loading, installing, installedFilenames, 
   const q = search.toLowerCase()
   const filtered = marketplace
     .filter((p) => {
-      const sourceTerms = [getPluginSourceLabel(p.source).toLowerCase(), getPluginSourceLabel(p.catalogSource).toLowerCase()]
+      const sourceTerms = [getExtensionSourceLabel(p.source).toLowerCase(), getExtensionSourceLabel(p.catalogSource).toLowerCase()]
       if (
         q
         && !p.name.toLowerCase().includes(q)
@@ -606,9 +606,9 @@ function MarketplaceTab({ marketplace, loading, installing, installedFilenames, 
                       {p.openclaw && <span className="text-[9px] font-600 text-emerald-400 bg-emerald-400/10 px-1.5 py-0.5 rounded-full">OpenClaw</span>}
                     </div>
                     <div className="flex items-center gap-1.5 mt-2 flex-wrap">
-                      {p.source && <SourceChip label={getPluginSourceLabel(p.source)} tone="publisher" />}
+                      {p.source && <SourceChip label={getExtensionSourceLabel(p.source)} tone="publisher" />}
                       {p.catalogSource && p.catalogSource !== p.source && (
-                        <SourceChip label={`via ${getPluginSourceLabel(p.catalogSource)}`} tone="catalog" />
+                        <SourceChip label={`via ${getExtensionSourceLabel(p.catalogSource)}`} tone="catalog" />
                       )}
                     </div>
                     <div className="text-[11px] text-text-3/60 mt-1 line-clamp-2">{p.description}</div>

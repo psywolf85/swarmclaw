@@ -56,13 +56,13 @@ export interface LoopDetectionThresholds {
 }
 
 const DEFAULT_THRESHOLDS: LoopDetectionThresholds = {
-  repeatWarn: 8,
-  repeatCritical: 16,
-  pollWarn: 5,
-  pollCritical: 10,
+  repeatWarn: 12,
+  repeatCritical: 30,
+  pollWarn: 6,
+  pollCritical: 16,
   pingPongWarn: 5,
   pingPongCritical: 10,
-  circuitBreaker: 25,
+  circuitBreaker: 45,
   toolFrequencyWarn: 60,
   toolFrequencyCritical: 120,
 }

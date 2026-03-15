@@ -26,7 +26,7 @@ function fileToContentBlocks(filePath: string): any[] {
 }
 
 export function streamAnthropicChat({ session, message, imagePath, apiKey, systemPrompt, write, active, loadHistory, onUsage, signal }: StreamChatOptions): Promise<string> {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const messages = buildMessages(session, message, imagePath, loadHistory)
     const model = session.model || 'claude-sonnet-4-6'
     let usageInput = 0
@@ -72,7 +72,8 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
         let errBody = ''
         apiRes.on('data', (c: Buffer) => errBody += c)
         apiRes.on('end', () => {
-          console.error(`[${session.id}] anthropic error ${apiRes.statusCode}:`, errBody.slice(0, 200))
+          const msg = `Anthropic error ${apiRes.statusCode}: ${errBody.slice(0, 200)}`
+          console.error(`[${session.id}] ${msg}`)
           let errMsg = `Anthropic API error (${apiRes.statusCode})`
           try {
             const parsed = JSON.parse(errBody)
@@ -80,7 +81,7 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
           } catch {}
           write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
           active.delete(session.id)
-          resolve(fullResponse)
+          reject(new Error(msg))
         })
         return
       }
@@ -130,7 +131,7 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
       console.error(`[${session.id}] anthropic request error:`, e.message)
       write(`data: ${JSON.stringify({ t: 'err', text: e.message })}\n\n`)
       active.delete(session.id)
-      resolve(fullResponse)
+      reject(e)
     })
 
     apiReq.end(payload)

@@ -4,7 +4,7 @@ import path from 'path'
 import fs from 'fs'
 import { loadConnectors, loadSettings, UPLOAD_DIR } from '../storage'
 import type { ToolBuildContext } from './context'
-import type { Connector, Plugin, PluginHooks } from '@/types'
+import type { Connector, Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { safeJsonParseObject } from '../json-utils'
@@ -1046,15 +1046,15 @@ async function executeConnectorAction(input: ConnectorActionInput, bctx: Connect
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const ConnectorPlugin: Plugin = {
+const ConnectorExtension: Extension = {
   name: 'Core Connectors',
   description: 'Manage and send messages through chat platform connectors (WhatsApp, Telegram, Slack, etc.).',
   hooks: {
     getCapabilityDescription: () => 'I can manage messaging channels (`manage_connectors`) — WhatsApp, Telegram, Slack, Discord — and send proactive messages via `connector_message_tool`.',
     getOperatingGuidance: () => 'Connectors: proactive outreach for significant events only. Keep messages concise, no duplicates.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'connector_message_tool',
@@ -1065,19 +1065,19 @@ const ConnectorPlugin: Plugin = {
   ]
 }
 
-registerNativeCapability('connectors', ConnectorPlugin)
+registerNativeCapability('connectors', ConnectorExtension)
 
 /**
  * Legacy Bridge
  */
 export function buildConnectorTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('manage_connectors')) return []
+  if (!bctx.hasExtension('manage_connectors')) return []
   return [
     tool(
       async (args) => executeConnectorAction(args as ConnectorActionInput, bctx),
       {
         name: 'connector_message_tool',
-        description: ConnectorPlugin.tools![0].description,
+        description: ConnectorExtension.tools![0].description,
         schema: CONNECTOR_MESSAGE_TOOL_SCHEMA
       }
     )

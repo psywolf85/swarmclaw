@@ -12,7 +12,7 @@ import {
 } from '@/lib/server/memory/memory-db'
 import { loadSettings } from '../storage'
 import { expandQuery } from '../query-expansion'
-import type { FileReference, MemoryEntry, MemoryImage, MemoryReference, Plugin, PluginHooks, Session } from '@/types'
+import type { FileReference, MemoryEntry, MemoryImage, MemoryReference, Extension, ExtensionHooks, Session } from '@/types'
 import type { ToolBuildContext } from './context'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
@@ -680,9 +680,9 @@ export async function executeMemoryAction(input: unknown, ctx: MemoryActionConte
 }
 
 /**
- * Register as a Built-in Plugin
+ * Register as a Built-in Extension
  */
-const MemoryPlugin: Plugin = {
+const MemoryExtension: Extension = {
   name: 'Core Memory',
   description: 'Advanced database-backed long-term memory with semantic search and graph linking.',
   hooks: {
@@ -912,20 +912,27 @@ const MemoryPlugin: Plugin = {
       const MAX_MEMORY_INJECTION_CHARS = 8000
       const combined = parts.join('\n\n')
       if (combined.length > MAX_MEMORY_INJECTION_CHARS) {
-        // Truncate from lowest priority: recent → relevant → identity → pinned (keep pinned + policy)
+        // Keep whole parts within budget — drop lowest-priority parts entirely rather than slicing mid-content
         let budget = MAX_MEMORY_INJECTION_CHARS
         const prioritized: string[] = []
         for (const part of parts) {
-          if (budget <= 0) {
+          if (part.length <= budget) {
+            prioritized.push(part)
+            budget -= part.length
+          } else if (budget > 0 && prioritized.length === 0) {
+            // First part exceeds budget — truncate at last newline within budget to avoid mid-word cuts
+            const truncAt = part.lastIndexOf('\n', budget)
+            prioritized.push(truncAt > 0 ? part.slice(0, truncAt) : part.slice(0, budget))
+            budget = 0
+          } else {
             log.warn('memory', 'Memory injection truncated due to context budget', {
               agentId,
               totalChars: combined.length,
               maxChars: MAX_MEMORY_INJECTION_CHARS,
+              droppedParts: parts.length - prioritized.length,
             })
             break
           }
-          prioritized.push(part.slice(0, budget))
-          budget -= part.length
         }
         return prioritized.join('\n\n') || null
       }
@@ -1003,7 +1010,7 @@ const MemoryPlugin: Plugin = {
       'By default, memory searches focus on durable memories. Only include archives or working execution notes when you explicitly need transcript or run-history context.',
       'For open goals, form a hypothesis and execute — do not keep re-asking broad questions.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'memory_tool',
@@ -1150,17 +1157,17 @@ const MemoryPlugin: Plugin = {
 }
 
 // Auto-register when imported
-registerNativeCapability('memory', MemoryPlugin)
+registerNativeCapability('memory', MemoryExtension)
 
 export function buildMemoryTools(bctx: ToolBuildContext) {
-  if (!bctx.hasPlugin('memory')) return []
+  if (!bctx.hasExtension('memory')) return []
   
   return [
     tool(
       async (args) => executeMemoryAction(args, bctx.ctx),
       {
         name: 'memory_tool',
-        description: MemoryPlugin.tools![0].description,
+        description: MemoryExtension.tools![0].description,
         schema: z.object({}).passthrough()
       }
     ),
@@ -1168,7 +1175,7 @@ export function buildMemoryTools(bctx: ToolBuildContext) {
       async (args) => executeNamedMemoryAction('search', (args ?? {}) as Record<string, unknown>, { session: bctx.ctx }),
       {
         name: 'memory_search',
-        description: MemoryPlugin.tools![1].description,
+        description: MemoryExtension.tools![1].description,
         schema: z.object({}).passthrough(),
       },
     ),
@@ -1176,7 +1183,7 @@ export function buildMemoryTools(bctx: ToolBuildContext) {
       async (args) => executeNamedMemoryAction('get', (args ?? {}) as Record<string, unknown>, { session: bctx.ctx }),
       {
         name: 'memory_get',
-        description: MemoryPlugin.tools![2].description,
+        description: MemoryExtension.tools![2].description,
         schema: z.object({}).passthrough(),
       },
     ),
@@ -1184,7 +1191,7 @@ export function buildMemoryTools(bctx: ToolBuildContext) {
       async (args) => executeNamedMemoryAction('store', (args ?? {}) as Record<string, unknown>, { session: bctx.ctx }),
       {
         name: 'memory_store',
-        description: MemoryPlugin.tools![3].description,
+        description: MemoryExtension.tools![3].description,
         schema: z.object({}).passthrough(),
       },
     ),
@@ -1192,7 +1199,7 @@ export function buildMemoryTools(bctx: ToolBuildContext) {
       async (args) => executeNamedMemoryAction('update', (args ?? {}) as Record<string, unknown>, { session: bctx.ctx }),
       {
         name: 'memory_update',
-        description: MemoryPlugin.tools![4].description,
+        description: MemoryExtension.tools![4].description,
         schema: z.object({}).passthrough(),
       },
     ),

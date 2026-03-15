@@ -39,7 +39,7 @@ before(async () => {
     systemPrompt: '',
     provider: 'ollama',
     model: 'glm-5:cloud',
-    plugins: ['manage_agents'],
+    extensions: ['manage_agents'],
     tools: ['manage_agents'],
     delegationEnabled: false,
     delegationTargetMode: 'all',
@@ -65,7 +65,7 @@ describe('manage_agents soul validation', () => {
     const tools = buildCrudTools({
       cwd: process.cwd(),
       ctx: { agentId: 'agent-soul-test', delegationEnabled: false, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-      hasPlugin: (name) => name === 'manage_agents',
+      hasExtension: (name) => name === 'manage_agents',
       hasTool: (name) => name === 'manage_agents',
       cleanupFns: [],
       commandTimeoutMs: 1_000,
@@ -74,7 +74,7 @@ describe('manage_agents soul validation', () => {
       persistDelegateResumeId: () => {},
       readStoredDelegateResumeId: () => null,
       resolveCurrentSession: () => null,
-      activePlugins: ['manage_agents'],
+      activeExtensions: ['manage_agents'],
     })
 
     const manageAgents = tools.find((tool) => tool.name === 'manage_agents')
@@ -100,7 +100,7 @@ describe('manage_agents soul validation', () => {
     const tools = buildCrudTools({
       cwd: process.cwd(),
       ctx: { sessionId: 'agent-dedupe-session', agentId: 'agent-soul-test', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
-      hasPlugin: (name) => name === 'manage_agents',
+      hasExtension: (name) => name === 'manage_agents',
       hasTool: (name) => name === 'manage_agents',
       cleanupFns: [],
       commandTimeoutMs: 1_000,
@@ -109,7 +109,7 @@ describe('manage_agents soul validation', () => {
       persistDelegateResumeId: () => {},
       readStoredDelegateResumeId: () => null,
       resolveCurrentSession: () => null,
-      activePlugins: ['manage_agents'],
+      activeExtensions: ['manage_agents'],
     })
 
     const manageAgents = tools.find((tool) => tool.name === 'manage_agents')

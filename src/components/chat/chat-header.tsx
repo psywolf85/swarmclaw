@@ -917,6 +917,7 @@ export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, m
                       defaultModels={currentProviderInfo?.defaultModels}
                       credentialId={session.credentialId}
                       apiEndpoint={session.apiEndpoint}
+                      ollamaMode={session.ollamaMode}
                       supportsDiscovery={currentProviderInfo?.supportsModelDiscovery}
                       className="px-2.5 py-1.5 rounded-[7px] text-[12px] font-mono bg-white/[0.04] hover:bg-white/[0.06] transition-colors"
                     />

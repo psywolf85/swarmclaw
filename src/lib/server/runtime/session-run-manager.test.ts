@@ -148,6 +148,12 @@ function seedSession(id: string) {
   const sessions = storage.loadSessions()
   sessions[id] = {
     id,
+    name: 'Test Session',
+    cwd: '/tmp',
+    user: 'tester',
+    provider: 'anthropic',
+    model: 'claude-sonnet-4-20250514',
+    claudeSessionId: null,
     agentId: 'test-agent',
     messages: [],
     createdAt: Date.now(),
@@ -159,9 +165,12 @@ function seedSession(id: string) {
     agents['test-agent'] = {
       id: 'test-agent',
       name: 'Test Agent',
+      description: 'Test agent for session run manager tests',
       provider: 'anthropic',
       model: 'claude-sonnet-4-20250514',
       systemPrompt: 'You are a test agent.',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
     }
     storage.saveAgents(agents)
   }

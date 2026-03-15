@@ -34,7 +34,7 @@ interface ProviderHealthEntry {
   models: string[]
 }
 
-interface PluginUsageEntry {
+interface ExtensionUsageEntry {
   definitionTokens: number
   invocationTokens: number
   invocations: number
@@ -47,7 +47,7 @@ interface UsageResponse {
   totalCost: number
   byAgent: Record<string, { name: string; cost: number; tokens: number; count: number }>
   byProvider: Record<string, { tokens: number; cost: number }>
-  byPlugin?: Record<string, PluginUsageEntry>
+  byExtension?: Record<string, ExtensionUsageEntry>
   timeSeries: TimePoint[]
   providerHealth?: Record<string, ProviderHealthEntry>
 }
@@ -173,7 +173,7 @@ export default function UsagePage() {
       cost: Math.round(v.cost * 10000) / 10000,
     }))
 
-  const pluginData = Object.entries(data?.byPlugin ?? {})
+  const extensionData = Object.entries(data?.byExtension ?? {})
     .filter(([id]) => id !== '_system' && id !== '_unknown')
     .sort((a, b) => (b[1].definitionTokens + b[1].invocationTokens) - (a[1].definitionTokens + a[1].invocationTokens))
     .slice(0, 12)
@@ -369,12 +369,12 @@ export default function UsagePage() {
               </ChartCard>
             </div>
 
-            {/* Plugin Usage */}
-            {pluginData.length > 0 && (
+            {/* Extension Usage */}
+            {extensionData.length > 0 && (
               <div style={{ animation: 'fade-up 0.6s var(--ease-spring) 0.28s both' }}>
-                <ChartCard title="Plugin Token Usage">
+                <ChartCard title="Extension Token Usage">
                   <ResponsiveContainer width="100%" height={280}>
-                    <BarChart data={pluginData} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
+                    <BarChart data={extensionData} layout="vertical" margin={{ top: 5, right: 20, bottom: 5, left: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" horizontal={false} />
                       <XAxis type="number" tick={{ fill: '#888', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={formatTokens} />
                       <YAxis type="category" dataKey="name" tick={{ fill: '#888', fontSize: 11 }} axisLine={false} tickLine={false} width={120} />
@@ -402,7 +402,7 @@ export default function UsagePage() {
                 </ChartCard>
 
                 <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mt-4">
-                  {pluginData.filter((p) => p.invocations > 0).map((p, idx) => (
+                  {extensionData.filter((p) => p.invocations > 0).map((p, idx) => (
                     <div
                       key={p.name}
                       className="bg-surface-2 rounded-[10px] p-3 border border-white/[0.04] hover:bg-surface transition-all"

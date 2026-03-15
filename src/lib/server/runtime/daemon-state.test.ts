@@ -24,8 +24,8 @@ before(async () => {
   mod = await import('@/lib/server/runtime/daemon-state')
 })
 
-after(() => {
-  try { mod.stopDaemon({ source: 'test-cleanup' }) } catch { /* ignore */ }
+after(async () => {
+  try { await mod.stopDaemon({ source: 'test-cleanup' }) } catch { /* ignore */ }
   for (const [key, val] of Object.entries(originalEnv)) {
     if (val === undefined) delete process.env[key]
     else process.env[key] = val
@@ -228,58 +228,58 @@ describe('ensureDaemonStarted', () => {
 // ── startDaemon / stopDaemon / getDaemonStatus ──────────────────────────
 
 describe('daemon start/stop lifecycle', () => {
-  it('getDaemonStatus shows not running initially', () => {
-    mod.stopDaemon({ source: 'test' })
+  it('getDaemonStatus shows not running initially', async () => {
+    await mod.stopDaemon({ source: 'test' })
     const status = mod.getDaemonStatus()
     assert.equal(status.running, false)
   })
 
-  it('startDaemon sets running to true', () => {
+  it('startDaemon sets running to true', async () => {
     mod.startDaemon({ source: 'test', manualStart: true })
     try {
       const status = mod.getDaemonStatus()
       assert.equal(status.running, true)
       assert.equal(status.schedulerActive, true)
     } finally {
-      mod.stopDaemon({ source: 'test' })
+      await mod.stopDaemon({ source: 'test' })
     }
   })
 
-  it('stopDaemon sets running to false', () => {
+  it('stopDaemon sets running to false', async () => {
     mod.startDaemon({ source: 'test', manualStart: true })
-    mod.stopDaemon({ source: 'test' })
+    await mod.stopDaemon({ source: 'test' })
     const status = mod.getDaemonStatus()
     assert.equal(status.running, false)
   })
 
-  it('double startDaemon does not throw', () => {
+  it('double startDaemon does not throw', async () => {
     mod.startDaemon({ source: 'test', manualStart: true })
     try {
       assert.doesNotThrow(() => mod.startDaemon({ source: 'test-again' }))
       const status = mod.getDaemonStatus()
       assert.equal(status.running, true)
     } finally {
-      mod.stopDaemon({ source: 'test' })
+      await mod.stopDaemon({ source: 'test' })
     }
   })
 
-  it('manualStop prevents ensureDaemonStarted from restarting', () => {
+  it('manualStop prevents ensureDaemonStarted from restarting', async () => {
     const saved = process.env.SWARMCLAW_DAEMON_AUTOSTART
     process.env.SWARMCLAW_DAEMON_AUTOSTART = '1'
     try {
       mod.startDaemon({ source: 'test', manualStart: true })
-      mod.stopDaemon({ source: 'test', manualStop: true })
+      await mod.stopDaemon({ source: 'test', manualStop: true })
       const started = mod.ensureDaemonStarted('test')
       assert.equal(started, false)
       assert.equal(mod.getDaemonStatus().running, false)
     } finally {
-      mod.stopDaemon({ source: 'cleanup' })
+      await mod.stopDaemon({ source: 'cleanup' })
       if (saved !== undefined) process.env.SWARMCLAW_DAEMON_AUTOSTART = saved
       else delete process.env.SWARMCLAW_DAEMON_AUTOSTART
     }
   })
 
-  it('getDaemonStatus includes heartbeat and health info', () => {
+  it('getDaemonStatus includes heartbeat and health info', async () => {
     mod.startDaemon({ source: 'test', manualStart: true })
     try {
       const status = mod.getDaemonStatus()
@@ -289,13 +289,13 @@ describe('daemon start/stop lifecycle', () => {
       assert.ok('autostartEnabled' in status)
       assert.ok('backgroundServicesEnabled' in status)
     } finally {
-      mod.stopDaemon({ source: 'test' })
+      await mod.stopDaemon({ source: 'test' })
     }
   })
 
-  it('stopDaemon is idempotent', () => {
-    mod.stopDaemon({ source: 'first' })
-    assert.doesNotThrow(() => mod.stopDaemon({ source: 'second' }))
+  it('stopDaemon is idempotent', async () => {
+    await mod.stopDaemon({ source: 'first' })
+    await assert.doesNotReject(() => mod.stopDaemon({ source: 'second' }))
     assert.equal(mod.getDaemonStatus().running, false)
   })
 })

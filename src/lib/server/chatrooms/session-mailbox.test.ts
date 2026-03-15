@@ -37,6 +37,12 @@ function createTestSession(id: string): void {
   const sessions = storage.loadSessions()
   sessions[id] = {
     id,
+    name: 'Test Session',
+    cwd: '/tmp',
+    user: 'tester',
+    provider: 'ollama',
+    model: 'test-model',
+    claudeSessionId: null,
     agentId: 'agent-1',
     messages: [],
     createdAt: Date.now(),

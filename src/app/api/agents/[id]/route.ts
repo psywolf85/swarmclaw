@@ -44,6 +44,9 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
         body.apiEndpoint,
       )
     }
+    if (body.provider !== undefined && body.provider !== 'ollama' && body.ollamaMode === undefined) {
+      agent.ollamaMode = null
+    }
     if (body.sandboxConfig !== undefined) {
       agent.sandboxConfig = normalizeAgentSandboxConfig(body.sandboxConfig)
     }
@@ -64,6 +67,9 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
         role: target.role,
         provider: (typeof target.provider === 'string' && target.provider.trim() ? target.provider : agent.provider),
         model: typeof target.model === 'string' ? target.model : '',
+        ollamaMode: (typeof target.provider === 'string' ? target.provider : agent.provider) === 'ollama'
+          ? (target.ollamaMode === 'cloud' ? 'cloud' : 'local')
+          : null,
         credentialId: target.credentialId ?? null,
         fallbackCredentialIds: Array.isArray(target.fallbackCredentialIds) ? target.fallbackCredentialIds : [],
         apiEndpoint: normalizeProviderEndpoint(

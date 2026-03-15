@@ -4,8 +4,8 @@ import path from 'node:path'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { ToolBuildContext } from './context'
 import { findBinaryOnPath, MAX_OUTPUT, tail, truncate } from './context'
@@ -46,7 +46,7 @@ interface GoogleWorkspaceRuntimeDeps {
 const INTERACTIVE_AUTH_COMMANDS = new Set(['login', 'setup'])
 
 function getGoogleWorkspaceConfig(): GoogleWorkspaceConfig {
-  const ps = getPluginManager().getPluginSettings('google_workspace')
+  const ps = getExtensionManager().getExtensionSettings('google_workspace')
   const sanitizeMode = String(ps.sanitizeMode || 'warn').trim().toLowerCase()
   return {
     accessToken: String(ps.accessToken || '').trim(),
@@ -175,7 +175,7 @@ export async function executeGoogleWorkspaceAction(
   }
 
   if (isInteractiveAuthCommand(args.args)) {
-    return 'Error: interactive `gws auth login` / `gws auth setup` is not supported inside agent tool runs. Configure Google Workspace CLI auth in the plugin settings or run the auth flow manually in a terminal first.'
+    return 'Error: interactive `gws auth login` / `gws auth setup` is not supported inside agent tool runs. Configure Google Workspace CLI auth in Extension Settings or run the auth flow manually in a terminal first.'
   }
 
   const binary = deps.findBinaryOnPath('gws')
@@ -272,17 +272,18 @@ export async function executeGoogleWorkspaceAction(
   })
 }
 
-const GoogleWorkspacePlugin: Plugin = {
+const GoogleWorkspaceExtension: Extension = {
   name: 'Google Workspace CLI',
+  enabledByDefault: false,
   description: 'Run Google Workspace CLI (`gws`) commands for Drive, Docs, Sheets, Gmail, Calendar, Chat, and other Workspace APIs.',
   hooks: {
     getCapabilityDescription: () => 'I can use Google Workspace CLI (`google_workspace`) to inspect and automate Drive, Gmail, Calendar, Docs, Sheets, and other Google Workspace APIs with structured JSON output.',
     getOperatingGuidance: () => [
       'Use `google_workspace` for Google Workspace tasks instead of generic `http_request` whenever `gws` can handle the API directly.',
       'Prefer read/list/get commands first to verify identifiers and current state before issuing mutating Workspace operations.',
-      'Do not attempt interactive `gws auth login` or `gws auth setup` inside a tool run; rely on plugin settings or preconfigured CLI auth.',
+      'Do not attempt interactive `gws auth login` or `gws auth setup` inside a tool run; rely on Extension Settings or preconfigured CLI auth.',
     ],
-  } as PluginHooks,
+  } as ExtensionHooks,
   ui: {
     settingsFields: [
       {
@@ -385,10 +386,10 @@ const GoogleWorkspacePlugin: Plugin = {
   ],
 }
 
-getPluginManager().registerBuiltin('google_workspace', GoogleWorkspacePlugin)
+getExtensionManager().registerBuiltin('google_workspace', GoogleWorkspaceExtension)
 
 export function buildGoogleWorkspaceTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('google_workspace')) return []
+  if (!bctx.hasExtension('google_workspace')) return []
 
   return [
     tool(
@@ -401,7 +402,7 @@ export function buildGoogleWorkspaceTools(bctx: ToolBuildContext): StructuredToo
       }),
       {
         name: 'google_workspace',
-        description: GoogleWorkspacePlugin.tools![0].description,
+        description: GoogleWorkspaceExtension.tools![0].description,
         schema: z.object({
           args: z.array(z.string()).min(1).describe('Arguments to pass after `gws`. Example: ["drive","files","list"].'),
           params: z.union([z.string(), z.record(z.string(), z.unknown()), z.array(z.unknown())]).optional().describe('Optional value for `--params`.'),

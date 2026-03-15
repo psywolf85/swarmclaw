@@ -202,7 +202,7 @@ describe('formatSituationalAwareness', () => {
       phase: 'dispatching',
       createdAt: NOW,
       updatedAt: NOW,
-    } as Mission
+    } as unknown as Mission
 
     const result = formatSituationalAwareness(data)
 
@@ -222,7 +222,7 @@ describe('formatSituationalAwareness', () => {
       phase: 'completed',
       createdAt: NOW,
       updatedAt: NOW,
-    } as Mission
+    } as unknown as Mission
 
     const result = formatSituationalAwareness(data)
     assert.ok(!result.includes('### Current Mission'))
@@ -238,7 +238,7 @@ describe('formatSituationalAwareness', () => {
       phase: 'failed',
       createdAt: NOW,
       updatedAt: NOW,
-    } as Mission
+    } as unknown as Mission
 
     const result = formatSituationalAwareness(data)
     assert.ok(!result.includes('### Current Mission'))
@@ -273,7 +273,7 @@ describe('formatSituationalAwareness', () => {
       phase: 'executing',
       createdAt: NOW,
       updatedAt: NOW,
-    } as Mission
+    } as unknown as Mission
 
     const result = formatSituationalAwareness(data)
 
@@ -307,7 +307,7 @@ describe('formatSituationalAwareness', () => {
       phase: 'executing',
       createdAt: NOW,
       updatedAt: NOW,
-    } as Mission
+    } as unknown as Mission
 
     const result = formatSituationalAwareness(data)
 

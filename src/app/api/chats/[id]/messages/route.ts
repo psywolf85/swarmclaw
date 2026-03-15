@@ -1,7 +1,6 @@
 import { NextResponse } from 'next/server'
-import { active, loadStoredItem, upsertStoredItem } from '@/lib/server/storage'
+import { loadStoredItem, upsertStoredItem } from '@/lib/server/storage'
 import { notFound } from '@/lib/server/collection-helpers'
-import { getSessionRunState } from '@/lib/server/runtime/session-run-manager'
 import { materializeStreamingAssistantArtifacts } from '@/lib/chat/chat-streaming-state'
 import { appendSessionNote } from '@/lib/server/session-note'
 import type { Message, Session } from '@/types'
@@ -12,9 +11,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!session) return notFound()
   session.messages = Array.isArray(session.messages) ? session.messages : []
 
-  const run = getSessionRunState(id)
-  const hasLiveRun = active.has(id) || !!run.runningRunId
-  if (!hasLiveRun && materializeStreamingAssistantArtifacts(session.messages)) {
+  const sessionClaimsActive = session.active === true
+    || (typeof session.currentRunId === 'string' && session.currentRunId.trim().length > 0)
+  if (!sessionClaimsActive && materializeStreamingAssistantArtifacts(session.messages)) {
     upsertStoredItem('sessions', id, session)
   }
 

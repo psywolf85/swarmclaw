@@ -9,6 +9,7 @@ import type {
   MessageToolEvent,
   ProtocolBranchCase,
   ProtocolConditionDefinition,
+  ProtocolForEachConfig,
   ProtocolPhaseDefinition,
   ProtocolJoinConfig,
   ProtocolParallelBranchDefinition,
@@ -19,16 +20,24 @@ import type {
   ProtocolRunBranchDecision,
   ProtocolRunConfig,
   ProtocolRunEvent,
+  ProtocolRunForEachStepState,
   ProtocolRunLoopState,
   ProtocolRunParallelBranchState,
   ProtocolRunParallelStepState,
   ProtocolRunPhaseState,
   ProtocolRunStatus,
+  ProtocolRunStepState,
+  ProtocolRunSubflowState,
+  ProtocolRunSwarmState,
   ProtocolSourceRef,
   ProtocolStepDefinition,
+  ProtocolSubflowConfig,
+  ProtocolSwarmConfig,
   ProtocolTemplate,
   Schedule,
 } from '@/types'
+import { computeStepReadiness } from '@/lib/server/protocols/dag-scheduler'
+import { normalizeStepOutputs } from '@/lib/server/protocols/step-outputs'
 import {
   appendSyntheticSessionMessage,
   buildAgentSystemPromptForChatroom,
@@ -164,10 +173,13 @@ interface ProtocolRunDeps {
 }
 
 export interface ProtocolRunActionInput {
-  action: 'start' | 'pause' | 'resume' | 'retry_phase' | 'skip_phase' | 'cancel' | 'archive' | 'inject_context'
+  action: 'start' | 'pause' | 'resume' | 'retry_phase' | 'skip_phase' | 'cancel' | 'archive' | 'inject_context' | 'claim_work'
   reason?: string | null
   phaseId?: string | null
   context?: string | null
+  stepId?: string | null
+  agentId?: string | null
+  workItemId?: string | null
 }
 
 function now(deps?: ProtocolRunDeps): number {
@@ -332,6 +344,52 @@ function deriveDisplayPhasesFromSteps(steps: ProtocolStepDefinition[]): Protocol
     }))
 }
 
+function normalizeForEachConfig(config: ProtocolForEachConfig | null | undefined): ProtocolForEachConfig | null {
+  if (!config || typeof config !== 'object') return null
+  if (!config.itemsSource || !config.itemAlias || !config.branchTemplate?.steps?.length) return null
+  return {
+    itemsSource: config.itemsSource,
+    itemAlias: config.itemAlias,
+    branchTemplate: {
+      steps: config.branchTemplate.steps.map(normalizeStep),
+      entryStepId: cleanText(config.branchTemplate.entryStepId, 64) || config.branchTemplate.steps[0]?.id || null,
+      participantAgentIds: Array.isArray(config.branchTemplate.participantAgentIds) ? config.branchTemplate.participantAgentIds : [],
+      facilitatorAgentId: typeof config.branchTemplate.facilitatorAgentId === 'string' ? config.branchTemplate.facilitatorAgentId : null,
+    },
+    joinMode: 'all',
+    maxItems: typeof config.maxItems === 'number' ? Math.min(200, Math.max(1, config.maxItems)) : 50,
+    onEmpty: config.onEmpty === 'skip' || config.onEmpty === 'advance' ? config.onEmpty : 'fail',
+  }
+}
+
+function normalizeSubflowConfig(config: ProtocolSubflowConfig | null | undefined): ProtocolSubflowConfig | null {
+  if (!config || typeof config !== 'object') return null
+  if (!config.templateId) return null
+  return {
+    templateId: config.templateId,
+    templateVersion: typeof config.templateVersion === 'string' ? config.templateVersion : null,
+    participantAgentIds: Array.isArray(config.participantAgentIds) ? config.participantAgentIds : [],
+    facilitatorAgentId: typeof config.facilitatorAgentId === 'string' ? config.facilitatorAgentId : null,
+    inputMapping: config.inputMapping && typeof config.inputMapping === 'object' ? config.inputMapping : null,
+    outputMapping: config.outputMapping && typeof config.outputMapping === 'object' ? config.outputMapping : null,
+    onFailure: config.onFailure === 'advance_with_warning' ? 'advance_with_warning' : 'fail_parent',
+  }
+}
+
+function normalizeSwarmConfig(config: ProtocolSwarmConfig | null | undefined): ProtocolSwarmConfig | null {
+  if (!config || typeof config !== 'object') return null
+  if (!Array.isArray(config.eligibleAgentIds) || config.eligibleAgentIds.length === 0) return null
+  if (!config.workItemsSource) return null
+  return {
+    eligibleAgentIds: config.eligibleAgentIds,
+    workItemsSource: config.workItemsSource,
+    claimLimitPerAgent: typeof config.claimLimitPerAgent === 'number' ? Math.min(10, Math.max(1, config.claimLimitPerAgent)) : 1,
+    selectionMode: config.selectionMode === 'claim_until_empty' ? 'claim_until_empty' : 'first_claim',
+    claimTimeoutSec: typeof config.claimTimeoutSec === 'number' ? Math.min(3600, Math.max(30, config.claimTimeoutSec)) : 300,
+    onUnclaimed: config.onUnclaimed === 'advance' ? 'advance' : config.onUnclaimed === 'fallback_assign' ? 'fallback_assign' : 'fail',
+  }
+}
+
 function normalizeStep(step: ProtocolStepDefinition): ProtocolStepDefinition {
   return {
     id: cleanText(step.id, 64) || genId(),
@@ -346,6 +404,11 @@ function normalizeStep(step: ProtocolStepDefinition): ProtocolStepDefinition {
     repeat: normalizeRepeatConfig(step.repeat),
     parallel: normalizeParallelConfig(step.parallel),
     join: normalizeJoinConfig(step.join),
+    dependsOnStepIds: Array.isArray(step.dependsOnStepIds) ? step.dependsOnStepIds.filter((id) => typeof id === 'string' && id.length > 0) : [],
+    outputKey: cleanText(step.outputKey, 64) || null,
+    forEach: normalizeForEachConfig(step.forEach),
+    subflow: normalizeSubflowConfig(step.subflow),
+    swarm: normalizeSwarmConfig(step.swarm),
   }
 }
 
@@ -418,6 +481,94 @@ function normalizeParallelState(parallelState: ProtocolRun['parallelState']): Re
       waitingOnBranchIds: uniqueIds(state.waitingOnBranchIds, 64),
       joinReady: state.joinReady === true,
       joinCompletedAt: typeof state.joinCompletedAt === 'number' ? state.joinCompletedAt : null,
+    }
+  }
+  return out
+}
+
+function normalizeStepState(stepState: ProtocolRun['stepState']): Record<string, ProtocolRunStepState> {
+  const out: Record<string, ProtocolRunStepState> = {}
+  if (!stepState || typeof stepState !== 'object') return out
+  for (const [stepId, state] of Object.entries(stepState)) {
+    const normalizedStepId = cleanText(stepId, 64)
+    if (!normalizedStepId || !state || typeof state !== 'object') continue
+    out[normalizedStepId] = {
+      stepId: normalizedStepId,
+      status: state.status || 'pending',
+      startedAt: typeof state.startedAt === 'number' ? state.startedAt : null,
+      completedAt: typeof state.completedAt === 'number' ? state.completedAt : null,
+      error: typeof state.error === 'string' ? state.error : null,
+    }
+  }
+  return out
+}
+
+function normalizeForEachState(forEachState: ProtocolRun['forEachState']): Record<string, ProtocolRunForEachStepState> {
+  const out: Record<string, ProtocolRunForEachStepState> = {}
+  if (!forEachState || typeof forEachState !== 'object') return out
+  for (const [stepId, state] of Object.entries(forEachState)) {
+    const normalizedStepId = cleanText(stepId, 64)
+    if (!normalizedStepId || !state || typeof state !== 'object') continue
+    out[normalizedStepId] = {
+      stepId: normalizedStepId,
+      items: Array.isArray(state.items) ? state.items : [],
+      branchRunIds: Array.isArray(state.branchRunIds) ? state.branchRunIds : [],
+      branches: Array.isArray(state.branches) ? state.branches.map((b): ProtocolRunParallelBranchState => ({
+        branchId: cleanText(b.branchId, 64),
+        label: cleanText(b.label, 120) || 'Branch',
+        runId: cleanText(b.runId, 64),
+        status: b.status,
+        participantAgentIds: uniqueIds(b.participantAgentIds, 64),
+        summary: cleanText(b.summary, 4_000) || null,
+        lastError: cleanText(b.lastError, 320) || null,
+        updatedAt: typeof b.updatedAt === 'number' ? b.updatedAt : Date.now(),
+      })).filter((b) => b.branchId && b.runId) : [],
+      waitingOnBranchIds: Array.isArray(state.waitingOnBranchIds) ? state.waitingOnBranchIds : [],
+      joinReady: state.joinReady === true,
+      joinCompletedAt: typeof state.joinCompletedAt === 'number' ? state.joinCompletedAt : null,
+    }
+  }
+  return out
+}
+
+function normalizeSubflowState(subflowState: ProtocolRun['subflowState']): Record<string, ProtocolRunSubflowState> {
+  const out: Record<string, ProtocolRunSubflowState> = {}
+  if (!subflowState || typeof subflowState !== 'object') return out
+  for (const [stepId, state] of Object.entries(subflowState)) {
+    const normalizedStepId = cleanText(stepId, 64)
+    if (!normalizedStepId || !state || typeof state !== 'object') continue
+    out[normalizedStepId] = {
+      stepId: normalizedStepId,
+      childRunId: state.childRunId || '',
+      templateId: state.templateId || '',
+      status: state.status || 'draft',
+      summary: typeof state.summary === 'string' ? state.summary : null,
+      lastError: typeof state.lastError === 'string' ? state.lastError : null,
+      startedAt: typeof state.startedAt === 'number' ? state.startedAt : null,
+      completedAt: typeof state.completedAt === 'number' ? state.completedAt : null,
+    }
+  }
+  return out
+}
+
+function normalizeSwarmState(swarmState: ProtocolRun['swarmState']): Record<string, ProtocolRunSwarmState> {
+  const out: Record<string, ProtocolRunSwarmState> = {}
+  if (!swarmState || typeof swarmState !== 'object') return out
+  for (const [stepId, state] of Object.entries(swarmState)) {
+    const normalizedStepId = cleanText(stepId, 64)
+    if (!normalizedStepId || !state || typeof state !== 'object') continue
+    out[normalizedStepId] = {
+      stepId: normalizedStepId,
+      workItems: Array.isArray(state.workItems) ? state.workItems : [],
+      claims: Array.isArray(state.claims) ? state.claims : [],
+      unclaimedItemIds: Array.isArray(state.unclaimedItemIds) ? state.unclaimedItemIds : [],
+      eligibleAgentIds: Array.isArray(state.eligibleAgentIds) ? state.eligibleAgentIds : [],
+      claimLimitPerAgent: typeof state.claimLimitPerAgent === 'number' ? state.claimLimitPerAgent : 1,
+      selectionMode: state.selectionMode === 'claim_until_empty' ? 'claim_until_empty' : 'first_claim',
+      claimTimeoutSec: typeof state.claimTimeoutSec === 'number' ? state.claimTimeoutSec : 300,
+      openedAt: typeof state.openedAt === 'number' ? state.openedAt : Date.now(),
+      closedAt: typeof state.closedAt === 'number' ? state.closedAt : null,
+      timedOut: state.timedOut === true,
     }
   }
   return out
@@ -553,6 +704,15 @@ function normalizeProtocolRun(run: ProtocolRun): ProtocolRun {
     loopState: normalizeLoopState(run.loopState),
     branchHistory: normalizeBranchHistory(run.branchHistory),
     parallelState: normalizeParallelState(run.parallelState),
+    stepState: normalizeStepState(run.stepState),
+    completedStepIds: Array.isArray(run.completedStepIds) ? run.completedStepIds : [],
+    runningStepIds: Array.isArray(run.runningStepIds) ? run.runningStepIds : [],
+    readyStepIds: Array.isArray(run.readyStepIds) ? run.readyStepIds : [],
+    failedStepIds: Array.isArray(run.failedStepIds) ? run.failedStepIds : [],
+    stepOutputs: normalizeStepOutputs(run.stepOutputs),
+    forEachState: normalizeForEachState(run.forEachState),
+    subflowState: normalizeSubflowState(run.subflowState),
+    swarmState: normalizeSwarmState(run.swarmState),
     currentPhaseIndex,
   }
 }
@@ -967,28 +1127,48 @@ async function defaultExecuteAgentTurn(params: {
   ].filter(Boolean).join('\n\n')
 
   appendSyntheticSessionMessage(syntheticSession.id, 'user', params.prompt)
-  const result = await Promise.race([
-    streamAgentChat({
-      session: syntheticSession,
-      message: params.prompt,
-      apiKey,
-      systemPrompt: fullSystemPrompt,
-      write: () => {},
-      history: buildHistoryForAgent(chatroom, agent.id),
-    }),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error(`Agent turn timed out after ${AGENT_TURN_TIMEOUT_MS / 1000}s (agent: ${params.agentId})`)), AGENT_TURN_TIMEOUT_MS),
-    ),
-  ])
-  const rawText = result.finalResponse || result.fullText || ''
-  const text = stripHiddenControlTokens(rawText)
-  if (text.trim() && !shouldSuppressHiddenControlText(rawText)) {
-    appendSyntheticSessionMessage(syntheticSession.id, 'assistant', text)
+
+  const MAX_RETRIES = 3
+  const BASE_DELAY_MS = 2_000
+  let lastError: unknown = null
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    if (attempt > 0) {
+      const delay = BASE_DELAY_MS * Math.pow(2, attempt - 1)
+      console.warn(`[protocols] retrying agent turn for ${params.agentId} (attempt ${attempt + 1}/${MAX_RETRIES + 1}, waiting ${delay}ms)`)
+      await new Promise((resolve) => setTimeout(resolve, delay))
+    }
+    try {
+      const result = await Promise.race([
+        streamAgentChat({
+          session: syntheticSession,
+          message: params.prompt,
+          apiKey,
+          systemPrompt: fullSystemPrompt,
+          write: () => {},
+          history: buildHistoryForAgent(chatroom, agent.id),
+        }),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Agent turn timed out after ${AGENT_TURN_TIMEOUT_MS / 1000}s (agent: ${params.agentId})`)), AGENT_TURN_TIMEOUT_MS),
+        ),
+      ])
+      const rawText = result.finalResponse || result.fullText || ''
+      const text = stripHiddenControlTokens(rawText)
+      if (text.trim() && !shouldSuppressHiddenControlText(rawText)) {
+        appendSyntheticSessionMessage(syntheticSession.id, 'assistant', text)
+      }
+      return {
+        text: cleanText(text, 6_000),
+        toolEvents: result.toolEvents || [],
+      }
+    } catch (err: unknown) {
+      lastError = err
+      const msg = errorMessage(err)
+      const isRetryable = /\b(401|429|5\d{2}|timeout|ECONNR|ETIMEDOUT|ENOTFOUND|socket hang up|fetch failed)\b/i.test(msg)
+      if (!isRetryable || attempt >= MAX_RETRIES) throw err
+      console.warn(`[protocols] transient LLM error for agent ${params.agentId}: ${msg}`)
+    }
   }
-  return {
-    text: cleanText(text, 6_000),
-    toolEvents: result.toolEvents || [],
-  }
+  throw lastError
 }
 
 function extractFirstJsonObject(text: string): string | null {
@@ -1137,7 +1317,7 @@ export function requestProtocolRunExecution(runId: string, deps?: ProtocolRunDep
   if (!normalizedId) return false
   if (protocolExecutionState.pendingRunIds.has(normalizedId)) return false
   protocolExecutionState.pendingRunIds.add(normalizedId)
-  queueMicrotask(() => {
+  setTimeout(() => {
     void runProtocolRun(normalizedId, deps)
       .catch((err: unknown) => {
         console.warn(`[protocols] execution failed for ${normalizedId}: ${errorMessage(err)}`)
@@ -1145,7 +1325,7 @@ export function requestProtocolRunExecution(runId: string, deps?: ProtocolRunDep
       .finally(() => {
         protocolExecutionState.pendingRunIds.delete(normalizedId)
       })
-  })
+  }, 0)
   return true
 }
 
@@ -1155,6 +1335,17 @@ export function wakeProtocolRunFromTaskCompletion(taskId: string, deps?: Protoco
   const runId = task.protocolRunId
   const run = loadProtocolRunById(runId)
   if (!run || run.status !== 'waiting') return
+
+  // Check if this task is part of a swarm step
+  if (run.swarmState) {
+    for (const state of Object.values(run.swarmState)) {
+      if (state.claims.some((c) => c.taskId === taskId)) {
+        syncSwarmClaimCompletion(taskId, deps)
+        return
+      }
+    }
+  }
+
   if (run.phaseState?.dispatchedTaskId !== taskId) return
   const terminalStatuses = ['completed', 'failed', 'cancelled']
   if (!terminalStatuses.includes(task.status)) return
@@ -1213,6 +1404,43 @@ export function ensureProtocolEngineRecovered(deps?: ProtocolRunDeps): void {
       }, deps)
       requestProtocolRunExecution(run.id, deps)
       continue
+    }
+    // Recover DAG runs: recompute readiness from durable stepState
+    if (run.stepState && Object.keys(run.stepState).length > 0) {
+      const sched = computeStepReadiness(run.steps || [], run.entryStepId || null, run.stepState)
+      if (sched.dagMode && sched.readyStepIds.length > 0) {
+        appendProtocolEvent(run.id, {
+          type: 'recovered',
+          summary: 'Recovered a DAG-mode structured session with ready steps after restart.',
+        }, deps)
+        requestProtocolRunExecution(run.id, deps)
+        continue
+      }
+    }
+    // Recover for_each: check if all branches are terminal
+    const forEachStates = Object.values(run.forEachState || {})
+    const hasReadyForEach = forEachStates.some((state) => state.joinReady === true && !state.joinCompletedAt)
+    if (hasReadyForEach) {
+      appendProtocolEvent(run.id, {
+        type: 'recovered',
+        summary: 'Recovered a for-each join that was ready to continue after restart.',
+      }, deps)
+      requestProtocolRunExecution(run.id, deps)
+      continue
+    }
+    // Recover subflow: check if child run is terminal
+    for (const subState of Object.values(run.subflowState || {})) {
+      if (subState.childRunId) {
+        const childRun = loadProtocolRunById(subState.childRunId)
+        if (childRun && (childRun.status === 'completed' || childRun.status === 'failed' || childRun.status === 'cancelled')) {
+          appendProtocolEvent(run.id, {
+            type: 'recovered',
+            summary: `Recovered subflow step after child run ${childRun.status}.`,
+          }, deps)
+          requestProtocolRunExecution(run.id, deps)
+          break
+        }
+      }
     }
     // Recover dispatch-waiting runs where the dispatched task has already completed
     const dispatchedTaskId = run.phaseState?.dispatchedTaskId
@@ -1333,6 +1561,19 @@ function syncProtocolParentFromChildRun(runOrId: ProtocolRun | string, deps?: Pr
   if (!child?.parentRunId || !child.parentStepId) return null
   const parent = loadProtocolRunById(child.parentRunId)
   if (!parent) return null
+
+  // Delegate to for_each sync if parent step has forEachState
+  const forEachState = parent.forEachState?.[child.parentStepId]
+  if (forEachState) {
+    return syncForEachParentFromChildRun(child, parent, forEachState, deps)
+  }
+
+  // Delegate to subflow sync if parent step has subflowState
+  const subflowState = parent.subflowState?.[child.parentStepId]
+  if (subflowState && subflowState.childRunId === child.id) {
+    return syncSubflowParentFromChildRun(child, parent, subflowState, deps)
+  }
+
   const existingState = parent.parallelState?.[child.parentStepId]
   if (!existingState) return parent
   const nextBranches = existingState.branches.map((branch) => (
@@ -1404,8 +1645,28 @@ function beginPhase(run: ProtocolRun, phase: ProtocolPhaseDefinition, deps?: Pro
     summary: `Started phase: ${phase.label}`,
     data: { kind: phase.kind },
   }, deps)
+  // Update DAG stepState to 'running' if applicable
+  const dagUpdate: Partial<ProtocolRun> = {}
+  if (run.stepState && Object.keys(run.stepState).length > 0) {
+    const step = findRunStep(run, phase.id)
+    if (step) {
+      dagUpdate.stepState = {
+        ...run.stepState,
+        [step.id]: {
+          stepId: step.id,
+          status: 'running',
+          startedAt: now(deps),
+          completedAt: null,
+          error: null,
+        },
+      }
+      dagUpdate.runningStepIds = [...(run.runningStepIds || []).filter((id) => id !== step.id), step.id]
+      dagUpdate.readyStepIds = (run.readyStepIds || []).filter((id) => id !== step.id)
+    }
+  }
   return persistRun({
     ...run,
+    ...dagUpdate,
     status: run.status === 'draft' ? 'running' : run.status,
     currentStepId: phase.id,
     phaseState: {
@@ -1422,9 +1683,6 @@ function beginPhase(run: ProtocolRun, phase: ProtocolPhaseDefinition, deps?: Pro
 function finishPhase(run: ProtocolRun, phase: ProtocolPhaseDefinition, deps?: ProtocolRunDeps): ProtocolRun {
   const step = findRunStep(run, phase.id)
   const nextStepId = cleanText(step?.nextStepId, 64) || null
-  const nextIndex = nextStepId && Array.isArray(run.steps)
-    ? Math.max(0, run.steps.findIndex((entry) => entry.id === nextStepId))
-    : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
   appendProtocolEvent(run.id, {
     type: 'phase_completed',
     phaseId: phase.id,
@@ -1432,6 +1690,22 @@ function finishPhase(run: ProtocolRun, phase: ProtocolPhaseDefinition, deps?: Pr
     summary: `Completed phase: ${phase.label}`,
   }, deps)
   maybeAppendLoopIterationCompleted(run, step, nextStepId, deps)
+
+  // In DAG mode, delegate to finishStep which updates stepState and recomputes readiness
+  const isDagMode = run.stepState && Object.keys(run.stepState).length > 0
+  if (isDagMode && step) {
+    return finishStep(
+      persistRun({ ...run, phaseState: null, updatedAt: now(deps) }),
+      step,
+      nextStepId,
+      deps,
+    )
+  }
+
+  // Non-DAG mode: original cursor-based advancement
+  const nextIndex = nextStepId && Array.isArray(run.steps)
+    ? Math.max(0, run.steps.findIndex((entry) => entry.id === nextStepId))
+    : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
   return persistRun({
     ...run,
     currentStepId: nextStepId,
@@ -1543,8 +1817,24 @@ function beginStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: Protoc
     summary: `Started step: ${step.label}`,
     data: { kind: step.kind },
   }, deps)
+  const dagUpdate: Partial<ProtocolRun> = {}
+  if (run.stepState && Object.keys(run.stepState).length > 0) {
+    dagUpdate.stepState = {
+      ...run.stepState,
+      [step.id]: {
+        stepId: step.id,
+        status: 'running',
+        startedAt: now(deps),
+        completedAt: null,
+        error: null,
+      },
+    }
+    dagUpdate.runningStepIds = [...(run.runningStepIds || []).filter((id) => id !== step.id), step.id]
+    dagUpdate.readyStepIds = (run.readyStepIds || []).filter((id) => id !== step.id)
+  }
   return persistRun({
     ...run,
+    ...dagUpdate,
     status: run.status === 'draft' ? 'running' : run.status,
     currentStepId: step.id,
     updatedAt: now(deps),
@@ -1552,15 +1842,52 @@ function beginStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: Protoc
 }
 
 function finishStep(run: ProtocolRun, step: ProtocolStepDefinition, nextStepId: string | null, deps?: ProtocolRunDeps): ProtocolRun {
-  const nextIndex = nextStepId && Array.isArray(run.steps)
-    ? Math.max(0, run.steps.findIndex((entry) => entry.id === nextStepId))
-    : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
   appendProtocolEvent(run.id, {
     type: 'step_completed',
     stepId: step.id,
     summary: `Completed step: ${step.label}`,
   }, deps)
   maybeAppendLoopIterationCompleted(run, step, nextStepId, deps)
+
+  const isDagMode = run.stepState && Object.keys(run.stepState).length > 0
+  if (isDagMode) {
+    // In DAG mode, mark step completed and let scheduler recompute readiness
+    const stepState = {
+      ...run.stepState,
+      [step.id]: {
+        stepId: step.id,
+        status: 'completed' as const,
+        startedAt: run.stepState?.[step.id]?.startedAt || null,
+        completedAt: now(deps),
+        error: null,
+      },
+    }
+    // Recompute readiness after marking this step done
+    const sched = computeStepReadiness(run.steps || [], run.entryStepId || null, stepState)
+    const nextReady = sched.readyStepIds[0] || nextStepId || null
+    const nextIndex = nextReady && Array.isArray(run.steps)
+      ? Math.max(0, run.steps.findIndex((entry) => entry.id === nextReady))
+      : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
+    return persistRun({
+      ...run,
+      currentStepId: nextReady,
+      currentPhaseIndex: nextIndex,
+      waitingReason: null,
+      pauseReason: null,
+      phaseState: null,
+      stepState: sched.stepState,
+      completedStepIds: sched.completedStepIds,
+      runningStepIds: sched.runningStepIds,
+      readyStepIds: sched.readyStepIds,
+      failedStepIds: sched.failedStepIds,
+      updatedAt: now(deps),
+    })
+  }
+
+  // Non-DAG mode: original cursor-based advancement
+  const nextIndex = nextStepId && Array.isArray(run.steps)
+    ? Math.max(0, run.steps.findIndex((entry) => entry.id === nextStepId))
+    : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
   return persistRun({
     ...run,
     currentStepId: nextStepId,
@@ -2076,8 +2403,15 @@ async function processJoinStep(run: ProtocolRun, step: ProtocolStepDefinition, d
     })
   }
   const failedBranches = parallelState.branches.filter((branch) => branch.status !== 'completed')
+  if (failedBranches.length > 0 && failedBranches.length === parallelState.branches.length) {
+    throw new Error(`Structured session join "${step.label}" could not continue because all ${failedBranches.length} branch${failedBranches.length === 1 ? '' : 'es'} failed or stopped.`)
+  }
   if (failedBranches.length > 0) {
-    throw new Error(`Structured session join "${step.label}" could not continue because ${failedBranches.length} branch${failedBranches.length === 1 ? '' : 'es'} failed or stopped.`)
+    appendProtocolEvent(run.id, {
+      type: 'warning',
+      stepId: step.id,
+      summary: `Join "${step.label}" continuing with partial results: ${failedBranches.length} of ${parallelState.branches.length} branch(es) did not complete.`,
+    }, deps)
   }
   const artifact = {
     id: genId(),
@@ -2239,6 +2573,787 @@ function processDispatchDelegationPhase(run: ProtocolRun, phase: ProtocolPhaseDe
   })
 }
 
+// --- For-Each Step ---
+
+async function resolveForEachItems(
+  run: ProtocolRun,
+  config: ProtocolForEachConfig,
+): Promise<unknown[]> {
+  const source = config.itemsSource
+  if (source.type === 'literal') return source.items
+  if (source.type === 'step_output') {
+    const output = run.stepOutputs?.[source.stepId]
+    if (!output?.structuredData) return []
+    if (source.path) {
+      const val = (output.structuredData as Record<string, unknown>)[source.path]
+      return Array.isArray(val) ? val : []
+    }
+    const data = output.structuredData
+    // If structuredData is itself an array-like value, extract items
+    if (Array.isArray(data)) return data
+    if ('items' in data && Array.isArray(data.items)) return data.items as unknown[]
+    return [data]
+  }
+  if (source.type === 'artifact') {
+    const artifacts = run.artifacts || []
+    if (source.artifactId) {
+      const found = artifacts.find((a) => a.id === source.artifactId)
+      return found ? [found.content] : []
+    }
+    if (source.artifactKind) {
+      return artifacts.filter((a) => a.kind === source.artifactKind).map((a) => a.content)
+    }
+    return artifacts.map((a) => a.content)
+  }
+  // llm_extract would require an LLM call — for now, return empty (to be extended)
+  return []
+}
+
+async function processForEachStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: ProtocolRunDeps): Promise<ProtocolRun> {
+  const config = step.forEach
+  if (!config) {
+    throw new Error(`For-each step "${step.label}" is missing forEach config.`)
+  }
+
+  const started = beginStep(run, step, deps)
+  const items = await resolveForEachItems(started, config)
+
+  const maxItems = config.maxItems || 50
+  const truncatedItems = items.slice(0, maxItems)
+
+  if (truncatedItems.length === 0) {
+    const policy = config.onEmpty || 'fail'
+    if (policy === 'fail') {
+      throw new Error(`For-each step "${step.label}" resolved zero items and onEmpty is "fail".`)
+    }
+    appendProtocolEvent(run.id, {
+      type: 'for_each_expanded',
+      stepId: step.id,
+      summary: `For-each step "${step.label}" resolved zero items, policy: ${policy}.`,
+      data: { itemCount: 0, policy },
+    }, deps)
+    if (policy === 'skip') {
+      return finishStep(started, step, step.nextStepId || null, deps)
+    }
+    // 'advance'
+    return finishStep(started, step, step.nextStepId || null, deps)
+  }
+
+  if (truncatedItems.length < items.length) {
+    appendProtocolEvent(run.id, {
+      type: 'warning',
+      stepId: step.id,
+      summary: `For-each items truncated from ${items.length} to ${maxItems} (maxItems limit).`,
+    }, deps)
+  }
+
+  const branches: ProtocolRunParallelBranchState[] = []
+  const branchRunIds: string[] = []
+  const branchTemplate = config.branchTemplate
+
+  const participantAgentIds = uniqueIds(
+    branchTemplate.participantAgentIds && branchTemplate.participantAgentIds.length > 0
+      ? branchTemplate.participantAgentIds
+      : started.participantAgentIds,
+    64,
+  )
+
+  appendProtocolEvent(run.id, {
+    type: 'for_each_expanded',
+    stepId: step.id,
+    summary: `For-each step "${step.label}" expanding ${truncatedItems.length} items into branches.`,
+    data: { itemCount: truncatedItems.length, alias: config.itemAlias },
+  }, deps)
+
+  for (let i = 0; i < truncatedItems.length; i++) {
+    const item = truncatedItems[i]
+    const branchId = `for_each_${i}`
+    const itemLabel = typeof item === 'string' ? item.slice(0, 80) : `Item ${i + 1}`
+    const childRun = createProtocolRun({
+      title: `${started.title} — ${config.itemAlias}: ${itemLabel}`,
+      templateId: 'custom',
+      steps: branchTemplate.steps,
+      entryStepId: branchTemplate.entryStepId || branchTemplate.steps[0]?.id || null,
+      participantAgentIds,
+      facilitatorAgentId: cleanText(branchTemplate.facilitatorAgentId, 64) || participantAgentIds[0] || null,
+      sessionId: started.sessionId || null,
+      sourceRef: {
+        kind: 'protocol_run',
+        runId: started.id,
+        parentRunId: started.id,
+        stepId: step.id,
+        branchId,
+      },
+      autoStart: false,
+      createTranscript: true,
+      config: {
+        ...(started.config || {}),
+        goal: `Process ${config.itemAlias}: ${typeof item === 'string' ? item : JSON.stringify(item)}`,
+        postSummaryToParent: false,
+      },
+      parentRunId: started.id,
+      parentStepId: step.id,
+      branchId,
+      systemOwned: true,
+    }, deps)
+    // Inject item context into child run's operatorContext
+    const itemContext = `[for_each] ${config.itemAlias} = ${typeof item === 'string' ? item : JSON.stringify(item)}`
+    persistRun({
+      ...childRun,
+      operatorContext: [...(childRun.operatorContext || []), itemContext],
+    })
+    branchRunIds.push(childRun.id)
+    branches.push(buildParallelBranchState(childRun, {
+      branchId,
+      label: itemLabel,
+      runId: childRun.id,
+      participantAgentIds,
+    }))
+  }
+
+  const forEachStepState: ProtocolRunForEachStepState = {
+    stepId: step.id,
+    items: truncatedItems,
+    branchRunIds,
+    branches,
+    waitingOnBranchIds: branchRunIds,
+    joinReady: false,
+    joinCompletedAt: null,
+  }
+
+  const updated = persistRun({
+    ...started,
+    forEachState: {
+      ...(started.forEachState || {}),
+      [step.id]: forEachStepState,
+    },
+    status: 'waiting',
+    waitingReason: `Waiting for ${truncatedItems.length} for-each branch${truncatedItems.length === 1 ? '' : 'es'} to complete.`,
+    updatedAt: now(deps),
+  })
+
+  for (const runId of branchRunIds) {
+    requestProtocolRunExecution(runId, deps)
+  }
+  return updated
+}
+
+function syncForEachParentFromChildRun(
+  child: ProtocolRun,
+  parent: ProtocolRun,
+  forEachState: ProtocolRunForEachStepState,
+  deps?: ProtocolRunDeps,
+): ProtocolRun | null {
+  const nextBranches = forEachState.branches.map((branch) => (
+    branch.runId === child.id ? buildParallelBranchState(child, branch) : branch
+  ))
+  const waitingOnBranchIds = nextBranches
+    .filter((b) => !isTerminalProtocolRunStatus(b.status))
+    .map((b) => b.branchId)
+  const joinReady = waitingOnBranchIds.length === 0 && nextBranches.length > 0
+  const nextState: ProtocolRunForEachStepState = {
+    ...forEachState,
+    branches: nextBranches,
+    waitingOnBranchIds,
+    joinReady,
+    joinCompletedAt: joinReady && !forEachState.joinCompletedAt ? now(deps) : forEachState.joinCompletedAt || null,
+  }
+
+  const updatedParent = updateRun(parent.id, (current) => ({
+    ...current,
+    forEachState: {
+      ...(current.forEachState || {}),
+      [child.parentStepId!]: nextState,
+    },
+    updatedAt: now(deps),
+  }))
+  if (!updatedParent) return null
+
+  if (isTerminalProtocolRunStatus(child.status)) {
+    appendProtocolEvent(updatedParent.id, {
+      type: child.status === 'completed' ? 'parallel_branch_completed' : 'parallel_branch_failed',
+      stepId: child.parentStepId,
+      summary: `For-each branch "${child.branchId || child.id}" ${child.status}.`,
+      data: { branchId: child.branchId, childRunId: child.id, status: child.status },
+    }, deps)
+  }
+
+  if (joinReady && !forEachState.joinReady) {
+    appendProtocolEvent(updatedParent.id, {
+      type: 'join_ready',
+      stepId: child.parentStepId,
+      summary: 'All for-each branches completed. Advancing parent.',
+      data: { childRunIds: nextState.branchRunIds },
+    }, deps)
+  }
+
+  if (joinReady && updatedParent.status === 'waiting') {
+    // Advance past the for_each step
+    const parentStep = findRunStep(updatedParent, child.parentStepId!)
+    if (parentStep) {
+      const nextStepId = parentStep.nextStepId || null
+      const nextIndex = nextStepId && Array.isArray(updatedParent.steps)
+        ? Math.max(0, updatedParent.steps.findIndex((s) => s.id === nextStepId))
+        : Array.isArray(updatedParent.steps) ? updatedParent.steps.length : updatedParent.currentPhaseIndex + 1
+      persistRun({
+        ...updatedParent,
+        status: 'running',
+        currentStepId: nextStepId,
+        currentPhaseIndex: nextIndex,
+        waitingReason: null,
+        updatedAt: now(deps),
+      })
+    }
+    requestProtocolRunExecution(updatedParent.id, deps)
+  }
+  return loadProtocolRunById(updatedParent.id)
+}
+
+// --- Subflow Step ---
+
+async function processSubflowStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: ProtocolRunDeps): Promise<ProtocolRun> {
+  const config = step.subflow
+  if (!config) {
+    throw new Error(`Subflow step "${step.label}" is missing subflow config.`)
+  }
+
+  const template = loadTemplate(config.templateId)
+  if (!template) {
+    throw new Error(`Subflow step "${step.label}" references unknown template: "${config.templateId}"`)
+  }
+
+  const started = beginStep(run, step, deps)
+
+  // Build input context from inputMapping
+  const childOperatorContext: string[] = []
+  if (config.inputMapping) {
+    for (const [contextKey, outputRef] of Object.entries(config.inputMapping)) {
+      const output = started.stepOutputs?.[outputRef]
+      if (output?.summary) {
+        childOperatorContext.push(`[subflow input] ${contextKey}: ${output.summary}`)
+      } else if (output?.structuredData) {
+        childOperatorContext.push(`[subflow input] ${contextKey}: ${JSON.stringify(output.structuredData)}`)
+      }
+    }
+  }
+
+  const participantAgentIds = uniqueIds(
+    config.participantAgentIds && config.participantAgentIds.length > 0
+      ? config.participantAgentIds
+      : started.participantAgentIds,
+    64,
+  )
+
+  const childRun = createProtocolRun({
+    title: `${started.title} — Subflow: ${template.name}`,
+    templateId: config.templateId,
+    participantAgentIds,
+    facilitatorAgentId: config.facilitatorAgentId || participantAgentIds[0] || null,
+    sessionId: started.sessionId || null,
+    sourceRef: {
+      kind: 'protocol_run',
+      runId: started.id,
+      parentRunId: started.id,
+      stepId: step.id,
+    },
+    autoStart: false,
+    createTranscript: true,
+    config: {
+      ...(started.config || {}),
+      postSummaryToParent: false,
+    },
+    parentRunId: started.id,
+    parentStepId: step.id,
+    systemOwned: true,
+  }, deps)
+
+  if (childOperatorContext.length > 0) {
+    persistRun({
+      ...childRun,
+      operatorContext: [...(childRun.operatorContext || []), ...childOperatorContext],
+    })
+  }
+
+  const subflowState: ProtocolRunSubflowState = {
+    stepId: step.id,
+    childRunId: childRun.id,
+    templateId: config.templateId,
+    status: childRun.status,
+    summary: null,
+    lastError: null,
+    startedAt: now(deps),
+    completedAt: null,
+  }
+
+  appendProtocolEvent(run.id, {
+    type: 'subflow_started',
+    stepId: step.id,
+    summary: `Started subflow "${template.name}" as child run.`,
+    data: { childRunId: childRun.id, templateId: config.templateId },
+  }, deps)
+
+  const updated = persistRun({
+    ...started,
+    subflowState: {
+      ...(started.subflowState || {}),
+      [step.id]: subflowState,
+    },
+    status: 'waiting',
+    waitingReason: `Waiting for subflow "${template.name}" to complete.`,
+    updatedAt: now(deps),
+  })
+
+  requestProtocolRunExecution(childRun.id, deps)
+  return updated
+}
+
+function syncSubflowParentFromChildRun(
+  child: ProtocolRun,
+  parent: ProtocolRun,
+  subState: ProtocolRunSubflowState,
+  deps?: ProtocolRunDeps,
+): ProtocolRun | null {
+  if (!isTerminalProtocolRunStatus(child.status)) {
+    // Just update status tracking
+    const updatedState: ProtocolRunSubflowState = { ...subState, status: child.status }
+    return updateRun(parent.id, (current) => ({
+      ...current,
+      subflowState: { ...(current.subflowState || {}), [child.parentStepId!]: updatedState },
+      updatedAt: now(deps),
+    }))
+  }
+
+  const parentStep = findRunStep(parent, child.parentStepId!)
+  const config = parentStep?.subflow
+
+  if (child.status === 'completed') {
+    // Apply output mapping
+    let updatedParent = parent
+    if (config?.outputMapping) {
+      const childOutputs = child.stepOutputs || {}
+      for (const [childKey, parentKey] of Object.entries(config.outputMapping)) {
+        const childOutput = childOutputs[childKey]
+        if (childOutput) {
+          updatedParent = {
+            ...updatedParent,
+            stepOutputs: {
+              ...(updatedParent.stepOutputs || {}),
+              [parentKey]: { ...childOutput, stepId: child.parentStepId! },
+            },
+          }
+        }
+      }
+    }
+
+    const nextSubState: ProtocolRunSubflowState = {
+      ...subState,
+      status: 'completed',
+      summary: child.summary || null,
+      completedAt: now(deps),
+    }
+
+    appendProtocolEvent(parent.id, {
+      type: 'subflow_completed',
+      stepId: child.parentStepId,
+      summary: `Subflow completed: ${child.title}`,
+      data: { childRunId: child.id },
+    }, deps)
+
+    // Advance parent past the subflow step
+    const nextStepId = parentStep?.nextStepId || null
+    const nextIndex = nextStepId && Array.isArray(updatedParent.steps)
+      ? Math.max(0, updatedParent.steps.findIndex((s) => s.id === nextStepId))
+      : Array.isArray(updatedParent.steps) ? updatedParent.steps.length : updatedParent.currentPhaseIndex + 1
+    persistRun({
+      ...updatedParent,
+      subflowState: { ...(updatedParent.subflowState || {}), [child.parentStepId!]: nextSubState },
+      status: 'running',
+      currentStepId: nextStepId,
+      currentPhaseIndex: nextIndex,
+      waitingReason: null,
+      updatedAt: now(deps),
+    })
+    requestProtocolRunExecution(parent.id, deps)
+    return loadProtocolRunById(parent.id)
+  }
+
+  // Child failed or cancelled
+  const failPolicy = config?.onFailure || 'fail_parent'
+  const nextSubState: ProtocolRunSubflowState = {
+    ...subState,
+    status: child.status,
+    lastError: child.lastError || null,
+    completedAt: now(deps),
+  }
+
+  if (failPolicy === 'fail_parent') {
+    appendProtocolEvent(parent.id, {
+      type: 'subflow_failed',
+      stepId: child.parentStepId,
+      summary: `Subflow failed: ${child.lastError || child.status}`,
+      data: { childRunId: child.id, status: child.status },
+    }, deps)
+    persistRun({
+      ...parent,
+      subflowState: { ...(parent.subflowState || {}), [child.parentStepId!]: nextSubState },
+      status: 'failed',
+      lastError: `Subflow "${child.title}" ${child.status}: ${child.lastError || 'no details'}`,
+      endedAt: parent.endedAt || now(deps),
+      updatedAt: now(deps),
+    })
+    return loadProtocolRunById(parent.id)
+  }
+
+  // advance_with_warning
+  appendProtocolEvent(parent.id, {
+    type: 'warning',
+    stepId: child.parentStepId,
+    summary: `Subflow "${child.title}" ${child.status} but advancing with warning.`,
+    data: { childRunId: child.id, status: child.status },
+  }, deps)
+
+  const nextStepId = parentStep?.nextStepId || null
+  const nextIndex = nextStepId && Array.isArray(parent.steps)
+    ? Math.max(0, parent.steps.findIndex((s) => s.id === nextStepId))
+    : Array.isArray(parent.steps) ? parent.steps.length : parent.currentPhaseIndex + 1
+  persistRun({
+    ...parent,
+    subflowState: { ...(parent.subflowState || {}), [child.parentStepId!]: nextSubState },
+    status: 'running',
+    currentStepId: nextStepId,
+    currentPhaseIndex: nextIndex,
+    waitingReason: null,
+    updatedAt: now(deps),
+  })
+  requestProtocolRunExecution(parent.id, deps)
+  return loadProtocolRunById(parent.id)
+}
+
+// --- Swarm / Self-Selection Step ---
+
+function resolveSwarmWorkItems(
+  run: ProtocolRun,
+  config: ProtocolSwarmConfig,
+): Array<{ id: string; label: string; description?: string | null }> {
+  const source = config.workItemsSource
+  if (source.type === 'literal') return source.items
+  if (source.type === 'step_output') {
+    const output = run.stepOutputs?.[source.stepId]
+    if (!output?.structuredData) return []
+    const data = source.path
+      ? (output.structuredData as Record<string, unknown>)[source.path]
+      : output.structuredData
+    if (Array.isArray(data)) {
+      return data
+        .filter((item): item is { id: string; label: string; description?: string | null } =>
+          typeof item === 'object' && item !== null && 'id' in item && 'label' in item,
+        )
+    }
+    return []
+  }
+  return []
+}
+
+async function processSwarmStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: ProtocolRunDeps): Promise<ProtocolRun> {
+  const config = step.swarm
+  if (!config) {
+    throw new Error(`Swarm step "${step.label}" is missing swarm config.`)
+  }
+
+  const started = beginStep(run, step, deps)
+  const workItems = resolveSwarmWorkItems(started, config)
+
+  if (workItems.length === 0) {
+    throw new Error(`Swarm step "${step.label}" resolved zero work items.`)
+  }
+
+  const claimLimit = config.claimLimitPerAgent || 1
+  const agents = config.eligibleAgentIds
+  const claims: import('@/types').ProtocolSwarmClaim[] = []
+  const unclaimedItemIds = workItems.map((item) => item.id)
+  const createdTaskIds = [...(started.createdTaskIds || [])]
+
+  // Auto-assign: round-robin across eligible agents
+  let agentIndex = 0
+  const agentClaimCounts = new Map<string, number>()
+  for (const agentId of agents) agentClaimCounts.set(agentId, 0)
+
+  for (const workItem of workItems) {
+    // Find next agent that hasn't hit their claim limit
+    let assigned = false
+    for (let attempt = 0; attempt < agents.length; attempt++) {
+      const agentId = agents[agentIndex % agents.length]
+      agentIndex++
+      const currentCount = agentClaimCounts.get(agentId) || 0
+      if (currentCount >= claimLimit) continue
+
+      // Create a task for this claim
+      const taskId = genId()
+      const taskData: BoardTask = {
+        id: taskId,
+        title: `Swarm: ${workItem.label}`,
+        description: workItem.description || `Work item from swarm step "${step.label}"`,
+        status: 'queued',
+        agentId,
+        protocolRunId: started.id,
+        missionId: started.missionId || null,
+        sourceType: 'delegation',
+        queuedAt: now(deps),
+        createdAt: now(deps),
+        updatedAt: now(deps),
+      }
+      upsertTask(taskId, taskData)
+      enqueueTask(taskId)
+      createdTaskIds.push(taskId)
+
+      claims.push({
+        id: genId(),
+        workItemId: workItem.id,
+        workItemLabel: workItem.label,
+        agentId,
+        childRunId: null,
+        taskId,
+        status: 'running',
+        claimedAt: now(deps),
+        completedAt: null,
+      })
+      agentClaimCounts.set(agentId, currentCount + 1)
+      const idx = unclaimedItemIds.indexOf(workItem.id)
+      if (idx >= 0) unclaimedItemIds.splice(idx, 1)
+      assigned = true
+      break
+    }
+
+    if (!assigned) {
+      // All agents at capacity for this item — leave it unclaimed
+      break
+    }
+  }
+
+  const swarmState: ProtocolRunSwarmState = {
+    stepId: step.id,
+    workItems,
+    claims,
+    unclaimedItemIds,
+    eligibleAgentIds: agents,
+    claimLimitPerAgent: claimLimit,
+    selectionMode: config.selectionMode,
+    claimTimeoutSec: config.claimTimeoutSec,
+    openedAt: now(deps),
+    closedAt: null,
+    timedOut: false,
+  }
+
+  appendProtocolEvent(run.id, {
+    type: 'swarm_opened',
+    stepId: step.id,
+    summary: `Swarm step "${step.label}" opened with ${workItems.length} work items and ${claims.length} claims.`,
+    data: { workItemCount: workItems.length, claimCount: claims.length, eligibleAgents: agents },
+  }, deps)
+
+  notify('tasks')
+
+  const updated = persistRun({
+    ...started,
+    swarmState: {
+      ...(started.swarmState || {}),
+      [step.id]: swarmState,
+    },
+    createdTaskIds,
+    status: 'waiting',
+    waitingReason: `Waiting for ${claims.length} swarm claim${claims.length === 1 ? '' : 's'} to complete.`,
+    updatedAt: now(deps),
+  })
+  return updated
+}
+
+export function claimSwarmWorkItem(
+  runId: string,
+  stepId: string,
+  agentId: string,
+  workItemId: string,
+  deps?: ProtocolRunDeps,
+): { success: boolean; error?: string } {
+  const run = loadProtocolRunById(runId)
+  if (!run) return { success: false, error: 'Run not found' }
+  const state = run.swarmState?.[stepId]
+  if (!state) return { success: false, error: 'No swarm state for step' }
+  if (!state.unclaimedItemIds.includes(workItemId)) return { success: false, error: 'Work item already claimed or invalid' }
+  if (!state.eligibleAgentIds.includes(agentId)) return { success: false, error: 'Agent not eligible' }
+
+  const agentClaims = state.claims.filter((c) => c.agentId === agentId).length
+  if (agentClaims >= state.claimLimitPerAgent) return { success: false, error: 'Agent at claim limit' }
+
+  const workItem = state.workItems.find((item) => item.id === workItemId)
+  if (!workItem) return { success: false, error: 'Work item not found' }
+
+  const taskId = genId()
+  const taskData: BoardTask = {
+    id: taskId,
+    title: `Swarm: ${workItem.label}`,
+    description: workItem.description || '',
+    status: 'queued',
+    agentId,
+    protocolRunId: runId,
+    missionId: run.missionId || null,
+    sourceType: 'delegation',
+    queuedAt: now(deps),
+    createdAt: now(deps),
+    updatedAt: now(deps),
+  }
+  upsertTask(taskId, taskData)
+  enqueueTask(taskId)
+
+  const claim: import('@/types').ProtocolSwarmClaim = {
+    id: genId(),
+    workItemId,
+    workItemLabel: workItem.label,
+    agentId,
+    childRunId: null,
+    taskId,
+    status: 'running',
+    claimedAt: now(deps),
+    completedAt: null,
+  }
+
+  const nextUnclaimed = state.unclaimedItemIds.filter((id) => id !== workItemId)
+  updateRun(runId, (current) => ({
+    ...current,
+    swarmState: {
+      ...(current.swarmState || {}),
+      [stepId]: {
+        ...state,
+        claims: [...state.claims, claim],
+        unclaimedItemIds: nextUnclaimed,
+      },
+    },
+    createdTaskIds: [...(current.createdTaskIds || []), taskId],
+    updatedAt: now(deps),
+  }))
+  appendProtocolEvent(runId, {
+    type: 'swarm_claimed',
+    stepId,
+    summary: `Agent "${agentId}" claimed work item "${workItem.label}".`,
+    data: { agentId, workItemId, taskId },
+  }, deps)
+  notify('tasks')
+  return { success: true }
+}
+
+export function syncSwarmClaimCompletion(taskId: string, deps?: ProtocolRunDeps): void {
+  const task = loadTask(taskId)
+  if (!task?.protocolRunId) return
+  const run = loadProtocolRunById(task.protocolRunId)
+  if (!run) return
+  const terminalStatuses = ['completed', 'failed', 'cancelled']
+  if (!terminalStatuses.includes(task.status)) return
+
+  for (const [stepId, state] of Object.entries(run.swarmState || {})) {
+    const claimIndex = state.claims.findIndex((c) => c.taskId === taskId)
+    if (claimIndex < 0) continue
+
+    const claim = state.claims[claimIndex]
+    const updatedClaim = {
+      ...claim,
+      status: (task.status === 'completed' ? 'completed' : 'failed') as 'completed' | 'failed',
+      completedAt: now(deps),
+    }
+    const nextClaims = [...state.claims]
+    nextClaims[claimIndex] = updatedClaim
+
+    const allTerminal = nextClaims.every((c) => c.status === 'completed' || c.status === 'failed')
+    const noUnclaimed = state.unclaimedItemIds.length === 0
+
+    updateRun(run.id, (current) => ({
+      ...current,
+      swarmState: {
+        ...(current.swarmState || {}),
+        [stepId]: { ...state, claims: nextClaims },
+      },
+      updatedAt: now(deps),
+    }))
+
+    if (allTerminal && noUnclaimed) {
+      appendProtocolEvent(run.id, {
+        type: 'swarm_exhausted',
+        stepId,
+        summary: `All swarm claims completed for step.`,
+        data: { completedCount: nextClaims.filter((c) => c.status === 'completed').length, failedCount: nextClaims.filter((c) => c.status === 'failed').length },
+      }, deps)
+
+      // Advance parent past the swarm step
+      const parentStep = findRunStep(run, stepId)
+      if (parentStep && run.status === 'waiting') {
+        const nextStepId = parentStep.nextStepId || null
+        const nextIndex = nextStepId && Array.isArray(run.steps)
+          ? Math.max(0, run.steps.findIndex((s) => s.id === nextStepId))
+          : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
+        persistRun({
+          ...run,
+          swarmState: { ...(run.swarmState || {}), [stepId]: { ...state, claims: nextClaims, closedAt: now(deps) } },
+          status: 'running',
+          currentStepId: nextStepId,
+          currentPhaseIndex: nextIndex,
+          waitingReason: null,
+          updatedAt: now(deps),
+        })
+        requestProtocolRunExecution(run.id, deps)
+      }
+    }
+    break
+  }
+}
+
+export function checkSwarmTimeouts(deps?: ProtocolRunDeps): void {
+  const runs = Object.values(loadProtocolRuns()).map(normalizeProtocolRun)
+  const timestamp = now(deps)
+  for (const run of runs) {
+    if (run.status !== 'waiting') continue
+    for (const [stepId, state] of Object.entries(run.swarmState || {})) {
+      if (state.closedAt || state.timedOut) continue
+      if (timestamp - state.openedAt < state.claimTimeoutSec * 1000) continue
+
+      // Timed out
+      const step = findRunStep(run, stepId)
+      const onUnclaimed = step?.swarm?.onUnclaimed || 'fail'
+
+      appendProtocolEvent(run.id, {
+        type: 'swarm_exhausted',
+        stepId,
+        summary: `Swarm step timed out after ${state.claimTimeoutSec}s with ${state.unclaimedItemIds.length} unclaimed items.`,
+        data: { unclaimedCount: state.unclaimedItemIds.length, policy: onUnclaimed },
+      }, deps)
+
+      if (onUnclaimed === 'fail') {
+        persistRun({
+          ...run,
+          swarmState: { ...(run.swarmState || {}), [stepId]: { ...state, timedOut: true, closedAt: timestamp } },
+          status: 'failed',
+          lastError: `Swarm step "${step?.label || stepId}" timed out with unclaimed work items.`,
+          endedAt: run.endedAt || timestamp,
+          updatedAt: timestamp,
+        })
+      } else {
+        // 'advance' or 'fallback_assign'
+        const nextStepId = step?.nextStepId || null
+        const nextIndex = nextStepId && Array.isArray(run.steps)
+          ? Math.max(0, run.steps.findIndex((s) => s.id === nextStepId))
+          : Array.isArray(run.steps) ? run.steps.length : run.currentPhaseIndex + 1
+        persistRun({
+          ...run,
+          swarmState: { ...(run.swarmState || {}), [stepId]: { ...state, timedOut: true, closedAt: timestamp } },
+          status: 'running',
+          currentStepId: nextStepId,
+          currentPhaseIndex: nextIndex,
+          waitingReason: null,
+          updatedAt: timestamp,
+        })
+        requestProtocolRunExecution(run.id, deps)
+      }
+    }
+  }
+}
+
 async function stepProtocolRun(run: ProtocolRun, deps?: ProtocolRunDeps): Promise<ProtocolRun> {
   const step = currentStep(run)
   if (!step) {
@@ -2262,6 +3377,9 @@ async function stepProtocolRun(run: ProtocolRun, deps?: ProtocolRunDeps): Promis
   if (step.kind === 'repeat') return processRepeatStep(run, step, deps)
   if (step.kind === 'parallel') return processParallelStep(run, step, deps)
   if (step.kind === 'join') return processJoinStep(run, step, deps)
+  if (step.kind === 'for_each') return processForEachStep(run, step, deps)
+  if (step.kind === 'subflow') return processSubflowStep(run, step, deps)
+  if (step.kind === 'swarm_claim') return processSwarmStep(run, step, deps)
   if (step.kind === 'complete') {
     const started = beginStep(run, step, deps)
     const finished = finishStep(started, step, null, deps)
@@ -2472,12 +3590,14 @@ export function createProtocolRun(input: CreateProtocolRunInput, deps?: Protocol
 
 export async function runProtocolRun(runId: string, deps?: ProtocolRunDeps): Promise<ProtocolRun | null> {
   const release = acquireProtocolLease(runId)
-  if (!release) return loadProtocolRunById(runId)
+  if (!release) {
+    console.warn(`[protocols] could not acquire lease for run ${runId}, another execution may be active`)
+    return loadProtocolRunById(runId)
+  }
   try {
     let run = loadProtocolRunById(runId)
     if (!run) return null
     if (run.status === 'cancelled' || run.status === 'archived' || run.status === 'completed' || run.status === 'paused') return run
-
     run = persistRun({
       ...run,
       status: run.status === 'waiting' ? 'running' : run.status,
@@ -2489,7 +3609,17 @@ export async function runProtocolRun(runId: string, deps?: ProtocolRunDeps): Pro
     })
     if (run.parentRunId) syncProtocolParentFromChildRun(run, deps)
 
+    const MAX_STEP_ITERATIONS = 500
+    let stepIterations = 0
     while (run.status === 'running' || run.status === 'draft') {
+      stepIterations++
+      if (stepIterations > MAX_STEP_ITERATIONS) {
+        run = persistRun({ ...run, status: 'failed', lastError: `Exceeded maximum step iterations (${MAX_STEP_ITERATIONS}). Possible infinite loop in step graph.`, updatedAt: now(deps) })
+        appendProtocolEvent(run.id, { type: 'failed', summary: `Exceeded maximum step iterations (${MAX_STEP_ITERATIONS}).` }, deps)
+        break
+      }
+      // Yield to the event loop so the server can process other HTTP requests
+      await new Promise((resolve) => setTimeout(resolve, 0))
       const latest = loadProtocolRunById(run.id)
       if (!latest) return null
       if (latest.status === 'paused' || latest.status === 'cancelled' || latest.status === 'archived' || latest.status === 'completed') {
@@ -2498,6 +3628,38 @@ export async function runProtocolRun(runId: string, deps?: ProtocolRunDeps): Pro
       }
       run = latest
       renewProtocolLease(run.id)
+
+      // DAG scheduler: compute step readiness before stepping
+      const sched = computeStepReadiness(run.steps || [], run.entryStepId || null, run.stepState)
+      if (sched.dagMode) {
+        run = persistRun({
+          ...run,
+          stepState: sched.stepState,
+          completedStepIds: sched.completedStepIds,
+          runningStepIds: sched.runningStepIds,
+          readyStepIds: sched.readyStepIds,
+          failedStepIds: sched.failedStepIds,
+          updatedAt: now(deps),
+        })
+        if (sched.readyStepIds.length === 0 && sched.runningStepIds.length === 0) {
+          // No more work — either all done or stuck
+          const allSteps = run.steps || []
+          const allCompleted = allSteps.every((s) => sched.stepState[s.id]?.status === 'completed')
+          if (allCompleted) {
+            run = completeProtocolRun(run, deps)
+          } else {
+            run = persistRun({ ...run, status: 'failed', lastError: 'DAG stuck: no ready steps and not all completed.', updatedAt: now(deps) })
+            appendProtocolEvent(run.id, { type: 'failed', summary: 'DAG stuck: no ready steps and not all completed.' }, deps)
+          }
+          break
+        }
+        if (sched.readyStepIds.length > 0) {
+          // Pick first ready step as currentStepId
+          const nextReadyId = sched.readyStepIds[0]
+          run = persistRun({ ...run, currentStepId: nextReadyId, updatedAt: now(deps) })
+        }
+      }
+
       run = await stepProtocolRun(run, deps)
       if (run.status === 'waiting' || run.status === 'paused' || run.status === 'failed' || run.status === 'cancelled' || run.status === 'archived' || run.status === 'completed') break
     }
@@ -2677,6 +3839,16 @@ export function performProtocolRunAction(runId: string, input: ProtocolRunAction
       if (updated.parentRunId) syncProtocolParentFromChildRun(updated)
     }
     return updated
+  }
+
+  if (action === 'claim_work') {
+    const stepId = cleanText(input.stepId, 64)
+    const agentId = cleanText(input.agentId, 64)
+    const workItemId = cleanText(input.workItemId, 64)
+    if (!stepId || !agentId || !workItemId) return run
+    const result = claimSwarmWorkItem(runId, stepId, agentId, workItemId)
+    if (!result.success) return run
+    return loadProtocolRunById(runId)
   }
 
   const resumed = updateRun(runId, (current) => ({

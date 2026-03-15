@@ -172,6 +172,7 @@ describe('chatroom-helpers', () => {
       systemPrompt: '',
       provider: 'ollama',
       model: 'glm-5:cloud',
+      ollamaMode: 'cloud',
       credentialId: 'cred-ollama-cloud',
       createdAt: now,
       updatedAt: now,

@@ -301,7 +301,7 @@ describe('normalizeCanvasDocument', () => {
     })
     const after = Date.now()
     assert.ok(doc)
-    assert.ok(doc.updatedAt >= before && doc.updatedAt <= after)
+    assert.ok(doc.updatedAt! >= before && doc.updatedAt! <= after)
   })
 })
 

@@ -208,7 +208,7 @@ test('resolveGenerationModelConfig skips excluded providers and falls back to an
   assert.equal(resolved.model, 'phi4')
 })
 
-test('buildChatModel resolves ollama cloud credentials before selecting runtime mode', () => {
+test('buildChatModel keeps local Ollama local even when a credential and :cloud model name are present', () => {
   saveCredentials({
     'cred-1': {
       id: 'cred-1',
@@ -228,6 +228,37 @@ test('buildChatModel resolves ollama cloud credentials before selecting runtime 
   const llm = buildChatModel({
     provider: 'ollama',
     model: 'glm-5:cloud',
+    ollamaMode: 'local',
+    apiKey: null,
+    credentialId: 'cred-1',
+  }) as ChatOpenAI
+
+  assert.equal(llm.model, 'glm-5:cloud')
+  assert.equal(llm.apiKey, 'ollama')
+  assert.equal(llm.clientConfig?.baseURL, 'http://localhost:11434/v1')
+})
+
+test('buildChatModel uses Ollama Cloud only when explicit cloud mode is selected', () => {
+  saveCredentials({
+    'cred-1': {
+      id: 'cred-1',
+      provider: 'ollama',
+      name: 'Ollama Cloud',
+      encryptedKey: encryptKey('ollama-cloud-key'),
+      createdAt: Date.now(),
+    },
+  } as Record<string, {
+    id: string
+    provider: string
+    name: string
+    encryptedKey: string
+    createdAt: number
+  }>)
+
+  const llm = buildChatModel({
+    provider: 'ollama',
+    model: 'glm-5:cloud',
+    ollamaMode: 'cloud',
     apiKey: null,
     credentialId: 'cred-1',
   }) as ChatOpenAI
@@ -237,7 +268,7 @@ test('buildChatModel resolves ollama cloud credentials before selecting runtime 
   assert.equal(llm.clientConfig?.baseURL, 'https://ollama.com/v1')
 })
 
-test('resolveGenerationModelConfig repairs a stale Ollama credential reference when only one provider credential exists', () => {
+test('resolveGenerationModelConfig uses explicit cloud mode when repairing a stale Ollama credential reference', () => {
   saveCredentials({
     'cred-1': {
       id: 'cred-1',
@@ -258,6 +289,7 @@ test('resolveGenerationModelConfig repairs a stale Ollama credential reference w
     preferred: {
       provider: 'ollama',
       model: 'glm-5:cloud',
+      ollamaMode: 'cloud',
       credentialId: 'stale-ollama-cred',
     },
   })
@@ -265,4 +297,35 @@ test('resolveGenerationModelConfig repairs a stale Ollama credential reference w
   assert.equal(resolved.provider, 'ollama')
   assert.equal(resolved.model, 'glm-5:cloud')
   assert.equal(resolved.apiEndpoint, 'https://ollama.com')
+})
+
+test('resolveGenerationModelConfig defaults legacy Ollama preferences to local when no explicit mode is stored', () => {
+  saveCredentials({
+    'cred-1': {
+      id: 'cred-1',
+      provider: 'ollama',
+      name: 'Ollama Cloud',
+      encryptedKey: encryptKey('ollama-cloud-key'),
+      createdAt: Date.now(),
+    },
+  } as Record<string, {
+    id: string
+    provider: string
+    name: string
+    encryptedKey: string
+    createdAt: number
+  }>)
+
+  const resolved = resolveGenerationModelConfig({
+    preferred: {
+      provider: 'ollama',
+      model: 'glm-5:cloud',
+      credentialId: 'cred-1',
+    },
+  })
+
+  assert.equal(resolved.provider, 'ollama')
+  assert.equal(resolved.model, 'glm-5:cloud')
+  assert.equal(resolved.apiEndpoint, 'http://localhost:11434')
+  assert.equal(resolved.ollamaMode, undefined)
 })

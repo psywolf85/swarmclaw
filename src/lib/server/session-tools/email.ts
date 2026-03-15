@@ -1,7 +1,7 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import type { Plugin, PluginHooks } from '@/types'
-import { getPluginManager } from '../plugins'
+import type { Extension, ExtensionHooks } from '@/types'
+import { getExtensionManager } from '../extensions'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { ToolBuildContext } from './context'
 import { errorMessage } from '@/lib/shared-utils'
@@ -17,7 +17,7 @@ interface SmtpConfig {
 }
 
 function getSmtpConfig(): SmtpConfig {
-  const ps = getPluginManager().getPluginSettings('email')
+  const ps = getExtensionManager().getExtensionSettings('email')
   return {
     host: (ps.host as string) || '',
     port: Number(ps.port) || 587,
@@ -180,8 +180,8 @@ async function executeEmail(args: Record<string, unknown>): Promise<string> {
     const html = typeof normalized.html === 'string' ? normalized.html : undefined
 
     const cfg = getSmtpConfig()
-    if (!cfg.host) return 'Error: SMTP host not configured. Ask the user to configure email in Plugin Settings > Email.'
-    if (!cfg.fromAddress) return 'Error: From address not configured in email plugin settings.'
+    if (!cfg.host) return 'Error: SMTP host not configured. Ask the user to configure email in Extensions > Email settings.'
+    if (!cfg.fromAddress) return 'Error: From address not configured in email extension settings. Configure it in Extensions > Email settings.'
 
     try {
       const result = await sendSmtpEmail(cfg, recipients, subject, body, html)
@@ -193,7 +193,7 @@ async function executeEmail(args: Record<string, unknown>): Promise<string> {
 
   if (action === 'status') {
     const cfg = getSmtpConfig()
-    if (!cfg.host) return 'Email plugin not configured. No SMTP host set.'
+    if (!cfg.host) return 'Email extension not configured. No SMTP host set. Configure it in Extensions > Email settings.'
     return JSON.stringify({
       configured: true,
       host: cfg.host,
@@ -207,14 +207,14 @@ async function executeEmail(args: Record<string, unknown>): Promise<string> {
   return `Error: Unknown action "${action}". Use "send" or "status".`
 }
 
-const EmailPlugin: Plugin = {
+const EmailExtension: Extension = {
   name: 'Email',
   enabledByDefault: false,
   description: 'Send emails via SMTP. Supports plain text and HTML, multiple recipients.',
   hooks: {
     getCapabilityDescription: () =>
       'I can send emails using `email`. Supports plain text and HTML bodies, multiple recipients.',
-  } as PluginHooks,
+  } as ExtensionHooks,
   tools: [
     {
       name: 'email',
@@ -297,17 +297,17 @@ const EmailPlugin: Plugin = {
   },
 }
 
-getPluginManager().registerBuiltin('email', EmailPlugin)
+getExtensionManager().registerBuiltin('email', EmailExtension)
 
 export function buildEmailTools(bctx: ToolBuildContext): StructuredToolInterface[] {
-  if (!bctx.hasPlugin('email')) return []
+  if (!bctx.hasExtension('email')) return []
 
   return [
     tool(
       async (args) => executeEmail(args),
       {
         name: 'email',
-        description: EmailPlugin.tools![0].description,
+        description: EmailExtension.tools![0].description,
         schema: z.object({
           action: z.enum(['send', 'status']).optional().describe('Action (default: send)'),
           to: z.union([z.string(), z.array(z.string())]).optional().describe('Recipient email address(es)'),

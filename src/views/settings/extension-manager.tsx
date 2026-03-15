@@ -2,16 +2,16 @@
 
 import { useEffect, useState, useCallback, useMemo } from 'react'
 import { api } from '@/lib/app/api-client'
-import { getPluginSourceLabel } from '@/lib/plugin-sources'
-import type { PluginMeta, MarketplacePlugin } from '@/types'
+import { getExtensionSourceLabel } from '@/lib/extension-sources'
+import type { ExtensionMeta, MarketplaceExtension } from '@/types'
 import { toast } from 'sonner'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { errorMessage } from '@/lib/shared-utils'
 
-export function PluginManager() {
+export function ExtensionManager() {
   const [tab, setTab] = useState<'installed' | 'marketplace' | 'url'>('installed')
-  const [plugins, setPlugins] = useState<PluginMeta[]>([])
-  const [marketplace, setMarketplace] = useState<MarketplacePlugin[]>([])
+  const [extensions, setExtensions] = useState<ExtensionMeta[]>([])
+  const [marketplace, setMarketplace] = useState<MarketplaceExtension[]>([])
   const [loading, setLoading] = useState(false)
   const [installing, setInstalling] = useState<string | null>(null)
   const [updating, setUpdating] = useState<string | null>(null)
@@ -22,40 +22,40 @@ export function PluginManager() {
   const [marketplaceQuery, setMarketplaceQuery] = useState('')
   const [confirmDelete, setConfirmDelete] = useState<{ filename: string; name: string } | null>(null)
 
-  const loadPlugins = useCallback(async () => {
+  const loadExtensions = useCallback(async () => {
     try {
-      const data = await api<PluginMeta[]>('GET', '/extensions')
-      setPlugins(data)
+      const data = await api<ExtensionMeta[]>('GET', '/extensions')
+      setExtensions(data)
     } catch { /* ignore */ }
   }, [])
 
   const loadMarketplace = useCallback(async (q = '') => {
     setLoading(true)
     try {
-      const data = await api<MarketplacePlugin[]>('GET', `/extensions/marketplace?q=${encodeURIComponent(q)}`)
+      const data = await api<MarketplaceExtension[]>('GET', `/extensions/marketplace?q=${encodeURIComponent(q)}`)
       if (Array.isArray(data)) setMarketplace(data)
     } catch { /* ignore */ }
     setLoading(false)
   }, [])
 
-  useEffect(() => { loadPlugins() }, [loadPlugins])
+  useEffect(() => { loadExtensions() }, [loadExtensions])
   useEffect(() => { if (tab === 'marketplace') loadMarketplace(marketplaceQuery) }, [tab, loadMarketplace, marketplaceQuery])
 
   const togglePlugin = async (filename: string, enabled: boolean) => {
     try {
       await api('POST', '/extensions', { filename, enabled })
       toast.success(enabled ? 'Extension enabled' : 'Extension disabled')
-      loadPlugins()
+      loadExtensions()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to toggle extension')
     }
   }
 
-  const deletePlugin = async (filename: string, name: string) => {
+  const deleteExtension = async (filename: string, name: string) => {
     try {
       await api('DELETE', `/extensions?filename=${encodeURIComponent(filename)}`)
       toast.success(`Deleted ${name}`)
-      loadPlugins()
+      loadExtensions()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Delete failed')
     }
@@ -66,7 +66,7 @@ export function PluginManager() {
     try {
       await api('PATCH', `/extensions?id=${id}`)
       toast.success('Extension updated')
-      await loadPlugins()
+      await loadExtensions()
     } catch (err: unknown) {
       toast.error(errorMessage(err))
     } finally {
@@ -79,7 +79,7 @@ export function PluginManager() {
     try {
       await api('PATCH', '/extensions?all=true')
       toast.success('All extensions updated')
-      await loadPlugins()
+      await loadExtensions()
     } catch (err: unknown) {
       toast.error(errorMessage(err))
     } finally {
@@ -87,7 +87,7 @@ export function PluginManager() {
     }
   }
 
-  const installFromMarketplace = async (p: MarketplacePlugin) => {
+  const installFromMarketplace = async (p: MarketplaceExtension) => {
     setInstalling(p.id)
     const toastId = toast.loading(`Installing ${p.name}...`)
     try {
@@ -103,7 +103,7 @@ export function PluginManager() {
         installSource: p.catalogSource || p.source,
       })
 
-      await loadPlugins()
+      await loadExtensions()
       setTab('installed')
       toast.success(`Successfully installed ${p.name}`, { id: toastId })
     } catch (err: unknown) {
@@ -121,7 +121,7 @@ export function PluginManager() {
     setInstalling('url')
     try {
       await api('POST', '/extensions/install', { url: urlInput, filename: urlFilename })
-      await loadPlugins()
+      await loadExtensions()
       setUrlStatus({ ok: true, message: 'Installed successfully' })
       setUrlInput('')
       setUrlFilename('')
@@ -132,12 +132,12 @@ export function PluginManager() {
     setInstalling(null)
   }
 
-  const { corePlugins, installedPlugins } = useMemo(() => {
+  const { coreExtensions, installedExtensions } = useMemo(() => {
     return {
-      corePlugins: plugins.filter(p => p.isBuiltin),
-      installedPlugins: plugins.filter(p => !p.isBuiltin)
+      coreExtensions: extensions.filter(p => p.isBuiltin),
+      installedExtensions: extensions.filter(p => !p.isBuiltin)
     }
-  }, [plugins])
+  }, [extensions])
 
   const tabClass = (t: string) =>
     `py-2 px-4 rounded-[10px] text-center cursor-pointer transition-all text-[12px] font-600 border h-9 flex items-center justify-center
@@ -145,7 +145,7 @@ export function PluginManager() {
       ? 'bg-accent-soft border-accent-bright/25 text-accent-bright shadow-[0_0_15px_rgba(99,102,241,0.1)]'
       : 'bg-surface border-white/[0.06] text-text-3 hover:bg-surface-2 hover:border-white/[0.12]'}`
 
-  const renderPluginItem = (p: PluginMeta) => (
+  const renderExtensionItem = (p: ExtensionMeta) => (
     <div key={p.filename} className="group flex items-center gap-4 py-3.5 px-5 rounded-[18px] bg-surface border border-white/[0.06] hover:border-white/[0.12] transition-all">
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
@@ -162,12 +162,12 @@ export function PluginManager() {
         <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
           {p.sourceLabel && (
             <span className="text-[9px] font-700 px-1.5 py-0.5 rounded uppercase tracking-wider bg-sky-500/10 text-sky-300">
-              {getPluginSourceLabel(p.sourceLabel)}
+              {getExtensionSourceLabel(p.sourceLabel)}
             </span>
           )}
           {p.installSource && p.installSource !== p.sourceLabel && (
             <span className="text-[9px] font-700 px-1.5 py-0.5 rounded uppercase tracking-wider bg-white/[0.04] text-text-3/65">
-              via {getPluginSourceLabel(p.installSource)}
+              via {getExtensionSourceLabel(p.installSource)}
             </span>
           )}
         </div>
@@ -254,7 +254,7 @@ export function PluginManager() {
                 <div className="w-2 h-2 rounded-full bg-accent-bright animate-pulse" />
                 <span className="text-[11px] font-800 uppercase tracking-[0.15em] text-text-3">Active Registry</span>
               </div>
-              {installedPlugins.length > 0 && (
+              {installedExtensions.length > 0 && (
                 <button 
                   onClick={handleUpdateAll}
                   disabled={updatingAll}
@@ -268,32 +268,32 @@ export function PluginManager() {
               )}
             </div>
 
-            {plugins.length === 0 ? (
+            {extensions.length === 0 ? (
               <div className="py-20 text-center rounded-[24px] border border-dashed border-white/[0.06]">
                 <p className="text-[14px] text-text-3/50">No extensions found in the registry</p>
               </div>
             ) : (
               <div className="space-y-10">
-                {corePlugins.length > 0 && (
+                {coreExtensions.length > 0 && (
                   <section>
                     <div className="mb-4 px-1">
                       <h3 className="text-[13px] font-700 text-text-2">Built-in Tools</h3>
                       <p className="text-[12px] text-text-3/50 mt-0.5">Platform-owned capabilities managed outside the Extensions registry</p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {corePlugins.map(renderPluginItem)}
+                      {coreExtensions.map(renderExtensionItem)}
                     </div>
                   </section>
                 )}
 
-                {installedPlugins.length > 0 && (
+                {installedExtensions.length > 0 && (
                   <section>
                     <div className="mb-4 px-1">
                       <h3 className="text-[13px] font-700 text-text-2">Extensions</h3>
                       <p className="text-[12px] text-text-3/50 mt-0.5">Custom and marketplace-installed extensions</p>
                     </div>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      {installedPlugins.map(renderPluginItem)}
+                      {installedExtensions.map(renderExtensionItem)}
                     </div>
                   </section>
                 )}
@@ -339,12 +339,12 @@ export function PluginManager() {
                         <span className="text-[16px] font-700 text-text tracking-tight">{p.name}</span>
                         {p.source && (
                           <span className="text-[9px] font-800 uppercase px-2 py-0.5 rounded-[6px] border bg-sky-500/10 text-sky-300 border-sky-500/20">
-                            {getPluginSourceLabel(p.source)}
+                            {getExtensionSourceLabel(p.source)}
                           </span>
                         )}
                         {p.catalogSource && p.catalogSource !== p.source && (
                           <span className="text-[9px] font-800 uppercase px-2 py-0.5 rounded-[6px] border bg-white/[0.04] text-text-3/70 border-white/[0.08]">
-                            via {getPluginSourceLabel(p.catalogSource)}
+                            via {getExtensionSourceLabel(p.catalogSource)}
                           </span>
                         )}
                       </div>
@@ -462,7 +462,7 @@ export function PluginManager() {
         danger
         onConfirm={() => {
           if (!confirmDelete) return
-          void deletePlugin(confirmDelete.filename, confirmDelete.name)
+          void deleteExtension(confirmDelete.filename, confirmDelete.name)
           setConfirmDelete(null)
         }}
         onCancel={() => setConfirmDelete(null)}

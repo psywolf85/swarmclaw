@@ -5,7 +5,7 @@ import {
   AGENT_REGRESSION_SCENARIOS,
   DEFAULT_AGENT_REGRESSION_SCENARIO_IDS,
   resolveRegressionApprovalSettings,
-  resolveRegressionPlugins,
+  resolveRegressionExtensions,
   scoreAssertions,
 } from './agent-regression'
 
@@ -131,100 +131,100 @@ describe('scoreAssertions', () => {
 })
 
 // ---------------------------------------------------------------------------
-// resolveRegressionPlugins
+// resolveRegressionExtensions
 // ---------------------------------------------------------------------------
 
-describe('resolveRegressionPlugins', () => {
-  it('scenario mode uses scenario plugins as effective plugins', () => {
-    const scenarioPlugins = ['delegate', 'browser', 'email']
-    const agent = { plugins: ['delegate', 'files', 'web'] }
+describe('resolveRegressionExtensions', () => {
+  it('scenario mode uses scenario extensions as effective extensions', () => {
+    const scenarioExtensions = ['delegate', 'browser', 'email']
+    const agent = { tools: ['delegate', 'files', 'web'] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'scenario')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'scenario')
 
-    assert.deepEqual(result.effectivePlugins, ['delegate', 'browser', 'email'])
-    assert.deepEqual(result.missingPlugins, [])
+    assert.deepEqual(result.effectiveExtensions, ['delegate', 'browser', 'email'])
+    assert.deepEqual(result.missingExtensions, [])
   })
 
-  it('agent mode uses agent plugins and reports missing ones', () => {
-    const scenarioPlugins = ['delegate', 'browser', 'email']
-    const agent = { plugins: ['delegate', 'files', 'web'] }
+  it('agent mode uses agent extensions and reports missing ones', () => {
+    const scenarioExtensions = ['delegate', 'browser', 'email']
+    const agent = { tools: ['delegate', 'files', 'web'] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'agent')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'agent')
 
-    assert.deepEqual(result.effectivePlugins, ['delegate', 'files', 'web'])
-    assert.deepEqual(result.requiredPlugins, ['delegate', 'browser', 'email'])
+    assert.deepEqual(result.effectiveExtensions, ['delegate', 'files', 'web'])
+    assert.deepEqual(result.requiredExtensions, ['delegate', 'browser', 'email'])
     // 'delegate' is present (agent has it), 'browser' and 'email' are missing
-    assert.ok(result.missingPlugins.includes('browser'))
-    assert.ok(result.missingPlugins.includes('email'))
-    assert.ok(!result.missingPlugins.includes('delegate'))
+    assert.ok(result.missingExtensions.includes('browser'))
+    assert.ok(result.missingExtensions.includes('email'))
+    assert.ok(!result.missingExtensions.includes('delegate'))
   })
 
-  it('reports no missing plugins when agent has all required', () => {
-    const scenarioPlugins = ['delegate', 'browser']
-    const agent = { plugins: ['delegate', 'browser', 'email', 'files'] }
+  it('reports no missing extensions when agent has all required', () => {
+    const scenarioExtensions = ['delegate', 'browser']
+    const agent = { tools: ['delegate', 'browser', 'email', 'files'] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'agent')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'agent')
 
-    assert.deepEqual(result.missingPlugins, [])
-    assert.deepEqual(result.effectivePlugins, ['delegate', 'browser', 'email', 'files'])
+    assert.deepEqual(result.missingExtensions, [])
+    assert.deepEqual(result.effectiveExtensions, ['delegate', 'browser', 'email', 'files'])
   })
 
-  it('handles plugin aliases — web_search resolves to canonical web', () => {
+  it('handles extension aliases — web_search resolves to canonical web', () => {
     // 'web_search' is an alias for 'web'. When the scenario requires 'web_search',
     // canonicalization maps it to 'web'. If the agent has 'web', it should not
-    // appear in missingPlugins because expandPluginIds expands 'web' to include
+    // appear in missingExtensions because expandExtensionIds expands 'web' to include
     // all aliases.
-    const scenarioPlugins = ['web_search']
-    const agent = { plugins: ['web'] }
+    const scenarioExtensions = ['web_search']
+    const agent = { tools: ['web'] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'agent')
-    assert.deepEqual(result.missingPlugins, [])
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'agent')
+    assert.deepEqual(result.missingExtensions, [])
   })
 
-  it('handles alias in scenario mode — effectivePlugins preserves original strings', () => {
-    const scenarioPlugins = ['web_search', 'claude_code']
-    const agent = { plugins: [] }
+  it('handles alias in scenario mode — effectiveExtensions preserves original strings', () => {
+    const scenarioExtensions = ['web_search', 'claude_code']
+    const agent = { tools: [] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'scenario')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'scenario')
 
-    // In scenario mode, effectivePlugins comes from normalizePluginList(requiredPlugins)
+    // In scenario mode, effectiveExtensions comes from normalizeExtensionList(requiredExtensions)
     // which preserves original strings
-    assert.deepEqual(result.effectivePlugins, ['web_search', 'claude_code'])
-    assert.deepEqual(result.missingPlugins, [])
+    assert.deepEqual(result.effectiveExtensions, ['web_search', 'claude_code'])
+    assert.deepEqual(result.missingExtensions, [])
   })
 
-  it('empty agent plugins — all scenario plugins are missing', () => {
-    const scenarioPlugins = ['delegate', 'browser', 'web']
-    const agent = { plugins: [] }
+  it('empty agent extensions — all scenario extensions are missing', () => {
+    const scenarioExtensions = ['delegate', 'browser', 'web']
+    const agent = { tools: [] }
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'agent')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'agent')
 
-    assert.deepEqual(result.effectivePlugins, [])
-    assert.equal(result.missingPlugins.length, 3)
-    assert.ok(result.missingPlugins.includes('delegate'))
-    assert.ok(result.missingPlugins.includes('browser'))
-    assert.ok(result.missingPlugins.includes('web'))
+    assert.deepEqual(result.effectiveExtensions, [])
+    assert.equal(result.missingExtensions.length, 3)
+    assert.ok(result.missingExtensions.includes('delegate'))
+    assert.ok(result.missingExtensions.includes('browser'))
+    assert.ok(result.missingExtensions.includes('web'))
   })
 
-  it('undefined agent plugins — all scenario plugins are missing', () => {
-    const scenarioPlugins = ['delegate', 'browser']
+  it('undefined agent extensions — all scenario extensions are missing', () => {
+    const scenarioExtensions = ['delegate', 'browser']
     const agent: Record<string, unknown> = {}
 
-    const result = resolveRegressionPlugins(scenarioPlugins, agent, 'agent')
+    const result = resolveRegressionExtensions(scenarioExtensions, agent, 'agent')
 
-    assert.deepEqual(result.effectivePlugins, [])
-    assert.equal(result.missingPlugins.length, 2)
+    assert.deepEqual(result.effectiveExtensions, [])
+    assert.equal(result.missingExtensions.length, 2)
   })
 
-  it('requiredPlugins are canonicalized in both modes', () => {
-    const scenarioPlugins = ['claude_code', 'web_fetch']
+  it('requiredExtensions are canonicalized in both modes', () => {
+    const scenarioExtensions = ['claude_code', 'web_fetch']
 
-    const scenarioResult = resolveRegressionPlugins(scenarioPlugins, {}, 'scenario')
-    const agentResult = resolveRegressionPlugins(scenarioPlugins, { plugins: [] }, 'agent')
+    const scenarioResult = resolveRegressionExtensions(scenarioExtensions, {}, 'scenario')
+    const agentResult = resolveRegressionExtensions(scenarioExtensions, { tools: [] }, 'agent')
 
     // 'claude_code' → canonical 'delegate', 'web_fetch' → canonical 'web'
-    assert.deepEqual(scenarioResult.requiredPlugins, ['delegate', 'web'])
-    assert.deepEqual(agentResult.requiredPlugins, ['delegate', 'web'])
+    assert.deepEqual(scenarioResult.requiredExtensions, ['delegate', 'web'])
+    assert.deepEqual(agentResult.requiredExtensions, ['delegate', 'web'])
   })
 })
 
@@ -277,8 +277,8 @@ describe('AGENT_REGRESSION_SCENARIOS registry', () => {
         `scenario missing non-empty id`)
       assert.ok(typeof scenario.name === 'string' && scenario.name.length > 0,
         `scenario ${scenario.id} missing non-empty name`)
-      assert.ok(Array.isArray(scenario.plugins),
-        `scenario ${scenario.id} missing plugins array`)
+      assert.ok(Array.isArray(scenario.extensions),
+        `scenario ${scenario.id} missing extensions array`)
       assert.ok(typeof scenario.run === 'function',
         `scenario ${scenario.id} missing run function`)
     }
@@ -296,14 +296,14 @@ describe('AGENT_REGRESSION_SCENARIOS registry', () => {
     assert.equal(unique.size, ids.length, 'duplicate scenario IDs detected')
   })
 
-  it('every scenario declares at least an empty plugins array', () => {
+  it('every scenario declares at least an empty extensions array', () => {
     for (const scenario of AGENT_REGRESSION_SCENARIOS) {
-      assert.ok(Array.isArray(scenario.plugins),
-        `scenario ${scenario.id}: plugins should be an array`)
-      // Each plugin entry should be a non-empty string
-      for (const plugin of scenario.plugins) {
-        assert.ok(typeof plugin === 'string' && plugin.trim().length > 0,
-          `scenario ${scenario.id}: plugin entries must be non-empty strings`)
+      assert.ok(Array.isArray(scenario.extensions),
+        `scenario ${scenario.id}: extensions should be an array`)
+      // Each extension entry should be a non-empty string
+      for (const ext of scenario.extensions) {
+        assert.ok(typeof ext === 'string' && ext.trim().length > 0,
+          `scenario ${scenario.id}: extension entries must be non-empty strings`)
       }
     }
   })

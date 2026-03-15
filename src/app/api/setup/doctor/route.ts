@@ -187,12 +187,12 @@ export async function GET(req: Request) {
     )
   }
 
-  const pluginSettings = (settings?.pluginSettings && typeof settings.pluginSettings === 'object')
-    ? settings.pluginSettings as Record<string, Record<string, unknown>>
+  const extensionSettings = (settings?.extensionSettings && typeof settings.extensionSettings === 'object')
+    ? settings.extensionSettings as Record<string, Record<string, unknown>>
     : {}
   const googleWorkspaceSettings = (
-    (pluginSettings.google_workspace && typeof pluginSettings.google_workspace === 'object')
-      ? pluginSettings.google_workspace
+    (extensionSettings.google_workspace && typeof extensionSettings.google_workspace === 'object')
+      ? extensionSettings.google_workspace
       : null
   ) as Record<string, unknown> | null
   const googleWorkspaceConfigured = Boolean(
@@ -206,11 +206,11 @@ export async function GET(req: Request) {
   pushCheck(
     checks,
     'google-workspace-auth',
-    'Google Workspace plugin auth',
+    'Google Workspace extension auth',
     googleWorkspaceConfigured ? 'pass' : 'warn',
     googleWorkspaceConfigured
-      ? 'Google Workspace plugin settings include auth material.'
-      : 'Google Workspace plugin auth is not configured yet (optional unless you plan to use the Google Workspace CLI tool).',
+      ? 'Google Workspace extension settings include auth material.'
+      : 'Google Workspace extension auth is not configured yet (optional unless you plan to use the Google Workspace CLI tool).',
   )
 
   const docker = detectDocker()

@@ -26,20 +26,10 @@ describe('module exports', () => {
   })
 
   it('primitive tool builders are exported', async () => {
-    const document = await import('./document')
-    const extract = await import('./extract')
-    const table = await import('./table')
-    const crawl = await import('./crawl')
     const mailbox = await import('./mailbox')
     const humanLoop = await import('./human-loop')
-    const sandbox = await import('./sandbox')
-    assert.equal(typeof document.buildDocumentTools, 'function')
-    assert.equal(typeof extract.buildExtractTools, 'function')
-    assert.equal(typeof table.buildTableTools, 'function')
-    assert.equal(typeof crawl.buildCrawlTools, 'function')
     assert.equal(typeof mailbox.buildMailboxTools, 'function')
     assert.equal(typeof humanLoop.buildHumanLoopTools, 'function')
-    assert.equal(typeof sandbox.buildSandboxTools, 'function')
   })
 })
 
@@ -75,13 +65,13 @@ describe('buildSessionTools signature', () => {
     assert.ok(buildSessionTools.length >= 2, 'buildSessionTools should accept at least 2 params')
   })
 
-  it('runs beforeToolCall hooks before invoking plugin tools', async () => {
+  it('runs beforeToolCall hooks before invoking extension tools', async () => {
     const { buildSessionTools } = await import('./index')
-    const { getPluginManager } = await import('../plugins')
-    const pluginId = `tool_wrapper_${Date.now()}`
-    const toolName = `${pluginId}_echo`
+    const { getExtensionManager } = await import('../extensions')
+    const extensionId = `tool_wrapper_${Date.now()}`
+    const toolName = `${extensionId}_echo`
 
-    getPluginManager().registerBuiltin(pluginId, {
+    getExtensionManager().registerBuiltin(extensionId, {
       name: 'Tool Wrapper Hook Test',
       hooks: {
         beforeToolCall: ({ input }) => {
@@ -106,13 +96,13 @@ describe('buildSessionTools signature', () => {
       ],
     })
 
-    const built = await buildSessionTools(process.cwd(), [pluginId], {
+    const built = await buildSessionTools(process.cwd(), [extensionId], {
       agentId: 'agent-test',
       sessionId: 'session-test',
       runId: 'run-test',
     })
     const wrapped = built.tools.find((entry) => entry.name === toolName)
-    assert.ok(wrapped, 'plugin tool should be built')
+    assert.ok(wrapped, 'extension tool should be built')
 
     const ok = await wrapped!.invoke({ message: 'hello' })
     assert.equal(ok, 'hello:patched')
@@ -125,25 +115,10 @@ describe('buildSessionTools signature', () => {
     await built.cleanup()
   })
 
-  it('sandbox builder exposes the local Node/Docker sandbox tools', async () => {
-    const { buildSandboxTools } = await import('./sandbox')
-    const bctx: import('./context').ToolBuildContext = {
-      cwd: process.cwd(),
-      ctx: { sessionId: 'sandbox-test' },
-      hasPlugin: (name) => name === 'sandbox',
-      hasTool: (name) => name === 'sandbox',
-      cleanupFns: [],
-      commandTimeoutMs: 1_000,
-      claudeTimeoutMs: 1_000,
-      cliProcessTimeoutMs: 1_000,
-      persistDelegateResumeId: () => {},
-      readStoredDelegateResumeId: () => null,
-      resolveCurrentSession: () => null,
-      activePlugins: ['sandbox'],
-    }
-
-    const tools = buildSandboxTools(bctx).map((tool) => tool.name).sort()
-    assert.deepEqual(tools, ['sandbox_exec', 'sandbox_list_runtimes'])
+  it('sandbox execution functions are still importable for shell integration', async () => {
+    const sandbox = await import('./sandbox')
+    assert.equal(typeof sandbox.executeSandboxExec, 'function')
+    assert.equal(typeof sandbox.executeListRuntimes, 'function')
   })
 })
 
@@ -161,7 +136,7 @@ describe('memory tool knowledge actions (source verification)', () => {
       'utf-8',
     )
 
-    const enumMatch = src.match(/action:\s*\{\s*type:\s*'string',\s*enum:\s*\[([^\]]+)\]/s)
+    const enumMatch = src.match(/action:[\s\S]*?\{[\s\S]*?type:[\s\S]*?'string',[\s\S]*?enum:[\s\S]*?\[([^\]]+)\]/)
     assert.ok(enumMatch, 'Should find the action enum in the memory tool schema')
 
     const enumBody = enumMatch![1]
@@ -181,7 +156,7 @@ describe('memory tool knowledge actions (source verification)', () => {
       'utf-8',
     )
 
-    const enumMatch = src.match(/action:\s*\{\s*type:\s*'string',\s*enum:\s*\[([^\]]+)\]/s)
+    const enumMatch = src.match(/action:[\s\S]*?\{[\s\S]*?type:[\s\S]*?'string',[\s\S]*?enum:[\s\S]*?\[([^\]]+)\]/)
     assert.ok(enumMatch)
     const enumBody = enumMatch![1]
 

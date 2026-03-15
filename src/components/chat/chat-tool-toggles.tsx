@@ -9,19 +9,21 @@ import type { Session } from '@/types'
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip'
 import { getEnabledToolIds, getEnabledExtensionIds } from '@/lib/capability-selection'
 
-const TOOL_GROUPS: { label: string; tools: ToolDefinition[] }[] = [
-  { label: 'Tools', tools: AVAILABLE_TOOLS },
-  { label: 'Platform Tools', tools: PLATFORM_TOOLS },
-]
-
-const TOTAL_TOOL_COUNT = AVAILABLE_TOOLS.length + PLATFORM_TOOLS.length
-
 interface Props {
   session: Session
 }
 
+interface ExtensionToolInfo {
+  extensionId: string
+  toolName: string
+  label: string
+  description: string
+}
+
 export function ChatToolToggles({ session }: Props) {
   const [open, setOpen] = useState(false)
+  const [enabledExtensionIds, setEnabledExtensionIds] = useState<Set<string> | null>(null)
+  const [externalTools, setExternalTools] = useState<ExtensionToolInfo[]>([])
   const ref = useRef<HTMLDivElement>(null)
   const refreshSession = useAppStore((s) => s.refreshSession)
   const agents = useAppStore((s) => s.agents)
@@ -33,6 +35,16 @@ export function ChatToolToggles({ session }: Props) {
 
   // Agent's skill IDs
   const agentSkillIds: string[] = agent?.skillIds || []
+
+  // Fetch enabled extensions on mount
+  useEffect(() => {
+    api<{ enabledExtensionIds: string[]; externalTools: ExtensionToolInfo[] }>('GET', '/extensions/builtins')
+      .then((res) => {
+        if (res?.enabledExtensionIds) setEnabledExtensionIds(new Set(res.enabledExtensionIds))
+        if (res?.externalTools) setExternalTools(res.externalTools)
+      })
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -54,8 +66,33 @@ export function ChatToolToggles({ session }: Props) {
     await refreshSession(session.id)
   }
 
-  const enabledCount = sessionTools.length
-  const totalCount = TOTAL_TOOL_COUNT
+  /** Check if a tool's backing extension is enabled */
+  const isExtensionEnabled = (tool: ToolDefinition): boolean => {
+    if (!tool.extensionId) return true // core tool, always available
+    if (!enabledExtensionIds) return true // still loading, assume available
+    return enabledExtensionIds.has(tool.extensionId)
+  }
+
+  const filteredAvailable = AVAILABLE_TOOLS
+  const filteredPlatform = PLATFORM_TOOLS
+
+  // Convert external extension tools into ToolDefinition-like items for display
+  const extensionToolDefs: ToolDefinition[] = externalTools.map((et) => ({
+    id: et.toolName,
+    label: et.label,
+    description: et.description,
+    extensionId: et.extensionId,
+  }))
+
+  const groups: { label: string; tools: ToolDefinition[] }[] = [
+    { label: 'Tools', tools: filteredAvailable },
+    { label: 'Platform Tools', tools: filteredPlatform },
+    ...(extensionToolDefs.length > 0 ? [{ label: 'Extension Tools', tools: extensionToolDefs }] : []),
+  ]
+
+  const allVisibleTools = groups.flatMap((g) => g.tools)
+  const totalCount = allVisibleTools.length
+  const enabledCount = sessionTools.filter((id) => allVisibleTools.some((t) => t.id === id)).length
 
   return (
     <div className="relative" ref={ref}>
@@ -76,36 +113,40 @@ export function ChatToolToggles({ session }: Props) {
         <div className="absolute top-full left-0 mt-1.5 w-[260px] max-h-[420px] overflow-y-auto rounded-[12px] border border-white/[0.08] shadow-xl z-[120] overflow-hidden"
           style={{ animation: 'fade-in 0.15s ease', backgroundColor: '#171a2b' }}>
          <TooltipProvider delayDuration={300}>
-          {TOOL_GROUPS.map((group, gi) => (
-            <div key={group.label} className={`px-3 pb-1 ${gi === 0 ? 'pt-3' : 'pt-1 border-t border-white/[0.04]'}`}>
-              <p className="text-[10px] font-600 text-text-3/60 uppercase tracking-wider mb-2">{group.label}</p>
-              {group.tools.map((tool) => {
-                const enabled = sessionTools.includes(tool.id)
-                return (
-                  <Tooltip key={tool.id}>
-                    <TooltipTrigger asChild>
-                      <label className="flex items-center gap-2.5 py-1.5 cursor-pointer">
-                        <div
-                          onClick={() => toggleTool(tool.id)}
-                          className={`w-8 h-[18px] rounded-full transition-all duration-200 relative cursor-pointer shrink-0
-                            ${enabled ? 'bg-accent-bright' : 'bg-white/[0.12]'}`}
-                        >
-                          <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all duration-200
-                            ${enabled ? 'left-[16px]' : 'left-[2px]'}`} />
-                        </div>
-                        <span className={`text-[12px] ${enabled ? 'text-text-2' : 'text-text-3/70'}`}>
-                          {tool.label}
-                        </span>
-                      </label>
-                    </TooltipTrigger>
-                    <TooltipContent side="right" sideOffset={8} className="max-w-[200px] bg-[#1e2140] text-text-2 border border-white/[0.08] text-[11px] leading-snug px-2.5 py-1.5">
-                      {tool.description}
-                    </TooltipContent>
-                  </Tooltip>
-                )
-              })}
-            </div>
-          ))}
+          {groups.map((group, gi) => {
+            if (group.tools.length === 0) return null
+            return (
+              <div key={group.label} className={`px-3 pb-1 ${gi === 0 ? 'pt-3' : 'pt-1 border-t border-white/[0.04]'}`}>
+                <p className="text-[10px] font-600 text-text-3/60 uppercase tracking-wider mb-2">{group.label}</p>
+                {group.tools.map((tool) => {
+                  const extDisabled = !isExtensionEnabled(tool)
+                  const enabled = !extDisabled && sessionTools.includes(tool.id)
+                  return (
+                    <Tooltip key={tool.id}>
+                      <TooltipTrigger asChild>
+                        <label className={`flex items-center gap-2.5 py-1.5 ${extDisabled ? 'cursor-not-allowed opacity-40' : 'cursor-pointer'}`}>
+                          <div
+                            onClick={() => !extDisabled && toggleTool(tool.id)}
+                            className={`w-8 h-[18px] rounded-full transition-all duration-200 relative shrink-0
+                              ${extDisabled ? 'bg-white/[0.04] cursor-not-allowed' : enabled ? 'bg-accent-bright cursor-pointer' : 'bg-white/[0.12] cursor-pointer'}`}
+                          >
+                            <div className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white transition-all duration-200
+                              ${enabled ? 'left-[16px]' : 'left-[2px]'}`} />
+                          </div>
+                          <span className={`text-[12px] ${extDisabled ? 'text-text-3/40' : enabled ? 'text-text-2' : 'text-text-3/70'}`}>
+                            {tool.label}
+                          </span>
+                        </label>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" sideOffset={8} className="max-w-[200px] bg-[#1e2140] text-text-2 border border-white/[0.08] text-[11px] leading-snug px-2.5 py-1.5">
+                        {extDisabled ? 'Enable in Extensions page' : tool.description}
+                      </TooltipContent>
+                    </Tooltip>
+                  )
+                })}
+              </div>
+            )
+          })}
 
           {agentSkillIds.length > 0 && (
             <div className="px-3 pb-2 pt-1 border-t border-white/[0.04]">

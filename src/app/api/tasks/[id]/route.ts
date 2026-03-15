@@ -8,14 +8,14 @@ import { createNotification } from '@/lib/server/create-notification'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { dispatchWake } from '@/lib/server/runtime/wake-dispatcher'
 import { validateDag, cascadeUnblock } from '@/lib/server/dag-validation'
-import { getPluginManager } from '@/lib/server/plugins'
+import { getExtensionManager } from '@/lib/server/extensions'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import {
   applyTaskPatch,
 } from '@/lib/server/tasks/task-service'
 import type { BoardTask } from '@/types'
 import { ensureMissionForTask, enrichTaskWithMissionSummary, noteMissionTaskFinished } from '@/lib/server/missions/mission-service'
-import '@/lib/server/builtin-plugins'
+import '@/lib/server/builtin-extensions'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   // Keep completed queue integrity even if daemon is not running.
@@ -105,11 +105,11 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     })
     
     if (tasks[id].status === 'completed') {
-      const agentPlugins = tasks[id].agentId ? getEnabledCapabilityIds(loadAgents()[tasks[id].agentId]) : []
-      getPluginManager().runHook(
+      const agentExtensions = tasks[id].agentId ? getEnabledCapabilityIds(loadAgents()[tasks[id].agentId]) : []
+      getExtensionManager().runHook(
         'onTaskComplete',
         { taskId: id, result: tasks[id].result },
-        { enabledIds: agentPlugins },
+        { enabledIds: agentExtensions },
       )
     }
 

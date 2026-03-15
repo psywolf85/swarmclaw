@@ -17,7 +17,7 @@ function makeAgent(overrides: Partial<Agent> = {}): Agent {
     systemPrompt: '',
     provider: 'openai',
     model: 'gpt-5',
-    plugins: ['memory'],
+    extensions: ['memory'],
     createdAt: 1,
     updatedAt: 1,
     ...overrides,
@@ -36,7 +36,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     messages: [],
     createdAt: 1,
     lastActiveAt: 1,
-    plugins: ['memory'],
+    extensions: ['memory'],
     ...overrides,
   } as Session
 }
