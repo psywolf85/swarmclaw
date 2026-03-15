@@ -20,6 +20,10 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
  <tr>
   <td align="center"><strong>Works<br>with</strong></td>
   <td align="center"><img src="doc/assets/logos/openclaw.svg" width="32" alt="OpenClaw"><br><sub>OpenClaw</sub></td>
+  <td align="center"><img src="doc/assets/logos/claude-code.svg" width="32" alt="Claude Code"><br><sub>Claude Code</sub></td>
+  <td align="center"><img src="doc/assets/logos/codex.svg" width="32" alt="Codex"><br><sub>Codex</sub></td>
+  <td align="center"><img src="doc/assets/logos/gemini-cli.svg" width="32" alt="Gemini CLI"><br><sub>Gemini CLI</sub></td>
+  <td align="center"><img src="doc/assets/logos/opencode.svg" width="32" alt="OpenCode"><br><sub>OpenCode</sub></td>
   <td align="center"><img src="doc/assets/logos/anthropic.svg" width="32" alt="Anthropic"><br><sub>Anthropic</sub></td>
   <td align="center"><img src="doc/assets/logos/openai.svg" width="32" alt="OpenAI"><br><sub>OpenAI</sub></td>
   <td align="center"><img src="doc/assets/logos/google.svg" width="32" alt="Google Gemini"><br><sub>Gemini</sub></td>
@@ -35,6 +39,141 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
  </tr>
 </table>
 </div>
+
+## Use Cases
+
+SwarmClaw is a general-purpose agent runtime. Here are some of the ways people use it.
+
+---
+
+### Personal Assistant
+
+A single agent with memory, web access, scheduling, and file tools — your always-available copilot.
+
+> *"Remember that I prefer window seats. Book research time every Monday at 9am. Summarize the articles I saved last week."*
+
+- Remembers preferences, contacts, and decisions across conversations
+- Schedules reminders, recurring check-ins, and follow-ups
+- Researches, drafts, plans, and manages your day-to-day
+- Bridges to WhatsApp or Telegram so you can message your agent on the go
+
+**Starter kit:** Personal Assistant &rarr; 1 agent, ready in under a minute.
+
+---
+
+### Virtual Company
+
+Build a full org chart of specialized agents that collaborate, delegate, and report up — a lightweight simulation of a real company.
+
+| Role | Agent | Responsibilities |
+|------|-------|-----------------|
+| **CEO** | Strategist | Sets objectives, reviews progress, delegates to department heads |
+| **CTO** | Builder | Owns technical execution, code reviews, architecture decisions |
+| **CFO** | Analyst | Tracks budgets, monitors token spend, produces cost reports |
+| **CMO** | Marketer | Drafts campaigns, manages content calendar, monitors channels |
+| **COO** | Operator | Coordinates cross-agent work, manages schedules, unblocks tasks |
+
+- Each agent has its own provider, model, personality (soul), and tool access
+- The CEO delegates via the task board; department heads pick up work autonomously
+- Heartbeat loops let agents check in on their own, surface blockers, and request approvals
+- Memory means every agent remembers past decisions and context
+- Connect the CMO to Discord/Slack so it can post updates directly
+
+---
+
+### Development Team
+
+A squad of agents mirroring a real engineering team — planning, building, reviewing, and testing in parallel.
+
+| Role | Agent | Tools |
+|------|-------|-------|
+| **Lead** | Architect | Delegation, tasks, schedules, missions |
+| **Dev** | Builder | Shell, files, Claude Code / Codex / OpenCode |
+| **QA** | Tester | Shell, browser, files, web search |
+| **Designer** | Creative | Image generation, browser, web search, files |
+| **Reviewer** | Critic | Files, web search, memory |
+
+- The Lead creates missions and breaks them into tasks on the board
+- Dev agents pick up tasks and delegate to Claude Code, Codex, or OpenCode for implementation
+- QA runs tests, takes screenshots, and files bugs back on the task board
+- The Reviewer audits PRs and flags regressions
+- Structured Sessions let you run a bounded sprint — plan → build → test → review — with durable transcripts
+
+**Starter kit:** Builder Studio &rarr; pre-configured Builder + Reviewer pair.
+
+---
+
+### Research Bureau
+
+Multiple research agents working in parallel, each with different search strategies, then synthesizing findings.
+
+- Spawn a swarm of researchers across different topics or sources
+- Each agent searches, fetches, reads, and summarizes independently
+- A lead agent collects outputs into a structured report with citations
+- Memory stores findings for future reference across conversations
+- Schedule recurring research runs (daily digest, weekly competitive scan)
+
+**Starter kit:** Research Copilot &rarr; 1 focused researcher, scale up with subagents.
+
+---
+
+### OpenClaw Fleet
+
+Distribute autonomous agents across multiple machines using OpenClaw gateways — one control plane, many runtimes.
+
+- Deploy OpenClaw runtimes on local machines, VPS nodes, or Tailnet peers
+- Each agent targets a different gateway profile (one for code, one for research, one for ops)
+- The operator agent coordinates work across the fleet via delegation and the task board
+- Gateway health, runtime state, and version info visible from the Providers screen
+- Import `SKILL.md` files from any OpenClaw instance into SwarmClaw's skill library
+
+**Starter kit:** OpenClaw Fleet &rarr; Operator + Remote Builder + Remote Researcher.
+
+---
+
+### Content Studio
+
+A writer/editor pipeline for blogs, docs, newsletters, marketing copy, or social posts.
+
+- **Writer** drafts content based on briefs, outlines, and style guides
+- **Editor** tightens structure, fixes tone, and flags missing evidence
+- Schedule daily or weekly content runs with automatic handoff
+- Connect to Slack or Discord to publish directly from the pipeline
+- Image generation agent produces visuals alongside copy
+
+**Starter kit:** Content Studio &rarr; Writer + Editor pair.
+
+---
+
+### Customer Support Desk
+
+Agents answering questions on every platform your users are on, with shared memory and escalation paths.
+
+- Bridge a support agent to Discord, Slack, Telegram, WhatsApp, and Teams simultaneously
+- The agent remembers each sender's history, preferences, and open issues
+- Unanswerable questions escalate via `ask_human` or get routed to a specialist agent
+- Schedule a nightly agent to review open threads, follow up on stale conversations, and summarize trends
+- Skills let you codify common support workflows so the agent improves over time
+
+---
+
+### Crypto Operations
+
+Agents with linked wallets for on-chain work — monitoring, trading, signing, and reporting.
+
+- Attach Solana or Ethereum wallets to any agent
+- Agents can check balances, simulate transactions, and execute swaps
+- Approval gates require human sign-off before spending above a threshold
+- Schedule periodic balance checks or price-alert sweeps
+- The operator agent coordinates across multiple wallet-holding agents
+
+---
+
+### Mix and Match
+
+These aren't exclusive templates — they're patterns you combine. A virtual company can have a dev team inside it. A personal assistant can spin up a research swarm on demand. An OpenClaw fleet can run your customer support desk.
+
+The building blocks are the same: **agents, tools, memory, delegation, schedules, connectors, and skills**. SwarmClaw just gives you the control plane to wire them together.
 
 ## Release Notes
 
