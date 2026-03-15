@@ -68,6 +68,8 @@ interface RuntimeState {
   deferredDrainTimers: Map<string, ReturnType<typeof setTimeout>>
   activityLeaseRenewTimers: Map<string, ReturnType<typeof setInterval>>
   externalSessionHolds: Map<string, number>
+  externalHoldTimers: Map<string, ReturnType<typeof setTimeout>>
+  drainDepth: Map<string, number>
   lastQueuedAt: number
 }
 
@@ -75,6 +77,8 @@ const MAX_RECENT_RUNS = 500
 const COLLECT_COALESCE_WINDOW_MS = 1500
 const SHARED_ACTIVITY_LEASE_TTL_MS = 15_000
 const SHARED_ACTIVITY_LEASE_RENEW_MS = 5_000
+const EXTERNAL_HOLD_TTL_MS = 60_000
+const MAX_DRAIN_DEPTH = 25
 const HEARTBEAT_BUSY_RETRY_MS = 1_000
 const STALE_QUEUED_RUN_MS = 15_000
 const SHARED_ACTIVITY_LEASE_OWNER = `session-run:${process.pid}:${genId(6)}`
@@ -87,6 +91,8 @@ const state: RuntimeState = hmrSingleton<RuntimeState>('__swarmclaw_session_run_
   deferredDrainTimers: new Map<string, ReturnType<typeof setTimeout>>(),
   activityLeaseRenewTimers: new Map<string, ReturnType<typeof setInterval>>(),
   externalSessionHolds: new Map<string, number>(),
+  externalHoldTimers: new Map<string, ReturnType<typeof setTimeout>>(),
+  drainDepth: new Map<string, number>(),
   lastQueuedAt: 0,
 }))
 const recoveryState = hmrSingleton('__swarmclaw_session_run_recovery__', () => ({ completed: false }))
@@ -100,6 +106,8 @@ if (!state.promises) state.promises = new Map<string, Promise<ExecuteChatTurnRes
 if (!state.deferredDrainTimers) state.deferredDrainTimers = new Map<string, ReturnType<typeof setTimeout>>()
 if (!state.activityLeaseRenewTimers) state.activityLeaseRenewTimers = new Map<string, ReturnType<typeof setInterval>>()
 if (!state.externalSessionHolds) state.externalSessionHolds = new Map<string, number>()
+if (!state.externalHoldTimers) state.externalHoldTimers = new Map<string, ReturnType<typeof setTimeout>>()
+if (!state.drainDepth) state.drainDepth = new Map<string, number>()
 if (typeof state.lastQueuedAt !== 'number') state.lastQueuedAt = 0
 
 function now() {
@@ -289,14 +297,27 @@ export function acquireExternalSessionExecutionHold(sessionId: string): () => vo
   const current = state.externalSessionHolds.get(sessionId) || 0
   state.externalSessionHolds.set(sessionId, current + 1)
   let released = false
-  return () => {
+  const holdKey = `${sessionId}:${current + 1}`
+  const ttlTimer = setTimeout(() => {
+    if (released) return
+    log.warn('session-run', 'External hold auto-released after TTL', { sessionId, holdKey, ttlMs: EXTERNAL_HOLD_TTL_MS })
+    release()
+  }, EXTERNAL_HOLD_TTL_MS)
+  state.externalHoldTimers.set(holdKey, ttlTimer)
+  const release = () => {
     if (released) return
     released = true
+    const timer = state.externalHoldTimers.get(holdKey)
+    if (timer) {
+      clearTimeout(timer)
+      state.externalHoldTimers.delete(holdKey)
+    }
     const next = (state.externalSessionHolds.get(sessionId) || 1) - 1
     if (next > 0) state.externalSessionHolds.set(sessionId, next)
     else state.externalSessionHolds.delete(sessionId)
     void drainExecution(executionKeyForSession(sessionId))
   }
+  return release
 }
 
 function queueForExecution(executionKey: string): QueueEntry[] {
@@ -680,6 +701,15 @@ export function cancelAllRuns(reason = 'Cancelled'): { cancelledQueued: number; 
 }
 
 async function drainExecution(executionKey: string): Promise<void> {
+  const depth = (state.drainDepth.get(executionKey) || 0) + 1
+  state.drainDepth.set(executionKey, depth)
+  if (depth > MAX_DRAIN_DEPTH) {
+    log.error('session-run', 'Drain recursion depth exceeded, deferring', { executionKey, depth, max: MAX_DRAIN_DEPTH })
+    state.drainDepth.delete(executionKey)
+    scheduleDeferredDrain(executionKey, 500)
+    return
+  }
+  try {
   if (state.runningByExecution.has(executionKey)) return
   const q = queueForExecution(executionKey)
   // Priority: user (non-heartbeat) runs go first. If a heartbeat is queued
@@ -857,12 +887,15 @@ async function drainExecution(executionKey: string): Promise<void> {
               status: next.run.status,
             })
           })
-          .catch(() => {
-            // Mission continuation is best-effort only.
+          .catch((err: unknown) => {
+            log.warn('session-run', 'Mission tick failed', { missionId: finishedMissionId, runId: next.run.id, error: errorMessage(err) })
           })
       })
     }
     void drainExecution(executionKey)
+  }
+  } finally {
+    state.drainDepth.delete(executionKey)
   }
 }
 

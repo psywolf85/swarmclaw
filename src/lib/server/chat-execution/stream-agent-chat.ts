@@ -84,6 +84,10 @@ import {
   resolveToolAction,
   shouldTerminateOnSuccessfulMemoryMutation,
 } from '@/lib/server/chat-execution/memory-mutation-tools'
+import {
+  classifyDirectMemoryIntent,
+  type DirectMemoryIntentClassifierInput,
+} from '@/lib/server/chat-execution/direct-memory-intent'
 import { LangGraphToolEventTracker } from '@/lib/server/chat-execution/tool-event-tracker'
 
 // LangGraph's streamEvents leaves dangling internal promises when the for-await
@@ -120,6 +124,29 @@ export {
   shouldTerminateOnSuccessfulMemoryMutation,
   resolveFinalStreamResponseText,
   resolveContinuationAssistantText,
+}
+
+export async function resolveExclusiveMemoryWriteTerminalAllowance(params: {
+  sessionId: string
+  agentId?: string | null
+  message: string
+  classifyMemoryIntent?: (input: DirectMemoryIntentClassifierInput) => Promise<Awaited<ReturnType<typeof classifyDirectMemoryIntent>>>
+}): Promise<boolean> {
+  try {
+    const classifier = params.classifyMemoryIntent || classifyDirectMemoryIntent
+    const directMemoryIntent = await classifier({
+      sessionId: params.sessionId,
+      agentId: params.agentId || null,
+      message: params.message,
+      currentResponse: '',
+      currentError: null,
+      toolEvents: [],
+    })
+    return (directMemoryIntent?.action === 'store' || directMemoryIntent?.action === 'update')
+      && directMemoryIntent.exclusiveCompletion === true
+  } catch {
+    return false
+  }
 }
 
 const TOOL_SUMMARY_SHORT_RESPONSE_EXEMPT_TOOLS = new Set([
@@ -456,6 +483,7 @@ function buildAgenticExecutionPolicy(opts: {
     parts.push(
       '## Attachments',
       'User attachments (images, files, PDFs) are visible in this thread. Inspect attachment content before claiming it is unavailable. Extract identifiers from attachments and use enabled tools to continue.',
+      'If an attachment is already present inline, inspect that attachment directly. Do not open /api/uploads, localhost, or file:// copies of the same attachment in the browser just to view it.',
     )
   }
 
@@ -471,6 +499,8 @@ function buildAgenticExecutionPolicy(opts: {
       : 'For direct user chats, always send a visible reply. Never answer with control tokens like NO_MESSAGE or HEARTBEAT_OK unless this is an explicit heartbeat poll.',
     'Execute by default — only confirm on high-risk actions.',
     'If a tool errors, retry or explain the blocker. Never claim success without evidence.',
+    'When assessing the platform, repo, runtime, or implementation status, inspect the relevant files, logs, or state first. Do not claim a feature is missing, empty, or implemented unless you actually observed evidence for that claim in this run.',
+    'If the user explicitly asks for one exact literal final response, token, phrase, or single line, treat that as a hard output contract. After the work succeeds, reply with exactly that literal and nothing else.',
     'Keep responses concise. Bullet points over prose. After file operations, confirm the result briefly (path and status) without echoing the full file contents.',
     'Do not end every reply with a question. Only ask when a specific missing detail blocks progress. When a task is done, state the result and stop.',
     opts.responseStyle === 'concise'
@@ -756,6 +786,23 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       if (awarenessBlock) promptParts.push(awarenessBlock)
     } catch {
       // If agent registry fails, continue without blocking the run.
+    }
+  }
+
+  // Inject situational awareness block (active tasks, schedules, failures, mission)
+  if (session.agentId) {
+    try {
+      const { buildSituationalAwarenessBlock } = await import(
+        '@/lib/server/chat-execution/situational-awareness'
+      )
+      const saBlock = buildSituationalAwarenessBlock({
+        agentId: session.agentId,
+        sessionId: session.id,
+        missionId: session.missionId || null,
+      })
+      if (saBlock) promptParts.push(saBlock)
+    } catch {
+      // Non-critical — continue without situational awareness
     }
   }
 
@@ -1064,6 +1111,24 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     // Context manager failure — continue with recent history
   }
 
+  // Context state awareness: let the agent know when messages have been dropped
+  const droppedByWindow = postClearHistory.length - recentHistory.length
+  const droppedByCompaction = recentHistory.length - effectiveHistory.length
+  if (droppedByWindow > 0 || droppedByCompaction > 0) {
+    const contextNote = [
+      '## Context State',
+      `This conversation has ${history.length} total messages. You can see the most recent ${effectiveHistory.length}.`,
+    ]
+    if (droppedByWindow > 0) {
+      contextNote.push(`${droppedByWindow} older messages were dropped by the history window.`)
+    }
+    if (droppedByCompaction > 0) {
+      contextNote.push(`${droppedByCompaction} messages were auto-compacted.`)
+    }
+    contextNote.push('Key decisions from dropped context may be missing. If uncertain, use memory tools to check.')
+    prompt += '\n\n' + contextNote.join(' ')
+  }
+
   const langchainMessages: Array<HumanMessage | AIMessage> = []
   for (const m of effectiveHistory) {
     if (m.role === 'user') {
@@ -1294,6 +1359,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   let loopDetectionTriggered: LoopDetectionResult | null = null
   let terminalToolBoundary: 'memory_write' | 'durable_wait' | 'context_compaction' | null = null
   let terminalToolResponse = ''
+  let memoryWriteTerminalAllowed: boolean | null = null
 
   try {
   const maxIterations = MAX_AUTO_CONTINUES + MAX_TRANSIENT_RETRIES + MAX_REQUIRED_TOOL_CONTINUES + MAX_MEMORY_WRITE_FOLLOWTHROUGHS + MAX_EXECUTION_KICKOFF_FOLLOWTHROUGHS + MAX_EXECUTION_FOLLOWTHROUGHS + MAX_DELIVERABLE_FOLLOWTHROUGHS + MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS + MAX_TOOL_ERROR_FOLLOWTHROUGHS + MAX_TOOL_SUMMARY_RETRIES
@@ -1574,9 +1640,24 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
               toolName,
               toolInput: event.data?.input,
               toolOutput: outputStr || '',
+              allowMemoryWriteTerminal: terminalToolBoundary === 'memory_write' ? memoryWriteTerminalAllowed !== false : undefined,
             })
             if (toolBoundary) {
               if (toolBoundary.kind === 'memory_write') {
+                if (memoryWriteTerminalAllowed === null) {
+                  memoryWriteTerminalAllowed = await resolveExclusiveMemoryWriteTerminalAllowance({
+                    sessionId: session.id,
+                    agentId: session.agentId || null,
+                    message,
+                  })
+                }
+                if (!memoryWriteTerminalAllowed) {
+                  logExecution(session.id, 'decision', 'Successful memory write treated as intermediate evidence; continuing the turn.', {
+                    agentId: session.agentId,
+                    detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind },
+                  })
+                  continue
+                }
                 const naturalResponse = (toolBoundary.responseText || '').trim() || 'I\'ll remember that.'
                 fullText = naturalResponse
                 iterationText = naturalResponse

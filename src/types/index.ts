@@ -1248,6 +1248,7 @@ export interface ClaudeSkill {
 
 export type ScheduleType = 'cron' | 'interval' | 'once'
 export type ScheduleStatus = 'active' | 'paused' | 'completed' | 'failed' | 'archived'
+export type ScheduleTaskMode = 'task' | 'wake_only' | 'protocol'
 
 export interface Schedule {
   id: string
@@ -1255,10 +1256,16 @@ export interface Schedule {
   agentId: string
   projectId?: string
   taskPrompt: string
-  /** 'task' (default) creates a board task; 'wake_only' just wakes the agent with a message */
-  taskMode?: 'task' | 'wake_only'
+  /** 'task' creates a board task, 'wake_only' just wakes the agent, and 'protocol' launches a structured session run. */
+  taskMode?: ScheduleTaskMode
   /** Wake message sent to agent when taskMode is 'wake_only' */
   message?: string
+  /** Structured session template launched when taskMode is 'protocol'. */
+  protocolTemplateId?: string | null
+  protocolParticipantAgentIds?: string[]
+  protocolFacilitatorAgentId?: string | null
+  protocolObserverAgentIds?: string[]
+  protocolConfig?: Record<string, unknown> | null
   scheduleType: ScheduleType
   action?: string
   path?: string
@@ -1511,7 +1518,7 @@ export interface MemoryEntry {
 }
 
 export type SessionType = 'human'
-export type AppView = 'home' | 'agents' | 'inbox' | 'chatrooms' | 'schedules' | 'memory' | 'missions' | 'tasks' | 'secrets' | 'providers' | 'skills' | 'connectors' | 'webhooks' | 'mcp_servers' | 'knowledge' | 'extensions' | 'usage' | 'wallets' | 'runs' | 'autonomy' | 'logs' | 'settings' | 'projects' | 'activity'
+export type AppView = 'home' | 'agents' | 'inbox' | 'chatrooms' | 'protocols' | 'schedules' | 'memory' | 'missions' | 'tasks' | 'secrets' | 'providers' | 'skills' | 'connectors' | 'webhooks' | 'mcp_servers' | 'knowledge' | 'extensions' | 'usage' | 'wallets' | 'runs' | 'autonomy' | 'logs' | 'settings' | 'projects' | 'activity'
 
 // --- Chatrooms ---
 
@@ -1550,6 +1557,7 @@ export interface ChatroomMessage {
   imagePath?: string
   replyToId?: string
   source?: MessageSource
+  historyExcluded?: boolean
 }
 
 export interface Chatroom {
@@ -1563,8 +1571,284 @@ export interface Chatroom {
   chatMode?: 'sequential' | 'parallel'
   autoAddress?: boolean
   routingRules?: ChatroomRoutingRule[]
+  temporary?: boolean
+  hidden?: boolean
+  archivedAt?: number | null
+  protocolRunId?: string | null
+  parentChatroomId?: string | null
   createdAt: number
   updatedAt: number
+}
+
+// --- Structured Session Runs / Protocols ---
+
+export type ProtocolRunStatus = 'draft' | 'running' | 'waiting' | 'paused' | 'completed' | 'failed' | 'cancelled' | 'archived'
+
+export type ProtocolPhaseKind =
+  | 'present'
+  | 'collect_independent_inputs'
+  | 'round_robin'
+  | 'compare'
+  | 'decide'
+  | 'summarize'
+  | 'emit_tasks'
+  | 'wait'
+
+export interface ProtocolPhaseDefinition {
+  id: string
+  kind: ProtocolPhaseKind
+  label: string
+  instructions?: string | null
+  turnLimit?: number | null
+  completionCriteria?: string | null
+}
+
+export type ProtocolConditionDefinition =
+  | { type: 'summary_exists' }
+  | { type: 'artifact_exists'; artifactKind?: ProtocolRunArtifact['kind'] | null }
+  | { type: 'artifact_count_at_least'; count: number; artifactKind?: ProtocolRunArtifact['kind'] | null }
+  | { type: 'created_task_count_at_least'; count: number }
+  | { type: 'all'; conditions: ProtocolConditionDefinition[] }
+  | { type: 'any'; conditions: ProtocolConditionDefinition[] }
+
+export interface ProtocolBranchCase {
+  id: string
+  label: string
+  nextStepId: string
+  description?: string | null
+  when?: ProtocolConditionDefinition | null
+}
+
+export interface ProtocolRepeatConfig {
+  bodyStepId: string
+  nextStepId?: string | null
+  maxIterations: number
+  exitCondition?: ProtocolConditionDefinition | null
+  onExhausted?: 'advance' | 'fail'
+}
+
+export interface ProtocolParallelBranchDefinition {
+  id: string
+  label: string
+  steps: ProtocolStepDefinition[]
+  entryStepId?: string | null
+  participantAgentIds?: string[]
+  facilitatorAgentId?: string | null
+  observerAgentIds?: string[]
+}
+
+export interface ProtocolParallelConfig {
+  branches: ProtocolParallelBranchDefinition[]
+}
+
+export interface ProtocolJoinConfig {
+  parallelStepId?: string | null
+}
+
+export type ProtocolStepKind =
+  | ProtocolPhaseKind
+  | 'branch'
+  | 'repeat'
+  | 'parallel'
+  | 'join'
+  | 'complete'
+
+export interface ProtocolStepDefinition {
+  id: string
+  kind: ProtocolStepKind
+  label: string
+  instructions?: string | null
+  turnLimit?: number | null
+  completionCriteria?: string | null
+  nextStepId?: string | null
+  branchCases?: ProtocolBranchCase[]
+  defaultNextStepId?: string | null
+  repeat?: ProtocolRepeatConfig | null
+  parallel?: ProtocolParallelConfig | null
+  join?: ProtocolJoinConfig | null
+}
+
+export interface ProtocolTemplate {
+  id: string
+  name: string
+  description: string
+  builtIn: boolean
+  singleAgentAllowed?: boolean
+  tags?: string[]
+  recommendedOutputs?: string[]
+  defaultPhases: ProtocolPhaseDefinition[]
+  steps?: ProtocolStepDefinition[]
+  entryStepId?: string | null
+  createdAt?: number
+  updatedAt?: number
+}
+
+export type ProtocolSourceRef =
+  | { kind: 'manual' }
+  | { kind: 'api' }
+  | { kind: 'session'; sessionId: string }
+  | { kind: 'chatroom'; chatroomId: string }
+  | { kind: 'mission'; missionId: string }
+  | { kind: 'task'; taskId: string }
+  | { kind: 'schedule'; scheduleId: string }
+  | { kind: 'protocol_run'; runId: string; parentRunId?: string | null; stepId?: string | null; branchId?: string | null }
+
+export interface ProtocolRunArtifact {
+  id: string
+  kind: 'summary' | 'decision' | 'comparison' | 'notes' | 'action_items'
+  title: string
+  content: string
+  phaseId?: string | null
+  taskIds?: string[]
+  createdAt: number
+}
+
+export interface ProtocolRunPhaseStateResponse {
+  agentId: string
+  text: string
+  toolEvents?: MessageToolEvent[]
+}
+
+export interface ProtocolRunPhaseState {
+  phaseId: string
+  respondedAgentIds?: string[]
+  responses?: ProtocolRunPhaseStateResponse[]
+  appendedToTranscript?: boolean
+  artifactId?: string | null
+}
+
+export interface ProtocolRunLoopState {
+  stepId: string
+  iterationCount: number
+}
+
+export interface ProtocolRunBranchDecision {
+  stepId: string
+  caseId?: string | null
+  nextStepId?: string | null
+  decidedAt: number
+}
+
+export interface ProtocolRunParallelBranchState {
+  branchId: string
+  label: string
+  runId: string
+  status: ProtocolRunStatus
+  participantAgentIds?: string[]
+  summary?: string | null
+  lastError?: string | null
+  updatedAt: number
+}
+
+export interface ProtocolRunParallelStepState {
+  stepId: string
+  branchRunIds: string[]
+  branches: ProtocolRunParallelBranchState[]
+  waitingOnBranchIds?: string[]
+  joinReady?: boolean
+  joinCompletedAt?: number | null
+}
+
+export interface ProtocolRunConfig {
+  goal?: string | null
+  kickoffMessage?: string | null
+  roundLimit?: number | null
+  decisionMode?: string | null
+  createTranscript?: boolean
+  autoEmitTasks?: boolean
+  taskProjectId?: string | null
+  postSummaryToParent?: boolean
+}
+
+export interface ProtocolRun {
+  id: string
+  title: string
+  templateId: string
+  templateName: string
+  status: ProtocolRunStatus
+  sourceRef: ProtocolSourceRef
+  participantAgentIds: string[]
+  facilitatorAgentId?: string | null
+  observerAgentIds?: string[]
+  missionId?: string | null
+  taskId?: string | null
+  sessionId?: string | null
+  parentRunId?: string | null
+  parentStepId?: string | null
+  branchId?: string | null
+  parentChatroomId?: string | null
+  transcriptChatroomId?: string | null
+  scheduleId?: string | null
+  systemOwned?: boolean
+  phases: ProtocolPhaseDefinition[]
+  steps?: ProtocolStepDefinition[]
+  entryStepId?: string | null
+  currentStepId?: string | null
+  config?: ProtocolRunConfig | null
+  currentPhaseIndex: number
+  roundNumber?: number
+  summary?: string | null
+  latestArtifactId?: string | null
+  artifacts?: ProtocolRunArtifact[]
+  createdTaskIds?: string[]
+  waitingReason?: string | null
+  pauseReason?: string | null
+  lastError?: string | null
+  operatorContext?: string[]
+  phaseState?: ProtocolRunPhaseState | null
+  loopState?: Record<string, ProtocolRunLoopState>
+  branchHistory?: ProtocolRunBranchDecision[]
+  parallelState?: Record<string, ProtocolRunParallelStepState>
+  createdAt: number
+  updatedAt: number
+  startedAt?: number | null
+  endedAt?: number | null
+  archivedAt?: number | null
+}
+
+export interface ProtocolRunEvent {
+  id: string
+  runId: string
+  type:
+    | 'created'
+    | 'phase_started'
+    | 'phase_completed'
+    | 'participant_response'
+    | 'artifact_emitted'
+    | 'task_emitted'
+    | 'waiting'
+    | 'paused'
+    | 'resumed'
+    | 'phase_skipped'
+    | 'phase_retried'
+    | 'context_injected'
+    | 'recovered'
+    | 'step_started'
+    | 'step_completed'
+    | 'branch_taken'
+    | 'parallel_started'
+    | 'parallel_branch_spawned'
+    | 'parallel_branch_completed'
+    | 'parallel_branch_failed'
+    | 'join_ready'
+    | 'join_completed'
+    | 'loop_iteration_started'
+    | 'loop_iteration_completed'
+    | 'loop_exhausted'
+    | 'completed'
+    | 'failed'
+    | 'warning'
+    | 'cancelled'
+    | 'archived'
+    | 'summary_posted'
+  summary: string
+  phaseId?: string | null
+  stepId?: string | null
+  agentId?: string | null
+  artifactId?: string | null
+  taskId?: string | null
+  createdAt: number
+  data?: Record<string, unknown> | null
 }
 
 // --- Activity / Audit Trail ---

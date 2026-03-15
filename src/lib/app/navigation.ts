@@ -9,6 +9,7 @@ const VIEW_TO_PATH: Record<AppView, string> = {
   agents: '/agents',
   inbox: '/inbox',
   chatrooms: '/chatrooms',
+  protocols: '/protocols',
   schedules: '/schedules',
   memory: '/memory',
   missions: '/missions',

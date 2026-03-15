@@ -56,8 +56,14 @@ import {
 import { reconcileConnectorDeliveryText } from '@/lib/server/chat-execution/chat-execution-connector-delivery'
 import {
   resolveRequestedToolPreflightResponse,
+  runExclusiveDirectMemoryPreflight,
   runPostLlmToolRouting,
 } from '@/lib/server/chat-execution/chat-turn-tool-routing'
+import {
+  applyExactOutputContract,
+  classifyExactOutputContract,
+  type ExactOutputContract,
+} from '@/lib/server/chat-execution/exact-output-contract'
 import {
   getCachedLlmResponse,
   resolveLlmResponseCacheConfig,
@@ -256,6 +262,39 @@ export interface ExecuteChatTurnResult {
   inputTokens?: number
   outputTokens?: number
   estimatedCost?: number
+}
+
+const EXACT_OUTPUT_CONTRACT_TIMEOUT_MS = 5_000
+
+async function resolveExactOutputContractWithTimeout(params: {
+  sessionId: string
+  agentId?: string | null
+  userMessage: string
+  currentResponse: string
+  toolEvents: MessageToolEvent[]
+  internal: boolean
+  source: string
+}): Promise<ExactOutputContract | null> {
+  if (params.internal || params.source !== 'chat') return null
+  if (params.toolEvents.length === 0) return null
+
+  let timer: NodeJS.Timeout | null = null
+  try {
+    return await Promise.race<ExactOutputContract | null>([
+      classifyExactOutputContract({
+        sessionId: params.sessionId,
+        agentId: params.agentId || null,
+        userMessage: params.userMessage,
+        currentResponse: params.currentResponse,
+        toolEvents: params.toolEvents,
+      }).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), EXACT_OUTPUT_CONTRACT_TIMEOUT_MS)
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
 }
 
 function extractEventJson(line: string): SSEEvent | null {
@@ -1226,6 +1265,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
 
   let fullResponse = ''
   let errorMessage: string | undefined
+  let preflightToolRoutingResult: Awaited<ReturnType<typeof runExclusiveDirectMemoryPreflight>> = null
 
   const requestedToolPreflightResponse = resolveRequestedToolPreflightResponse({
     message,
@@ -1275,19 +1315,6 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
     }
   }
 
-  const abortController = new AbortController()
-  const abortFromOutside = () => abortController.abort()
-  if (signal) {
-    if (signal.aborted) abortController.abort()
-    else signal.addEventListener('abort', abortFromOutside)
-  }
-
-  active.set(sessionId, {
-    runId: runId || null,
-    source,
-    kill: () => abortController.abort(),
-  })
-
   // Capture provider-reported usage for the direct (non-tools) path.
   // Uses a mutable object because TS can't track callback mutations on plain variables.
   const directUsage = { inputTokens: 0, outputTokens: 0, received: false }
@@ -1302,142 +1329,178 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
     hasPlugins,
     pluginCount: enabledSessionPlugins.length,
   })
-  try {
-    // Heartbeat runs get a small tail of recent messages so the agent can see
-    // prior findings and avoid repeating the same searches. Full history is
-    // skipped to avoid blowing the context window on long-lived sessions.
-    // lightContext mode skips history entirely for maximum token savings.
-    const heartbeatHistory = isAutoRunNoHistory
-      ? (heartbeatLightContext ? [] : getSessionMessages(sessionId).slice(-6))
-      : undefined
+  preflightToolRoutingResult = await runExclusiveDirectMemoryPreflight({
+    session: sessionForRun,
+    sessionId,
+    message,
+    effectiveMessage,
+    enabledPlugins: pluginsForRun,
+    toolPolicy,
+    appSettings,
+    internal,
+    source,
+    toolEvents,
+    emit,
+  })
 
-    console.log(`[chat-execution] provider=${providerType}, hasPlugins=${hasPlugins}, localOpenClawNative=${useLocalOpenClawNativeRuntime}, imagePath=${resolvedImagePath || 'none'}, attachedFiles=${attachedFiles?.length || 0}, plugins=${enabledSessionPlugins.length}`)
-    if (hasPlugins) {
-      const result = await streamAgentChat({
-        session: sessionForRun,
-        message: effectiveMessage,
-        imagePath: resolvedImagePath,
-        imageUrl,
-        attachedFiles,
-        apiKey,
-        systemPrompt,
-        extraSystemContext: missionContextBlock ? [missionContextBlock] : undefined,
-        write: (raw) => parseAndEmit(raw),
-        history: heartbeatHistory ?? applyContextClearBoundary(getSessionMessages(sessionId)),
-        signal: abortController.signal,
-      })
-      fullResponse = result.finalResponse || result.fullText
-    } else {
-      const directHistorySnapshot = isAutoRunNoHistory
+  if (preflightToolRoutingResult) {
+    fullResponse = preflightToolRoutingResult.fullResponse
+    errorMessage = preflightToolRoutingResult.errorMessage
+    if (fullResponse) emit({ t: 'd', text: fullResponse })
+    clearInterval(partialSaveTimer)
+    stopPartialAssistantPersistence()
+    endLlmPerf({ durationMs: 0, cacheHit: false })
+  } else {
+    const abortController = new AbortController()
+    const abortFromOutside = () => abortController.abort()
+    if (signal) {
+      if (signal.aborted) abortController.abort()
+      else signal.addEventListener('abort', abortFromOutside)
+    }
+
+    active.set(sessionId, {
+      runId: runId || null,
+      source,
+      kill: () => abortController.abort(),
+    })
+
+    try {
+      // Heartbeat runs get a small tail of recent messages so the agent can see
+      // prior findings and avoid repeating the same searches. Full history is
+      // skipped to avoid blowing the context window on long-lived sessions.
+      // lightContext mode skips history entirely for maximum token savings.
+      const heartbeatHistory = isAutoRunNoHistory
         ? (heartbeatLightContext ? [] : getSessionMessages(sessionId).slice(-6))
-        : applyContextClearBoundary(getSessionMessages(sessionId))
-      responseCacheInput = {
-        provider: providerType,
-        model: sessionForRun.model,
-        apiEndpoint: sessionForRun.apiEndpoint || '',
-        systemPrompt,
-        message: effectiveMessage,
-        imagePath,
-        imageUrl,
-        attachedFiles,
-        history: directHistorySnapshot,
-      }
-      const canUseResponseCache = !internal && responseCacheConfig.enabled
-      const cached = canUseResponseCache
-        ? getCachedLlmResponse(responseCacheInput, responseCacheConfig)
-        : null
-      if (cached) {
-        responseCacheHit = true
-        fullResponse = cached.text
-        emit({
-          t: 'md',
-          text: JSON.stringify({
-            cache: {
-              hit: true,
-              ageMs: cached.ageMs,
-              provider: cached.provider,
-              model: cached.model,
-            },
-          }),
-        })
-        emit({ t: 'd', text: cached.text })
-      } else {
-        await runCapabilityHook(
-          'llmInput',
-          {
-            session: sessionForRun,
-            runId: lifecycleRunId,
-            provider: providerType,
-            model: sessionForRun.model,
-            systemPrompt,
-            prompt: effectiveMessage,
-            historyMessages: directHistorySnapshot,
-            imagesCount: resolvedImagePath ? 1 : 0,
-          },
-          { enabledIds: pluginsForRun },
-        )
-        fullResponse = await provider.handler.streamChat({
+        : undefined
+
+      console.log(`[chat-execution] provider=${providerType}, hasPlugins=${hasPlugins}, localOpenClawNative=${useLocalOpenClawNativeRuntime}, imagePath=${resolvedImagePath || 'none'}, attachedFiles=${attachedFiles?.length || 0}, plugins=${enabledSessionPlugins.length}`)
+      if (hasPlugins) {
+        const result = await streamAgentChat({
           session: sessionForRun,
           message: effectiveMessage,
           imagePath: resolvedImagePath,
+          imageUrl,
+          attachedFiles,
           apiKey,
           systemPrompt,
-          write: (raw: string) => parseAndEmit(raw),
-          active,
-          loadHistory: (sid: string) => {
-            if (sid === sessionId) return directHistorySnapshot
-            return isAutoRunNoHistory
-              ? getSessionMessages(sid).slice(-6)
-              : applyContextClearBoundary(getSessionMessages(sid))
-          },
-          onUsage: (u) => { directUsage.inputTokens = u.inputTokens; directUsage.outputTokens = u.outputTokens; directUsage.received = true },
+          extraSystemContext: missionContextBlock ? [missionContextBlock] : undefined,
+          write: (raw) => parseAndEmit(raw),
+          history: heartbeatHistory ?? applyContextClearBoundary(getSessionMessages(sessionId)),
           signal: abortController.signal,
         })
-        await runCapabilityHook(
-          'llmOutput',
-          {
+        fullResponse = result.finalResponse || result.fullText
+      } else {
+        const directHistorySnapshot = isAutoRunNoHistory
+          ? (heartbeatLightContext ? [] : getSessionMessages(sessionId).slice(-6))
+          : applyContextClearBoundary(getSessionMessages(sessionId))
+        responseCacheInput = {
+          provider: providerType,
+          model: sessionForRun.model,
+          apiEndpoint: sessionForRun.apiEndpoint || '',
+          systemPrompt,
+          message: effectiveMessage,
+          imagePath,
+          imageUrl,
+          attachedFiles,
+          history: directHistorySnapshot,
+        }
+        const canUseResponseCache = !internal && responseCacheConfig.enabled
+        const cached = canUseResponseCache
+          ? getCachedLlmResponse(responseCacheInput, responseCacheConfig)
+          : null
+        if (cached) {
+          responseCacheHit = true
+          fullResponse = cached.text
+          emit({
+            t: 'md',
+            text: JSON.stringify({
+              cache: {
+                hit: true,
+                ageMs: cached.ageMs,
+                provider: cached.provider,
+                model: cached.model,
+              },
+            }),
+          })
+          emit({ t: 'd', text: cached.text })
+        } else {
+          await runCapabilityHook(
+            'llmInput',
+            {
+              session: sessionForRun,
+              runId: lifecycleRunId,
+              provider: providerType,
+              model: sessionForRun.model,
+              systemPrompt,
+              prompt: effectiveMessage,
+              historyMessages: directHistorySnapshot,
+              imagesCount: resolvedImagePath ? 1 : 0,
+            },
+            { enabledIds: pluginsForRun },
+          )
+          fullResponse = await provider.handler.streamChat({
             session: sessionForRun,
-            runId: lifecycleRunId,
-            provider: providerType,
-            model: sessionForRun.model,
-            assistantTexts: fullResponse ? [fullResponse] : [],
-            response: fullResponse,
-            usage: directUsage.received
-              ? {
-                  input: directUsage.inputTokens,
-                  output: directUsage.outputTokens,
-                  total: directUsage.inputTokens + directUsage.outputTokens,
-                  estimatedCost: estimateCost(sessionForRun.model, directUsage.inputTokens, directUsage.outputTokens),
-                }
-              : undefined,
-          },
-          { enabledIds: pluginsForRun },
-        )
-        if (canUseResponseCache && responseCacheInput && fullResponse) {
-          setCachedLlmResponse(responseCacheInput, fullResponse, responseCacheConfig)
+            message: effectiveMessage,
+            imagePath: resolvedImagePath,
+            apiKey,
+            systemPrompt,
+            write: (raw: string) => parseAndEmit(raw),
+            active,
+            loadHistory: (sid: string) => {
+              if (sid === sessionId) return directHistorySnapshot
+              return isAutoRunNoHistory
+                ? getSessionMessages(sid).slice(-6)
+                : applyContextClearBoundary(getSessionMessages(sid))
+            },
+            onUsage: (u) => { directUsage.inputTokens = u.inputTokens; directUsage.outputTokens = u.outputTokens; directUsage.received = true },
+            signal: abortController.signal,
+          })
+          await runCapabilityHook(
+            'llmOutput',
+            {
+              session: sessionForRun,
+              runId: lifecycleRunId,
+              provider: providerType,
+              model: sessionForRun.model,
+              assistantTexts: fullResponse ? [fullResponse] : [],
+              response: fullResponse,
+              usage: directUsage.received
+                ? {
+                    input: directUsage.inputTokens,
+                    output: directUsage.outputTokens,
+                    total: directUsage.inputTokens + directUsage.outputTokens,
+                    estimatedCost: estimateCost(sessionForRun.model, directUsage.inputTokens, directUsage.outputTokens),
+                  }
+                : undefined,
+            },
+            { enabledIds: pluginsForRun },
+          )
+          if (canUseResponseCache && responseCacheInput && fullResponse) {
+            setCachedLlmResponse(responseCacheInput, fullResponse, responseCacheConfig)
+          }
         }
       }
+      durationMs = Date.now() - startTs
+      endLlmPerf({ durationMs, cacheHit: responseCacheHit })
+    } catch (err: unknown) {
+      endLlmPerf({ error: true })
+      errorMessage = toErrorMessage(err)
+      const failureText = errorMessage || 'Run failed.'
+      markProviderFailure(providerType, failureText)
+      emit({ t: 'err', text: failureText })
+      log.error('chat-run', `Run failed for session ${sessionId}`, {
+        runId,
+        source,
+        internal,
+        error: failureText,
+      })
+    } finally {
+      clearInterval(partialSaveTimer)
+      stopPartialAssistantPersistence()
+      active.delete(sessionId)
+      notify('sessions')
+      if (signal) signal.removeEventListener('abort', abortFromOutside)
     }
-    durationMs = Date.now() - startTs
-    endLlmPerf({ durationMs, cacheHit: responseCacheHit })
-  } catch (err: unknown) {
-    endLlmPerf({ error: true })
-    errorMessage = toErrorMessage(err)
-    const failureText = errorMessage || 'Run failed.'
-    markProviderFailure(providerType, failureText)
-    emit({ t: 'err', text: failureText })
-    log.error('chat-run', `Run failed for session ${sessionId}`, {
-      runId,
-      source,
-      internal,
-      error: failureText,
-    })
-  } finally {
-    clearInterval(partialSaveTimer)
-    stopPartialAssistantPersistence()
-    active.delete(sessionId)
-    notify('sessions')
-    if (signal) signal.removeEventListener('abort', abortFromOutside)
   }
   await partialPersistChain.catch(() => {})
 
@@ -1475,7 +1538,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   }
 
   const endPostProcessPerf = perf.start('chat-execution', 'post-process', { sessionId })
-  const toolRoutingResult = await runPostLlmToolRouting({
+  const toolRoutingResult = preflightToolRoutingResult || await runPostLlmToolRouting({
     session: sessionForRun,
     sessionId,
     message,
@@ -1540,6 +1603,20 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   }
   finalText = reconcileConnectorDeliveryText(finalText, persistedToolEvents)
   finalText = normalizeAssistantArtifactLinks(finalText, session.cwd)
+  finalText = applyExactOutputContract({
+    contract: await resolveExactOutputContractWithTimeout({
+      sessionId,
+      agentId: sessionForRun.agentId || null,
+      userMessage: message,
+      currentResponse: finalText,
+      toolEvents: persistedToolEvents,
+      internal,
+      source,
+    }),
+    text: finalText,
+    errorMessage,
+    toolEvents: persistedToolEvents,
+  })
   const rawTextForPersistence = stripMainLoopMetaForPersistence(finalText)
   const hiddenControlOnly = shouldSuppressHiddenControlText(rawTextForPersistence)
   const textForPersistence = stripHiddenControlTokens(rawTextForPersistence)
@@ -1724,7 +1801,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
               channelId = heartbeatConfig.target
             }
             if (channelId) {
-              sendConnectorMessage({ connectorId, channelId, text: nextAssistantMessage.text }).catch(() => {})
+              sendConnectorMessage({ connectorId, channelId, text: nextAssistantMessage.text }).catch((err: unknown) => { log.warn('connector', 'Heartbeat connector delivery failed', { connectorId, channelId, sessionId, error: typeof err === 'object' && err !== null && 'message' in err ? (err as Error).message : String(err) }) })
             }
           } catch {
             // Best effort — connector manager may not be loaded
@@ -1753,7 +1830,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
             try {
               // eslint-disable-next-line @typescript-eslint/no-require-imports
               const { sendConnectorMessage: sendMsg } = require('../connectors/manager')
-              sendMsg({ connectorId: connectorId || undefined, channelId, text: nextAssistantMessage.text }).catch(() => {})
+              sendMsg({ connectorId: connectorId || undefined, channelId, text: nextAssistantMessage.text }).catch((err: unknown) => { log.warn('connector', 'Auto-route connector delivery failed', { connectorId, channelId, sessionId, error: typeof err === 'object' && err !== null && 'message' in err ? (err as Error).message : String(err) }) })
             } catch {
               // Best effort — connector manager may not be loaded
             }

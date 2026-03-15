@@ -7,6 +7,7 @@ import { useWs } from '@/hooks/use-ws'
 import { useAppStore } from '@/stores/use-app-store'
 import { FilterPill } from '@/components/ui/filter-pill'
 import { StatCard } from '@/components/ui/stat-card'
+import { StructuredSessionLauncher } from '@/components/protocols/structured-session-launcher'
 import { timeAgo } from '@/lib/time-format'
 import { getMissionPath } from '@/lib/app/navigation'
 import type {
@@ -93,6 +94,8 @@ export default function MissionsPage() {
   const [actionError, setActionError] = useState<string | null>(null)
   const [pendingAction, setPendingAction] = useState<string | null>(null)
   const [policyPending, setPolicyPending] = useState(false)
+  const [structuredSessionOpen, setStructuredSessionOpen] = useState(false)
+  const [linkedRun, setLinkedRun] = useState<{ id: string; status: string } | null>(null)
   const [waitReason, setWaitReason] = useState('')
   const [waitKind, setWaitKind] = useState<MissionWaitKind>('other')
   const [waitUntil, setWaitUntil] = useState('')
@@ -149,6 +152,25 @@ export default function MissionsPage() {
   }, [loadDetail, selectedMissionId])
 
   useWs('missions', loadList, 2000)
+
+  const refreshLinkedRun = useCallback(() => {
+    if (!selectedMissionId) {
+      setLinkedRun(null)
+      return
+    }
+    void api<Array<{ id: string; status: string }>>('GET', `/protocols/runs?missionId=${encodeURIComponent(selectedMissionId)}&limit=6`)
+      .then((runs) => {
+        const active = (Array.isArray(runs) ? runs : []).find((run) => !['completed', 'failed', 'cancelled', 'archived'].includes(run.status))
+        setLinkedRun(active ? { id: active.id, status: active.status } : null)
+      })
+      .catch(() => setLinkedRun(null))
+  }, [selectedMissionId])
+
+  useEffect(() => {
+    void refreshLinkedRun()
+  }, [refreshLinkedRun])
+
+  useWs(selectedMissionId ? 'protocol_runs' : '', refreshLinkedRun, 2000)
 
   const filtered = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()
@@ -388,6 +410,22 @@ export default function MissionsPage() {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
+                    {linkedRun && (
+                      <button
+                        type="button"
+                        onClick={() => router.push(`/protocols?runId=${encodeURIComponent(linkedRun.id)}`)}
+                        className="rounded-[12px] border border-sky-500/20 bg-sky-500/10 px-3 py-2 text-[12px] font-700 text-sky-100 transition-colors hover:bg-sky-500/16"
+                      >
+                        Open Session
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setStructuredSessionOpen(true)}
+                      className="rounded-[12px] bg-accent-bright px-3 py-2 text-[12px] font-700 text-black transition-colors hover:opacity-90"
+                    >
+                      {linkedRun ? 'Run Another Structured Session' : 'Run Structured Session'}
+                    </button>
                     {([
                       ['resume', 'Resume'],
                       ['replan', 'Replan'],
@@ -626,6 +664,21 @@ export default function MissionsPage() {
           </div>
         </section>
       </div>
+      <StructuredSessionLauncher
+        open={structuredSessionOpen}
+        onClose={() => setStructuredSessionOpen(false)}
+        onCreated={(run) => {
+          router.push(`/protocols?runId=${encodeURIComponent(run.id)}`)
+        }}
+        initialContext={{
+          missionId: selectedMission?.mission.id || null,
+          missionLabel: selectedMission?.mission.objective || null,
+          participantAgentIds: selectedMission?.mission.agentId ? [selectedMission.mission.agentId] : [],
+          facilitatorAgentId: selectedMission?.mission.agentId || null,
+          title: selectedMission ? `Structured session: ${selectedMission.mission.objective}` : null,
+          goal: selectedMission?.mission.objective || null,
+        }}
+      />
     </div>
   )
 }

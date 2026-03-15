@@ -17,6 +17,12 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
 
 ## Release Notes
 
+### v1.1.1 Highlights
+
+- **Structured Sessions are now contextual**: start bounded structured runs from direct chats, chatrooms, tasks, missions, or schedules, including a new chatroom `/breakout` command that spins up a focused session from the current room with auto-filled participants and kickoff context.
+- **ProtocolRun orchestration matured**: structured sessions now run on the same durable engine for step-based branching, repeat loops, parallel branches, and explicit joins instead of growing a separate orchestration subsystem.
+- **Live-agent runtime hardening**: exact-output contracts, memory preflight behavior, same-channel delivery rendering, inline media, and grounded runtime inspection were all tightened through live-agent validation before release.
+
 ### v1.1.0 Highlights
 
 - **Mission controller and Missions UI**: SwarmClaw now tracks durable multi-step objectives as missions with status, phase, linked tasks, queued turns, recent runs, event history, and operator actions from the new **Missions** surface.
@@ -34,6 +40,7 @@ Extension tutorial: https://swarmclaw.ai/docs/extension-tutorial
 ## What SwarmClaw Focuses On
 
 - **Delegation and background execution**: delegated work, subagents, durable jobs, checkpointing, and background task execution.
+- **Structured Sessions**: temporary bounded runs for one agent or many, launched from context and backed by durable templates, transcripts, outputs, operator controls, and chatroom breakout flows.
 - **Autonomy and memory**: heartbeats, schedules, long-running execution, durable memory, reflection memory, human-context learning, document recall, and project-aware context.
 - **OpenClaw integration**: named gateway profiles, external runtimes, deploy helpers, config sync, approval handling, and OpenClaw agent file editing.
 - **Runtime skills**: pinned skills, OpenClaw-compatible `SKILL.md` import, on-demand skill execution, and configurable keyword or embedding-based recommendation.
@@ -116,6 +123,7 @@ Then open `http://localhost:3456`.
 - **Providers**: OpenClaw, OpenAI, Anthropic, Ollama, Google, DeepSeek, Groq, Together, Mistral, xAI, Fireworks, plus compatible custom endpoints.
 - **Delegation**: built-in delegation to Claude Code, Codex CLI, OpenCode CLI, Gemini CLI, and native SwarmClaw subagents.
 - **Autonomy**: heartbeat loops, schedules, background jobs, task execution, supervisor recovery, mission control, and agent wakeups.
+- **Structured Sessions**: contextual launch from chats, chatrooms, tasks, missions, and schedules, plus reusable templates, chatroom `/breakout`, and durable run state.
 - **Memory**: hybrid recall, graph traversal, journaling, durable documents, project-scoped context, automatic reflection memory, communication preferences, profile and boundary memory, significant events, and open follow-up loops.
 - **Wallets**: balances, transfers, signatures, EVM call/quote/swap flows, and approval-gated execution.
 - **Connectors**: Discord, Slack, Telegram, WhatsApp, Teams, Matrix, OpenClaw, and more.

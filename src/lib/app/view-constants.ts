@@ -5,6 +5,7 @@ export const VIEW_LABELS: Record<AppView, string> = {
   agents: 'Agents',
   inbox: 'Inbox',
   chatrooms: 'Chatrooms',
+  protocols: 'Sessions',
   schedules: 'Schedules',
   memory: 'Memory',
   missions: 'Missions',
@@ -47,6 +48,7 @@ export const VIEW_DESCRIPTIONS: Record<AppView, string> = {
   agents: 'Chat with & configure your AI agents',
   inbox: 'Review external connector conversations by platform and bridge',
   chatrooms: 'Multi-agent collaborative chatrooms',
+  protocols: 'Temporary structured sessions and protocol-driven runs',
   schedules: 'Automated task schedules',
   memory: 'Long-term agent memory store',
   missions: 'Durable mission control and execution state',
@@ -75,6 +77,12 @@ export const VIEW_EMPTY_STATES: Record<Exclude<AppView, 'agents' | 'home'>, { ic
     title: 'Chatrooms',
     description: 'Multi-agent chatrooms for collaborative conversations. Add agents and use @mentions to trigger responses.',
     features: ['Create chatrooms with multiple AI agents', 'Use @AgentName to trigger specific agents', '@all mentions trigger all agents sequentially', 'Agents can chain by mentioning each other'],
+  },
+  protocols: {
+    icon: 'list',
+    title: 'Structured Sessions',
+    description: 'Run temporary bounded sessions from chats, chatrooms, tasks, missions, or schedules without turning every surface into a workflow engine.',
+    features: ['Start one-agent or multi-agent structured sessions from context', 'Use neutral built-in templates like review, discussion, and decision rounds', 'Keep a hidden transcript plus durable run events', 'Archive the outcome and post a compact summary back when needed'],
   },
   schedules: {
     icon: 'clock',
@@ -205,7 +213,7 @@ export const VIEW_EMPTY_STATES: Record<Exclude<AppView, 'agents' | 'home'>, { ic
 }
 
 export const FULL_WIDTH_VIEWS = new Set<AppView>([
-  'home', 'inbox', 'chatrooms', 'schedules', 'missions', 'secrets', 'providers', 'skills',
+  'home', 'inbox', 'chatrooms', 'protocols', 'schedules', 'missions', 'secrets', 'providers', 'skills',
   'connectors', 'webhooks', 'mcp_servers', 'knowledge', 'extensions',
   'usage', 'wallets', 'runs', 'autonomy', 'logs', 'settings', 'activity', 'projects',
 ])

@@ -20,7 +20,7 @@ import {
 } from '@/lib/server/connectors/manager'
 import { startConnectorOutboxWorker, stopConnectorOutboxWorker } from '@/lib/server/connectors/outbox'
 import { startHeartbeatService, stopHeartbeatService, getHeartbeatServiceStatus, pruneHeartbeatState } from '@/lib/server/runtime/heartbeat-service'
-import { hasOpenClawAgents, ensureGatewayConnected, disconnectGateway, getGateway } from '@/lib/server/openclaw/gateway'
+import { hasOpenClawAgents, ensureGatewayConnected, disconnectAutoGateways, getGateway } from '@/lib/server/openclaw/gateway'
 import { enqueueSessionRun } from '@/lib/server/runtime/session-run-manager'
 import { getEnabledCapabilitySelection } from '@/lib/capability-selection'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
@@ -35,7 +35,8 @@ import { pingProvider, OPENAI_COMPATIBLE_DEFAULTS } from '@/lib/server/provider-
 import { runIntegrityMonitor } from '@/lib/server/integrity-monitor'
 import { recoverStaleDelegationJobs } from '@/lib/server/agents/delegation-jobs'
 import { pruneMainLoopState } from '@/lib/server/agents/main-agent-loop'
-import { sweepManagedProcesses } from '@/lib/server/runtime/process-manager'
+import { ensureProtocolEngineRecovered } from '@/lib/server/protocols/protocol-service'
+import { sweepManagedProcesses, reapOrphanedSandboxContainers } from '@/lib/server/runtime/process-manager'
 import {
   buildSessionHeartbeatHealthDedupKey,
   daemonAutostartEnvEnabled,
@@ -48,6 +49,7 @@ import {
 } from '@/lib/server/runtime/daemon-policy'
 import { loadEstopState } from '@/lib/server/runtime/estop'
 import { classifyRuntimeFailure, recordSupervisorIncident } from '@/lib/server/autonomy/supervisor-reflection'
+import { getMemoryDb } from '@/lib/server/memory/memory-db'
 
 const QUEUE_CHECK_INTERVAL = 30_000 // 30 seconds
 const BROWSER_SWEEP_INTERVAL = 60_000 // 60 seconds
@@ -63,6 +65,11 @@ const STALE_AUTO_DISABLE_MIN_MS = 45 * 60 * 1000 // never auto-disable before 45
 const CONNECTOR_RESTART_BASE_MS = 30_000
 const CONNECTOR_RESTART_MAX_MS = 15 * 60 * 1000
 const MAX_WAKE_ATTEMPTS = 3
+const QUEUE_PROCESS_TIMEOUT = 10 * 60_000 // 10 minutes
+const SHUTDOWN_TIMEOUT_MS = 15_000
+const PROVIDER_PING_CB_THRESHOLD = 3 // trips after 3 consecutive failures
+const PROVIDER_PING_CB_BASE_MS = 300_000 // 5 min initial cooldown
+const PROVIDER_PING_CB_MAX_MS = 1_800_000 // 30 min max cooldown
 
 export {
   buildSessionHeartbeatHealthDedupKey,
@@ -92,6 +99,10 @@ interface DaemonState {
   manualStopRequested: boolean
   running: boolean
   lastProcessedAt: number | null
+  healthCheckRunning: boolean
+  connectorHealthCheckRunning: boolean
+  shuttingDown: boolean
+  providerPingCircuitBreaker: Map<string, { consecutiveFailures: number; skipUntil: number }>
 }
 
 const ds: DaemonState = hmrSingleton<DaemonState>('__swarmclaw_daemon__', () => ({
@@ -110,6 +121,10 @@ const ds: DaemonState = hmrSingleton<DaemonState>('__swarmclaw_daemon__', () => 
   manualStopRequested: false,
   running: false,
   lastProcessedAt: null,
+  healthCheckRunning: false,
+  connectorHealthCheckRunning: false,
+  shuttingDown: false,
+  providerPingCircuitBreaker: new Map<string, { consecutiveFailures: number; skipUntil: number }>(),
 }))
 
 // Backfill fields for hot-reloaded daemon state objects from older code versions.
@@ -127,6 +142,10 @@ if (ds.manualStopRequested === undefined) ds.manualStopRequested = false
 if (ds.memoryConsolidationTimeoutId === undefined) ds.memoryConsolidationTimeoutId = null
 if (ds.memoryConsolidationIntervalId === undefined) ds.memoryConsolidationIntervalId = null
 if (ds.evalSchedulerIntervalId === undefined) ds.evalSchedulerIntervalId = null
+if (ds.healthCheckRunning === undefined) ds.healthCheckRunning = false
+if (ds.connectorHealthCheckRunning === undefined) ds.connectorHealthCheckRunning = false
+if (ds.shuttingDown === undefined) ds.shuttingDown = false
+if (!ds.providerPingCircuitBreaker) ds.providerPingCircuitBreaker = new Map<string, { consecutiveFailures: number; skipUntil: number }>()
 
 export function ensureDaemonStarted(source = 'unknown'): boolean {
   if (ds.running) return false
@@ -166,6 +185,7 @@ export function startDaemon(options?: { source?: string; manualStart?: boolean }
     validateCompletedTasksQueue()
     cleanupFinishedTaskSessions()
     recoverStaleDelegationJobs()
+    ensureProtocolEngineRecovered()
     resumeQueue()
     startScheduler()
     startQueueProcessor()
@@ -188,11 +208,12 @@ export function startDaemon(options?: { source?: string; manualStart?: boolean }
   }
 }
 
-export function stopDaemon(options?: { source?: string; manualStop?: boolean }) {
+export async function stopDaemon(options?: { source?: string; manualStop?: boolean }) {
   const source = options?.source || 'unknown'
   if (options?.manualStop === true) ds.manualStopRequested = true
   if (!ds.running) return
   ds.running = false
+  ds.shuttingDown = true
   notify('daemon')
   console.log(`[daemon] Stopping daemon (source=${source})`)
 
@@ -205,7 +226,18 @@ export function stopDaemon(options?: { source?: string; manualStop?: boolean }) 
   stopHeartbeatService()
   stopMemoryConsolidation()
   stopEvalScheduler()
-  stopAllConnectors({ disable: false }).catch(() => {})
+  try {
+    await Promise.race([
+      stopAllConnectors({ disable: false }),
+      new Promise<void>((_, reject) =>
+        setTimeout(() => reject(new Error('Connector shutdown timed out')), SHUTDOWN_TIMEOUT_MS)
+      ),
+    ])
+  } catch (err: unknown) {
+    console.warn(`[daemon] Connector shutdown issue: ${errorMessage(err)}`)
+  } finally {
+    ds.shuttingDown = false
+  }
 }
 
 function startBrowserSweep() {
@@ -230,6 +262,16 @@ function stopBrowserSweep() {
   sweepOrphanedBrowsers(0)
 }
 
+export async function syncOpenClawGatewayLifecycle() {
+  if (!hasOpenClawAgents()) {
+    disconnectAutoGateways()
+    return
+  }
+  if (!getGateway()?.connected) {
+    await ensureGatewayConnected()
+  }
+}
+
 function startQueueProcessor() {
   if (ds.queueIntervalId) return
   ds.queueIntervalId = setInterval(async () => {
@@ -237,19 +279,22 @@ function startQueueProcessor() {
     const queue = loadQueue()
     if (queue.length > 0) {
       console.log(`[daemon] Processing ${queue.length} queued task(s)`)
-      await processNext()
+      try {
+        await Promise.race([
+          processNext(),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error('Queue processing timed out')), QUEUE_PROCESS_TIMEOUT)
+          ),
+        ])
+      } catch (err: unknown) {
+        console.error(`[daemon] Queue processing error/timeout: ${errorMessage(err)}`)
+      }
       ds.lastProcessedAt = Date.now()
     }
     if (!isDaemonBackgroundServicesEnabled()) return
-    // OpenClaw gateway lifecycle: lazy connect when openclaw agents exist, disconnect when none remain
+    // OpenClaw gateway lifecycle: lazy connect for active OpenClaw agents, stop auto-managed reconnects when none remain.
     try {
-      if (hasOpenClawAgents()) {
-        if (!getGateway()?.connected) {
-          await ensureGatewayConnected()
-        }
-      } else if (getGateway()?.connected) {
-        disconnectGateway()
-      }
+      await syncOpenClawGatewayLifecycle()
     } catch { /* gateway errors are non-fatal */ }
   }, QUEUE_CHECK_INTERVAL)
 }
@@ -570,6 +615,12 @@ async function runProviderHealthChecks() {
   }
 
   for (const tuple of tuples) {
+    // Circuit breaker: skip providers that have failed repeatedly
+    const cbKey = `${tuple.provider}:${tuple.credentialId || 'no-cred'}:${tuple.apiEndpoint}`
+    const cb = ds.providerPingCircuitBreaker.get(cbKey)
+    const now = Date.now()
+    if (cb && cb.skipUntil > now) continue
+
     let apiKey: string | undefined
     if (tuple.credentialId) {
       const cred = credentials[tuple.credentialId] as unknown as Record<string, unknown> | undefined
@@ -582,6 +633,19 @@ async function runProviderHealthChecks() {
     const result = await pingProvider(tuple.provider, apiKey, endpoint)
 
     if (!result.ok) {
+      // Update circuit breaker state
+      const existing = ds.providerPingCircuitBreaker.get(cbKey) || { consecutiveFailures: 0, skipUntil: 0 }
+      existing.consecutiveFailures += 1
+      if (existing.consecutiveFailures >= PROVIDER_PING_CB_THRESHOLD) {
+        const cooldown = Math.min(
+          PROVIDER_PING_CB_BASE_MS * Math.pow(2, existing.consecutiveFailures - PROVIDER_PING_CB_THRESHOLD),
+          PROVIDER_PING_CB_MAX_MS,
+        )
+        existing.skipUntil = now + cooldown
+        console.log(`[health] Circuit breaker tripped for ${tuple.credentialName} — skipping pings for ${Math.round(cooldown / 60_000)}m`)
+      }
+      ds.providerPingCircuitBreaker.set(cbKey, existing)
+
       if (!shouldNotifyProviderReachabilityIssue(tuple.provider)) {
         continue
       }
@@ -599,6 +663,9 @@ async function runProviderHealthChecks() {
         entityType,
         entityId,
       })
+    } else {
+      // Success — clear circuit breaker
+      ds.providerPingCircuitBreaker.delete(cbKey)
     }
   }
 }
@@ -722,6 +789,11 @@ function pruneOrphanedState(sessions: Record<string, unknown>): void {
   // Process manager — sweep completed processes older than TTL
   sweepManagedProcesses()
 
+  // Reap orphaned sandbox containers from prior crashes
+  reapOrphanedSandboxContainers().catch((err) => {
+    console.warn('[daemon] Orphaned sandbox reap failed:', typeof err === 'object' && err !== null && 'message' in err ? (err as Error).message : String(err))
+  })
+
   // Daemon-local: prune openclawRepairState for agents that no longer exist
   const agents = loadAgents()
   for (const agentId of ds.openclawRepairState.keys()) {
@@ -729,6 +801,31 @@ function pruneOrphanedState(sessions: Record<string, unknown>): void {
   }
   for (const agentId of ds.openclawDownAgentIds) {
     if (!agents[agentId]) ds.openclawDownAgentIds.delete(agentId)
+  }
+
+  // Prune circuit breaker entries for providers that no longer have any agent referencing them
+  const liveProviderKeys = new Set<string>()
+  for (const agent of Object.values(agents) as unknown as Record<string, unknown>[]) {
+    if (!agent?.id) continue
+    const p = typeof agent.provider === 'string' ? agent.provider : ''
+    const c = typeof agent.credentialId === 'string' ? agent.credentialId : ''
+    const e = typeof agent.apiEndpoint === 'string' ? agent.apiEndpoint : ''
+    if (p) liveProviderKeys.add(`${p}:${c || 'no-cred'}:${e}`)
+  }
+  for (const key of ds.providerPingCircuitBreaker.keys()) {
+    if (!liveProviderKeys.has(key)) ds.providerPingCircuitBreaker.delete(key)
+  }
+}
+
+async function runMemoryMaintenanceTick(): Promise<void> {
+  try {
+    const memDb = getMemoryDb()
+    const result = memDb.maintain({ dedupe: true, pruneWorking: true, ttlHours: 24 })
+    if (result.deduped > 0 || result.pruned > 0) {
+      console.log(`[daemon] Memory maintenance: deduped=${result.deduped}, pruned=${result.pruned}`)
+    }
+  } catch (err: unknown) {
+    console.warn('[daemon] Memory maintenance tick failed:', err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -864,14 +961,25 @@ async function runHealthChecks() {
   } catch (err: unknown) {
     console.error('[daemon] Memory hygiene sweep failed:', errorMessage(err))
   }
+
+  // Periodic memory database maintenance (dedup + TTL pruning)
+  try {
+    await runMemoryMaintenanceTick()
+  } catch (err: unknown) {
+    console.error('[daemon] Memory maintenance failed:', err instanceof Error ? err.message : String(err))
+  }
 }
 
 function startHealthMonitor() {
   if (ds.healthIntervalId) return
   ds.healthIntervalId = setInterval(() => {
-    runHealthChecks().catch((err) => {
-      console.error('[daemon] Health monitor tick failed:', err?.message || String(err))
-    })
+    if (ds.healthCheckRunning || ds.shuttingDown) return
+    ds.healthCheckRunning = true
+    runHealthChecks()
+      .catch((err) => {
+        console.error('[daemon] Health monitor tick failed:', err?.message || String(err))
+      })
+      .finally(() => { ds.healthCheckRunning = false })
   }, HEALTH_CHECK_INTERVAL)
 }
 
@@ -902,9 +1010,13 @@ function startConnectorHealthMonitor(options?: { runImmediately?: boolean }) {
   if (ds.connectorHealthIntervalId) return
 
   const tick = () => {
-    runConnectorHealthChecks(Date.now()).catch((err) => {
-      console.error('[daemon] Connector health tick failed:', errorMessage(err))
-    })
+    if (ds.connectorHealthCheckRunning || ds.shuttingDown) return
+    ds.connectorHealthCheckRunning = true
+    runConnectorHealthChecks(Date.now())
+      .catch((err) => {
+        console.error('[daemon] Connector health tick failed:', errorMessage(err))
+      })
+      .finally(() => { ds.connectorHealthCheckRunning = false })
   }
 
   if (options?.runImmediately !== false) tick()
@@ -1052,6 +1164,8 @@ function refreshDaemonTimersForHotReload() {
 refreshDaemonTimersForHotReload()
 
 export async function runDaemonHealthCheckNow() {
+  // Bypass circuit breaker for manual/forced checks
+  ds.providerPingCircuitBreaker.clear()
   await Promise.all([
     runHealthChecks(),
     runConnectorHealthChecks(Date.now()),
@@ -1113,6 +1227,12 @@ export function getDaemonStatus() {
     webhookRetry: {
       pendingRetries,
       deadLettered,
+    },
+    guards: {
+      healthCheckRunning: ds.healthCheckRunning,
+      connectorHealthCheckRunning: ds.connectorHealthCheckRunning,
+      shuttingDown: ds.shuttingDown,
+      providerCircuitBreakers: ds.providerPingCircuitBreaker.size,
     },
   }
 }

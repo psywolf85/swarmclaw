@@ -54,6 +54,7 @@ interface ChatroomState {
   shiftQueuedMessage: () => QueuedChatroomMessage | undefined
 
   loadChatrooms: () => Promise<void>
+  loadChatroomById: (id: string) => Promise<Chatroom | null>
   createChatroom: (data: { name: string; description?: string; agentIds?: string[]; chatMode?: 'sequential' | 'parallel'; autoAddress?: boolean; routingRules?: ChatroomRoutingRule[] }) => Promise<Chatroom>
   updateChatroom: (id: string, data: Partial<Chatroom>) => Promise<void>
   deleteChatroom: (id: string) => Promise<void>
@@ -105,7 +106,20 @@ export const useChatroomStore = create<ChatroomState>((set, get) => ({
 
   loadChatrooms: async () => {
     const chatrooms = await api<Record<string, Chatroom>>('GET', '/chatrooms')
-    set({ chatrooms })
+    set((state) => {
+      const next = { ...(chatrooms || {}) }
+      for (const [id, chatroom] of Object.entries(state.chatrooms)) {
+        if (chatroom?.hidden === true) next[id] = chatroom
+      }
+      return { chatrooms: next }
+    })
+  },
+
+  loadChatroomById: async (id) => {
+    if (!id) return null
+    const chatroom = await api<Chatroom>('GET', `/chatrooms/${id}`)
+    set((state) => ({ chatrooms: { ...state.chatrooms, [id]: chatroom } }))
+    return chatroom
   },
 
   createChatroom: async (data) => {

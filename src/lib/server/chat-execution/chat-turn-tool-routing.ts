@@ -76,6 +76,7 @@ export interface ToolRoutingResult {
 
 export interface ToolRoutingHooks {
   classifyDirectMemoryIntent?: (input: DirectMemoryIntentClassifierInput) => Promise<DirectMemoryIntent | null>
+  memoryIntentTimeoutMs?: number
   invokeTool?: (
     ctx: ToolRoutingContext,
     toolName: string,
@@ -91,6 +92,124 @@ interface InvokeSessionToolResult {
   toolOutputText?: string | null
   blockedReason?: string | null
   unavailableReason?: string | null
+}
+
+const DEFAULT_MEMORY_INTENT_TIMEOUT_MS = 8_000
+
+async function resolveDirectMemoryIntentWithTimeout(
+  ctx: ToolRoutingContext,
+  classifyMemoryIntent: (input: DirectMemoryIntentClassifierInput) => Promise<DirectMemoryIntent | null>,
+  hooks?: ToolRoutingHooks,
+): Promise<DirectMemoryIntent | null> {
+  const timeoutMs = Number.isFinite(hooks?.memoryIntentTimeoutMs)
+    ? Math.max(1, Math.trunc(hooks?.memoryIntentTimeoutMs as number))
+    : DEFAULT_MEMORY_INTENT_TIMEOUT_MS
+
+  let timer: NodeJS.Timeout | null = null
+  try {
+    const result = await Promise.race<DirectMemoryIntent | null>([
+      classifyMemoryIntent({
+        sessionId: ctx.sessionId,
+        agentId: ctx.session.agentId || null,
+        message: ctx.message,
+        currentResponse: '',
+        currentError: null,
+        toolEvents: [],
+      }).catch(() => null),
+      new Promise<null>((resolve) => {
+        timer = setTimeout(() => resolve(null), timeoutMs)
+      }),
+    ])
+    return result
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+export async function runExclusiveDirectMemoryPreflight(
+  ctx: ToolRoutingContext,
+  hooks?: ToolRoutingHooks,
+): Promise<ToolRoutingResult | null> {
+  if (ctx.internal || ctx.source !== 'chat') return null
+  if (!hasToolEnabled(ctx.session, 'memory')) return null
+
+  const invokeTool = hooks?.invokeTool || invokeSessionTool
+  const classifyMemoryIntent = hooks?.classifyDirectMemoryIntent || classifyDirectMemoryIntent
+  const calledNames = new Set<string>()
+
+  const directMemoryIntent = await resolveDirectMemoryIntentWithTimeout(ctx, classifyMemoryIntent, hooks)
+
+  if (!directMemoryIntent || directMemoryIntent.action === 'none') return null
+  if ((directMemoryIntent.action === 'store' || directMemoryIntent.action === 'update') && directMemoryIntent.exclusiveCompletion !== true) {
+    return null
+  }
+
+  const toolName = directMemoryIntent.action === 'store'
+    ? 'memory_store'
+    : directMemoryIntent.action === 'update'
+      ? 'memory_update'
+      : 'memory_search'
+
+  const args: Record<string, unknown> = directMemoryIntent.action === 'recall'
+    ? { query: directMemoryIntent.query, scope: 'auto' }
+    : {
+        value: directMemoryIntent.value,
+        ...(directMemoryIntent.title ? { title: directMemoryIntent.title } : {}),
+      }
+
+  const result = await invokeTool(
+    ctx,
+    toolName,
+    args,
+    `Forced ${toolName} invocation failed`,
+    calledNames,
+  )
+
+  if (result.blockedReason) {
+    return {
+      calledNames,
+      fullResponse: buildToolPolicyBlockResponse(toolName, result.blockedReason),
+      errorMessage: undefined,
+      missedRequestedTools: [],
+    }
+  }
+  if (result.unavailableReason) {
+    return {
+      calledNames,
+      fullResponse: buildToolUnavailableResponse(toolName, result.unavailableReason),
+      errorMessage: undefined,
+      missedRequestedTools: [],
+    }
+  }
+  if (!result.invoked) return null
+
+  if (isToolErrorText(result.toolOutputText)) {
+    return {
+      calledNames,
+      fullResponse: String(result.toolOutputText || '').trim(),
+      errorMessage: String(result.toolOutputText || '').trim() || undefined,
+      missedRequestedTools: [],
+    }
+  }
+
+  if (directMemoryIntent.action === 'recall') {
+    const recallResponse = result.toolOutputText
+      ? buildDirectMemoryRecallResponse(directMemoryIntent, result.toolOutputText)
+      : null
+    return {
+      calledNames,
+      fullResponse: recallResponse || directMemoryIntent.missResponse,
+      errorMessage: undefined,
+      missedRequestedTools: [],
+    }
+  }
+
+  return {
+    calledNames,
+    fullResponse: directMemoryIntent.acknowledgement,
+    errorMessage: undefined,
+    missedRequestedTools: [],
+  }
 }
 
 function extractDelegateResponse(outputText: string): string | null {
@@ -419,14 +538,29 @@ export async function runPostLlmToolRouting(
     && !hasMemoryWriteCall
     && !hasMemoryRecallCall
   const directMemoryIntent = shouldClassifyMemoryIntent
-    ? await classifyMemoryIntent({
-      sessionId: ctx.sessionId,
-      agentId: ctx.session.agentId || null,
-      message: ctx.message,
-      currentResponse: fullResponse,
-      currentError: errorMessage,
-      toolEvents: ctx.toolEvents,
-    }).catch(() => null)
+    ? await (async () => {
+      const timeoutMs = Number.isFinite(hooks?.memoryIntentTimeoutMs)
+        ? Math.max(1, Math.trunc(hooks?.memoryIntentTimeoutMs as number))
+        : DEFAULT_MEMORY_INTENT_TIMEOUT_MS
+      let timer: NodeJS.Timeout | null = null
+      try {
+        return await Promise.race<DirectMemoryIntent | null>([
+          classifyMemoryIntent({
+            sessionId: ctx.sessionId,
+            agentId: ctx.session.agentId || null,
+            message: ctx.message,
+            currentResponse: fullResponse,
+            currentError: errorMessage,
+            toolEvents: ctx.toolEvents,
+          }).catch(() => null),
+          new Promise<null>((resolve) => {
+            timer = setTimeout(() => resolve(null), timeoutMs)
+          }),
+        ])
+      } finally {
+        if (timer) clearTimeout(timer)
+      }
+    })()
     : null
 
   if (directMemoryIntent?.action === 'store' || directMemoryIntent?.action === 'update') {

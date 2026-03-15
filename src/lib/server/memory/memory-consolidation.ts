@@ -1,6 +1,24 @@
 import { getMemoryDb } from '@/lib/server/memory/memory-db'
+import { loadAgents } from '@/lib/server/storage'
+import { resolveGenerationModelConfig } from '@/lib/server/build-llm'
 import { HumanMessage } from '@langchain/core/messages'
 import { errorMessage } from '@/lib/shared-utils'
+
+function canCreateDailyDigestForAgent(
+  agentId: string,
+  agents: ReturnType<typeof loadAgents>,
+): boolean {
+  const agent = agents[agentId]
+  if (!agent || agent.trashedAt) return false
+  try {
+    resolveGenerationModelConfig({ agentId })
+    return true
+  } catch (err: unknown) {
+    const message = errorMessage(err)
+    if (message.includes('No generation-compatible model is configured')) return false
+    throw err
+  }
+}
 
 /**
  * Produce daily digests per agent and prune stale entries.
@@ -15,6 +33,7 @@ export async function runDailyConsolidation(): Promise<{
 }> {
   const memDb = getMemoryDb()
   const counts = memDb.countsByAgent()
+  const agents = loadAgents({ includeTrashed: true })
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const digestTitle = `Daily digest: ${today}`
   const cutoff24h = Date.now() - 24 * 3600_000
@@ -26,6 +45,8 @@ export async function runDailyConsolidation(): Promise<{
     const agentId = agentKey
 
     try {
+      if (!canCreateDailyDigestForAgent(agentId, agents)) continue
+
       // Check if digest already exists for today
       const existing = memDb.search(digestTitle, agentId)
       if (existing.some((m) => m.category === 'daily_digest' && m.title === digestTitle)) continue

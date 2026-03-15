@@ -10,7 +10,12 @@ export const dynamic = 'force-dynamic'
 
 export async function GET() {
   const chatrooms = loadChatrooms()
-  return NextResponse.json(chatrooms)
+  const filtered: typeof chatrooms = {}
+  for (const [id, chatroom] of Object.entries(chatrooms)) {
+    if (chatroom.hidden === true || chatroom.archivedAt) continue
+    filtered[id] = chatroom
+  }
+  return NextResponse.json(filtered)
 }
 
 export async function POST(req: Request) {

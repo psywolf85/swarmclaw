@@ -29,6 +29,7 @@ import {
   resolveEffectiveSessionMemoryScopeMode,
 } from '@/lib/server/memory/session-memory-scope'
 import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
+import { log } from '@/lib/server/logger'
 
 /**
  * Advanced Database-Backed Memory logic.
@@ -905,6 +906,28 @@ const MemoryPlugin: Plugin = {
           'This conversation is getting long and I might lose older context soon.',
           'Save anything important I\'ve learned, decided, or discovered to memory now. Only what matters, not every detail.',
         ].join('\n'))
+      }
+
+      // Budget guard: prevent memory injection from consuming too much context
+      const MAX_MEMORY_INJECTION_CHARS = 8000
+      const combined = parts.join('\n\n')
+      if (combined.length > MAX_MEMORY_INJECTION_CHARS) {
+        // Truncate from lowest priority: recent → relevant → identity → pinned (keep pinned + policy)
+        let budget = MAX_MEMORY_INJECTION_CHARS
+        const prioritized: string[] = []
+        for (const part of parts) {
+          if (budget <= 0) {
+            log.warn('memory', 'Memory injection truncated due to context budget', {
+              agentId,
+              totalChars: combined.length,
+              maxChars: MAX_MEMORY_INJECTION_CHARS,
+            })
+            break
+          }
+          prioritized.push(part.slice(0, budget))
+          budget -= part.length
+        }
+        return prioritized.join('\n\n') || null
       }
 
       return parts.join('\n\n') || null

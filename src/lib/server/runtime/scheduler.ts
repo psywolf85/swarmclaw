@@ -9,6 +9,7 @@ import { isAgentDisabled } from '@/lib/server/agents/agent-availability'
 import { prepareScheduledTaskRun } from '@/lib/server/tasks/task-lifecycle'
 import { ensureAgentThreadSession } from '@/lib/server/agents/agent-thread-session'
 import { ensureMissionForTask, noteScheduleMissionTriggered } from '@/lib/server/missions/mission-service'
+import { hasActiveProtocolRunForSchedule, launchProtocolRunForSchedule } from '@/lib/server/protocols/protocol-service'
 import type { Schedule } from '@/types'
 
 const TICK_INTERVAL = 60_000 // 60 seconds
@@ -19,34 +20,7 @@ interface ScheduleTaskLike {
   sourceScheduleKey?: string | null
 }
 
-interface SchedulerScheduleLike {
-  id: string
-  name: string
-  agentId: string
-  taskPrompt: string
-  scheduleType: 'cron' | 'interval' | 'once'
-  cron?: string
-  intervalMs?: number
-  runAt?: number
-  lastRunAt?: number
-  nextRunAt?: number
-  status: 'active' | 'paused' | 'completed' | 'failed' | 'archived'
-  timezone?: string | null
-  staggerSec?: number | null
-  linkedTaskId?: string | null
-  runNumber?: number
-  createdInSessionId?: string | null
-  createdByAgentId?: string | null
-  followupConnectorId?: string | null
-  followupChannelId?: string | null
-  followupThreadId?: string | null
-  followupSenderId?: string | null
-  followupSenderName?: string | null
-  taskMode?: 'task' | 'wake_only'
-  message?: string
-}
-
-function resolveScheduleWakeSessionId(schedule: SchedulerScheduleLike, agents: Record<string, unknown>): string | undefined {
+function resolveScheduleWakeSessionId(schedule: Schedule, agents: Record<string, unknown>): string | undefined {
   const createdInSessionId = typeof schedule.createdInSessionId === 'string'
     ? schedule.createdInSessionId.trim()
     : ''
@@ -58,8 +32,12 @@ function resolveScheduleWakeSessionId(schedule: SchedulerScheduleLike, agents: R
   return ensureAgentThreadSession(schedule.agentId)?.id
 }
 
-function shouldWakeScheduleSession(schedule: SchedulerScheduleLike): boolean {
+function shouldWakeScheduleSession(schedule: Schedule): boolean {
   return schedule.taskMode === 'wake_only'
+}
+
+function shouldLaunchScheduleProtocol(schedule: Schedule): boolean {
+  return schedule.taskMode === 'protocol'
 }
 
 export function startScheduler() {
@@ -82,8 +60,8 @@ export function stopScheduler() {
 
 function computeNextRuns() {
   const schedules = loadSchedules()
-  const changedEntries: Array<[string, SchedulerScheduleLike]> = []
-  for (const schedule of Object.values(schedules) as SchedulerScheduleLike[]) {
+  const changedEntries: Array<[string, Schedule]> = []
+  for (const schedule of Object.values(schedules)) {
     if (schedule.status !== 'active') continue
     if (schedule.scheduleType === 'cron' && schedule.cron && !schedule.nextRunAt) {
       try {
@@ -120,7 +98,7 @@ async function tick(now = Date.now()) {
     return ts + Math.floor(Math.random() * staggerSec * 1000)
   }
 
-  const advanceSchedule = (schedule: SchedulerScheduleLike): void => {
+  const advanceSchedule = (schedule: Schedule): void => {
     if (schedule.scheduleType === 'cron' && schedule.cron) {
       try {
         const interval = CronExpressionParser.parse(
@@ -139,7 +117,7 @@ async function tick(now = Date.now()) {
     }
   }
 
-  for (const schedule of Object.values(schedules) as SchedulerScheduleLike[]) {
+  for (const schedule of Object.values(schedules)) {
     if (schedule.status !== 'active') continue
     if (!schedule.nextRunAt || schedule.nextRunAt > now) continue
 
@@ -182,7 +160,7 @@ async function tick(now = Date.now()) {
       // Wake-only: no board task, just heartbeat the agent
       upsertSchedule(schedule.id, schedule)
       const wakeSessionId = resolveScheduleWakeSessionId(schedule, agents as Record<string, unknown>)
-      noteScheduleMissionTriggered(schedule as unknown as Schedule, {
+      noteScheduleMissionTriggered(schedule, {
         wakeOnly: true,
         sessionId: wakeSessionId || schedule.createdInSessionId || null,
       })
@@ -202,6 +180,14 @@ async function tick(now = Date.now()) {
         resumeMessage: wakeMessage,
         detail: `Run #${schedule.runNumber} (wake-only).`,
       })
+    } else if (shouldLaunchScheduleProtocol(schedule)) {
+      upsertSchedule(schedule.id, schedule)
+      if (hasActiveProtocolRunForSchedule(schedule.id)) continue
+      const run = launchProtocolRunForSchedule(schedule)
+      pushMainLoopEventToMainSessions({
+        type: 'schedule_fired',
+        text: `Schedule fired: "${schedule.name}" (${schedule.id}) run #${schedule.runNumber} — structured session ${run.id}`,
+      })
     } else {
       // Default task mode: create a board task
       const { taskId } = prepareScheduledTaskRun({
@@ -210,7 +196,7 @@ async function tick(now = Date.now()) {
         now,
         scheduleSignature,
       })
-      const mission = noteScheduleMissionTriggered(schedule as unknown as Schedule, {
+      const mission = noteScheduleMissionTriggered(schedule, {
         taskId,
         sessionId: schedule.createdInSessionId || null,
       })
@@ -237,12 +223,12 @@ export async function runSchedulerTickForTests(now: number): Promise<void> {
 }
 
 export function resolveScheduleWakeSessionIdForTests(
-  schedule: SchedulerScheduleLike,
+  schedule: Schedule,
   agents: Record<string, unknown>,
 ): string | undefined {
   return resolveScheduleWakeSessionId(schedule, agents)
 }
 
-export function shouldWakeScheduleSessionForTests(schedule: SchedulerScheduleLike): boolean {
+export function shouldWakeScheduleSessionForTests(schedule: Schedule): boolean {
   return shouldWakeScheduleSession(schedule)
 }

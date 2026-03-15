@@ -2,7 +2,8 @@
 
 import { DEFAULT_HEARTBEAT_INTERVAL_SEC } from '@/lib/runtime/heartbeat-defaults'
 import { useEffect, useState, useMemo, useRef, useCallback, type ReactNode } from 'react'
-import type { Agent, Session } from '@/types'
+import { useRouter } from 'next/navigation'
+import type { Agent, ProtocolRun, Session } from '@/types'
 import { dedup } from '@/lib/shared-utils'
 import { useAppStore } from '@/stores/use-app-store'
 import { useChatStore } from '@/stores/use-chat-store'
@@ -27,6 +28,7 @@ import { useNavigate } from '@/lib/app/navigation'
 import { StatusDot } from '@/components/ui/status-dot'
 import { formatDurationSec } from '@/lib/format-display'
 import { getEnabledCapabilityIds, getEnabledToolIds } from '@/lib/capability-selection'
+import { StructuredSessionLauncher } from '@/components/protocols/structured-session-launcher'
 
 function Tip({ label, children, side = 'bottom' }: { label: string; children: ReactNode; side?: 'top' | 'bottom' | 'left' | 'right' }) {
   return (
@@ -104,6 +106,10 @@ const PROVIDER_LABELS: Record<string, string> = {
   anthropic: 'Anthropic',
 }
 
+function pickOpenStructuredRun(runs: ProtocolRun[]): ProtocolRun | null {
+  return runs.find((run) => !['completed', 'failed', 'cancelled', 'archived'].includes(run.status)) || null
+}
+
 interface Props {
   session: Session
   streaming: boolean
@@ -125,6 +131,7 @@ interface Props {
 }
 
 export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, mobile, browserActive, onStopBrowser, onVoiceToggle, voiceActive, voiceSupported, heartbeatHistoryOpen, onToggleHeartbeatHistory, connectorSources, connectorFilter, onConnectorFilterChange, hasMultipleSources }: Props) {
+  const router = useRouter()
   const now = useNow()
   const ttsEnabled = useChatStore((s) => s.ttsEnabled)
   const toggleTts = useChatStore((s) => s.toggleTts)
@@ -176,6 +183,8 @@ export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, m
   const [headerWidgets, setHeaderWidgets] = useState<Array<{ id: string; label: string; icon?: string }>>([])
   const [localhostBrowser, setLocalhostBrowser] = useState(false)
   const [suggestingSkill, setSuggestingSkill] = useState(false)
+  const [structuredSessionOpen, setStructuredSessionOpen] = useState(false)
+  const [activeStructuredRun, setActiveStructuredRun] = useState<ProtocolRun | null>(null)
   const agentWalletIds = useMemo(() => getAgentWalletIds(agent), [agent])
   const activeWalletId = useMemo(() => getAgentActiveWalletId(agent), [agent])
 
@@ -194,6 +203,22 @@ export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, m
   }, [refreshHeaderWidgets])
 
   useWs('extensions', refreshHeaderWidgets)
+
+  const refreshStructuredRuns = useCallback(() => {
+    if (!session.id) {
+      setActiveStructuredRun(null)
+      return
+    }
+    void api<ProtocolRun[]>('GET', `/protocols/runs?sessionId=${encodeURIComponent(session.id)}&limit=6`)
+      .then((runs) => setActiveStructuredRun(pickOpenStructuredRun(Array.isArray(runs) ? runs : [])))
+      .catch(() => setActiveStructuredRun(null))
+  }, [session.id])
+
+  useEffect(() => {
+    void refreshStructuredRuns()
+  }, [refreshStructuredRuns])
+
+  useWs(session.id ? 'protocol_runs' : '', refreshStructuredRuns, 2000)
 
   const fetchWalletBalance = useCallback(async () => {
     if (!activeWalletId) {
@@ -769,6 +794,32 @@ export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, m
                 <span>{suggestingSkill ? 'Drafting Skill' : 'Draft Skill'}</span>
               </HeaderChip>
             )}
+            {session.agentId && (
+              <HeaderChip
+                onClick={() => setStructuredSessionOpen(true)}
+                title="Start a structured session from this chat"
+                className="text-text-3/80"
+              >
+                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0">
+                  <path d="M8 6h13" />
+                  <path d="M8 12h13" />
+                  <path d="M8 18h13" />
+                  <path d="M3 6h.01" />
+                  <path d="M3 12h.01" />
+                  <path d="M3 18h.01" />
+                </svg>
+                <span>Structured Session</span>
+              </HeaderChip>
+            )}
+            {activeStructuredRun && (
+              <HeaderChip
+                onClick={() => router.push(`/protocols?runId=${encodeURIComponent(activeStructuredRun.id)}`)}
+                title="Open the active structured session linked to this chat"
+                active
+              >
+                <span>Open Session</span>
+              </HeaderChip>
+            )}
             {visibleHeaderWidgets.map((widget) => {
               const actionable = widget.id === 'wallet-status'
               const walletLabel = actionable
@@ -1179,6 +1230,20 @@ export function ChatHeader({ session, streaming, onStop, onMenuToggle, onBack, m
       )}
 
     </header>
+    <StructuredSessionLauncher
+      open={structuredSessionOpen}
+      onClose={() => setStructuredSessionOpen(false)}
+      onCreated={(run) => {
+        router.push(`/protocols?runId=${encodeURIComponent(run.id)}`)
+      }}
+      initialContext={{
+        sessionId: session.id,
+        sessionLabel: session.name,
+        participantAgentIds: session.agentId ? [session.agentId] : [],
+        facilitatorAgentId: session.agentId || null,
+        title: agent ? `Structured session: ${agent.name}` : null,
+      }}
+    />
     </>
   )
 }

@@ -30,6 +30,7 @@ const IMAGE_EXT_WHITELIST = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '
 export const MAX_FTS_QUERY_TERMS = 6
 export const MAX_FTS_TERM_LENGTH = 48
 const MAX_FTS_RESULT_ROWS = 50
+const DEFAULT_VECTOR_SIMILARITY_THRESHOLD = 0.3
 const MAX_MERGED_RESULTS = 80
 
 export const MEMORY_FTS_STOP_WORDS = new Set([
@@ -52,6 +53,7 @@ export interface MemoryScopeFilter {
 export interface MemorySearchOptions {
   scope?: MemoryScopeFilter
   rerankMode?: MemoryRerankMode
+  vectorSimilarityThreshold?: number
 }
 
 function normalizeScopeIdentifier(value: unknown): string | null {
@@ -824,7 +826,7 @@ function initDb() {
             serializeEmbedding(emb), id,
           )
         }
-      }).catch(() => { /* embedding not available, ok */ })
+      }).catch((err: unknown) => { console.warn(`[memory-db] Embedding generation failed for memory ${id}:`, err instanceof Error ? err.message : String(err)) })
 
       // Keep memory links bidirectional by default.
       if (linkedMemoryIds.length) this.link(id, linkedMemoryIds, true)
@@ -1023,6 +1025,7 @@ function initDb() {
       if (shouldSkipSearchQuery(query)) return []
       const startedAt = Date.now()
       const normalizedAgentId = normalizeScopeIdentifier(agentId)
+      const { vectorSimilarityThreshold } = options
       const rerankMode: MemoryRerankMode = options.rerankMode === 'semantic' || options.rerankMode === 'lexical'
         ? options.rerankMode
         : 'balanced'
@@ -1068,7 +1071,7 @@ function initDb() {
               const score = cosineSimilarity(queryEmbedding, emb)
               return { row, score, emb }
             })
-            .filter((s) => s.score > 0.3) // relevance threshold
+            .filter((s) => s.score > (vectorSimilarityThreshold ?? DEFAULT_VECTOR_SIMILARITY_THRESHOLD))
             .sort((a, b) => b.score - a.score)
             .slice(0, 20)
 
@@ -1079,8 +1082,8 @@ function initDb() {
             return entry
           })
         }
-      } catch {
-        // Vector search unavailable, use FTS only
+      } catch (err: unknown) {
+        console.warn('[memory-db] Vector search failed, falling back to FTS:', err instanceof Error ? err.message : String(err))
       }
 
       // Merge: deduplicate by id

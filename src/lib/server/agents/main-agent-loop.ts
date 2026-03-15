@@ -13,6 +13,7 @@ const MAX_TIMELINE_ITEMS = 40
 const MAX_WORKING_MEMORY_NOTES = 12
 const DEFAULT_FOLLOWUP_DELAY_MS = 1500
 const DEFAULT_MAX_FOLLOWUP_CHAIN = 3
+const MAX_LIFETIME_ITERATIONS = 200
 
 export interface MainLoopState {
   goal: string | null
@@ -44,6 +45,7 @@ export interface MainLoopState {
   missionTokens: number
   missionCostUsd: number
   followupChainCount: number
+  lifetimeIterations: number
   metaMissCount: number
   workingMemoryNotes: string[]
   skillBlocker: {
@@ -149,6 +151,7 @@ function defaultState(): MainLoopState {
     missionTokens: 0,
     missionCostUsd: 0,
     followupChainCount: 0,
+    lifetimeIterations: 0,
     metaMissCount: 0,
     workingMemoryNotes: [],
     skillBlocker: null,
@@ -303,6 +306,7 @@ function clampState(state: MainLoopState): MainLoopState {
   state.reviewConfidence = normalizeConfidence(state.reviewConfidence)
   state.momentumScore = Math.max(-10, Math.min(10, Math.trunc(state.momentumScore || 0)))
   state.followupChainCount = Math.max(0, Math.min(10, Math.trunc(state.followupChainCount || 0)))
+  state.lifetimeIterations = Math.max(0, Math.trunc(state.lifetimeIterations || 0))
   state.metaMissCount = Math.max(0, Math.min(100, Math.trunc(state.metaMissCount || 0)))
   state.missionTokens = Math.max(0, Math.trunc(state.missionTokens || 0))
   state.missionCostUsd = Math.max(0, Number.isFinite(state.missionCostUsd) ? Number(state.missionCostUsd) : 0)
@@ -334,6 +338,7 @@ function normalizeState(input?: Partial<MainLoopState> | null): MainLoopState {
     if (typeof input.missionTokens === 'number') next.missionTokens = input.missionTokens
     if (typeof input.missionCostUsd === 'number') next.missionCostUsd = input.missionCostUsd
     if (typeof input.followupChainCount === 'number') next.followupChainCount = input.followupChainCount
+    if (typeof input.lifetimeIterations === 'number') next.lifetimeIterations = input.lifetimeIterations
     if (typeof input.metaMissCount === 'number') next.metaMissCount = input.metaMissCount
     if (Array.isArray(input.workingMemoryNotes)) next.workingMemoryNotes = [...input.workingMemoryNotes]
     if (input.skillBlocker === null || typeof input.skillBlocker === 'object') next.skillBlocker = input.skillBlocker
@@ -848,6 +853,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
   const shouldCaptureMessageGoal = !input.internal
   const messageGoal = shouldCaptureMessageGoal ? parseGoalContractFromText(input.message || '') : null
   const nowTs = now()
+  state.lifetimeIterations++
   const mission = session ? getMissionForSession(session) : null
 
   if (messageGoal) state.goalContract = mergeGoalContracts(state.goalContract, messageGoal)
@@ -975,6 +981,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
     }
   } else if (isDirectUserChat) {
     state.followupChainCount = 0
+    state.lifetimeIterations = 0
     if (successfulChatDelivery) {
       state.status = 'ok'
       state.nextAction = null
@@ -988,6 +995,14 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
     state.followupChainCount = 0
     if (gotTerminalAck && state.status !== 'blocked') state.status = 'ok'
   } else {
+    if (state.lifetimeIterations >= MAX_LIFETIME_ITERATIONS) {
+      state.status = 'blocked'
+      state.paused = true
+      state.followupChainCount = 0
+      appendTimeline(state, 'lifetime-cap', `Lifetime iteration cap reached (${MAX_LIFETIME_ITERATIONS}). Pausing autonomous operation.`, 'blocked')
+      stateMap.set(input.sessionId, clampState(state))
+      return null
+    }
     const shouldContinue = !!supervisorPrompt || needsReplan || state.status === 'progress' || (!!state.nextAction && toolNames.length > 0)
     if (shouldContinue && state.followupChainCount < limit) {
       state.followupChainCount += 1

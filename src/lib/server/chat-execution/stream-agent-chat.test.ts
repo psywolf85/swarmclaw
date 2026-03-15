@@ -12,6 +12,7 @@ import {
   isWalletSimulationResult,
   looksLikeOpenEndedDeliverableTask,
   pruneIncompleteToolEvents,
+  resolveExclusiveMemoryWriteTerminalAllowance,
   resolveContinuationAssistantText,
   resolveFinalStreamResponseText,
   resolveSuccessfulTerminalToolBoundary,
@@ -29,6 +30,7 @@ import {
   hasIncompleteDelegationWait,
   shouldForceWorkspaceScopeShellFallback,
 } from '@/lib/server/chat-execution/stream-continuation'
+import type { DirectMemoryIntentClassifierInput } from '@/lib/server/chat-execution/direct-memory-intent'
 
 const streamAgentChatSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'stream-agent-chat.ts'), 'utf-8')
 const streamContinuationSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'stream-continuation.ts'), 'utf-8')
@@ -236,6 +238,7 @@ describe('buildToolDisciplineLines', () => {
     assert.ok(streamAgentChatSource.includes('## Immediate Memory Routes'))
     assert.ok(streamAgentChatSource.includes('call `memory_store` or `memory_update` immediately before any planning, delegation, task creation, or agent management'))
     assert.ok(streamAgentChatSource.includes('Do NOT call memory tools, web search, or session-history tools'))
+    assert.ok(streamAgentChatSource.includes('When assessing the platform, repo, runtime, or implementation status, inspect the relevant files, logs, or state first.'))
     assert.ok(streamAgentChatSource.includes('const currentThreadRecallRequest = isCurrentThreadRecallRequest(message)'))
     assert.ok(streamSources.includes('Preserve hard structural constraints from the original request'))
     assert.ok(streamAgentChatSource.includes('## Exact Structural Constraints'))
@@ -634,6 +637,17 @@ describe('resolveSuccessfulTerminalToolBoundary', () => {
 
     assert.equal(result?.kind, 'memory_write')
     assert.equal(result?.responseText, 'Your launch marker is ALPHA-7.')
+  })
+
+  it('does not treat successful memory writes as terminal when the turn has more work to do', () => {
+    const result = resolveSuccessfulTerminalToolBoundary({
+      toolName: 'memory_store',
+      toolInput: { title: 'Launch marker', value: 'My launch marker is ALPHA-7.' },
+      toolOutput: 'Stored memory "Launch marker" (id: abc123). No further memory lookup is needed unless the user asked you to verify.',
+      allowMemoryWriteTerminal: false,
+    })
+
+    assert.equal(result, null)
   })
 
   it('treats durable ask_human waits as terminal boundaries', () => {
@@ -1054,6 +1068,80 @@ describe('shouldForceDeliverableFollowthrough', () => {
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }
+  })
+})
+
+describe('resolveExclusiveMemoryWriteTerminalAllowance', () => {
+  it('allows terminal memory acknowledgements when the user turn is a pure memory write', async () => {
+    let captured: DirectMemoryIntentClassifierInput | null = null
+    const allowed = await resolveExclusiveMemoryWriteTerminalAllowance({
+      sessionId: 'sess-1',
+      agentId: 'agent-1',
+      message: 'Please remember that my launch marker is ALPHA-9.',
+      classifyMemoryIntent: async (input) => {
+        captured = input
+        return {
+          action: 'store',
+          confidence: 0.99,
+          value: 'My launch marker is ALPHA-9',
+          acknowledgement: 'I\'ll remember that.',
+          exclusiveCompletion: true,
+        }
+      },
+    })
+
+    assert.equal(allowed, true)
+    assert.deepEqual(captured, {
+      sessionId: 'sess-1',
+      agentId: 'agent-1',
+      message: 'Please remember that my launch marker is ALPHA-9.',
+      currentResponse: '',
+      currentError: null,
+      toolEvents: [],
+    })
+  })
+
+  it('keeps memory writes non-terminal when the user also asked for more work', async () => {
+    const allowed = await resolveExclusiveMemoryWriteTerminalAllowance({
+      sessionId: 'sess-2',
+      message: 'Remember this, then continue auditing the platform.',
+      classifyMemoryIntent: async () => ({
+        action: 'store',
+        confidence: 0.91,
+        value: 'Continue auditing the platform after remembering this.',
+        acknowledgement: 'I\'ll remember that.',
+        exclusiveCompletion: false,
+      }),
+    })
+
+    assert.equal(allowed, false)
+  })
+
+  it('fails closed when the classifier does not return an exclusive memory write', async () => {
+    assert.equal(
+      await resolveExclusiveMemoryWriteTerminalAllowance({
+        sessionId: 'sess-3',
+        message: 'What do you remember about me?',
+        classifyMemoryIntent: async () => ({
+          action: 'recall',
+          confidence: 0.84,
+          query: 'user profile',
+          missResponse: 'I don\'t have that yet.',
+        }),
+      }),
+      false,
+    )
+
+    assert.equal(
+      await resolveExclusiveMemoryWriteTerminalAllowance({
+        sessionId: 'sess-4',
+        message: 'Remember this.',
+        classifyMemoryIntent: async () => {
+          throw new Error('classifier failed')
+        },
+      }),
+      false,
+    )
   })
 })
 

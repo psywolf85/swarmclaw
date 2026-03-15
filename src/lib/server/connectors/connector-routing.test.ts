@@ -4,9 +4,11 @@ import { getPlatform, isNoMessage, formatMediaLine, formatInboundUserText, extra
 import { handleSignalEvent } from './signal'
 import type { PlatformConnector } from './types'
 import type { InboundMessage, InboundMedia } from './types'
+import type { Connector } from '@/types'
 import fs from 'node:fs'
 import path from 'node:path'
 import { UPLOAD_DIR } from '../storage'
+import { resolveImagePath } from '../resolve-image'
 
 // ---------------------------------------------------------------------------
 // 1. Connector module resolution (getPlatform)
@@ -57,7 +59,7 @@ describe('handleSignalEvent — Signal stdio message parsing', () => {
       status: 'running' as const,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-    } as any
+    } as unknown as Connector
   }
 
   it('parses envelope with dataMessage.message field', async () => {
@@ -194,6 +196,18 @@ describe('formatMediaLine', () => {
     assert.equal(line, '- IMAGE: photo.jpg (2 KB) -> /uploads/photo.jpg')
   })
 
+  it('hides upload URLs when the media is already attached inline from local storage', () => {
+    const media: InboundMedia = {
+      type: 'image',
+      fileName: 'photo.jpg',
+      sizeBytes: 2048,
+      url: '/api/uploads/photo.jpg',
+      localPath: '/tmp/photo.jpg',
+    }
+    const line = formatMediaLine(media)
+    assert.equal(line, '- IMAGE: photo.jpg (2 KB) [attached inline]')
+  })
+
   it('formats media without URL', () => {
     const media: InboundMedia = { type: 'document', mimeType: 'application/pdf', sizeBytes: 512 }
     const line = formatMediaLine(media)
@@ -232,6 +246,20 @@ describe('formatInboundUserText', () => {
     assert.ok(result.includes('- IMAGE: cat.png'))
   })
 
+  it('does not leak raw upload URLs into connector prompt text when local attachments exist', () => {
+    const msg: InboundMessage = {
+      platform: 'whatsapp',
+      channelId: 'ch1',
+      senderId: 's1',
+      senderName: 'Eve',
+      text: 'What is in this image?',
+      media: [{ type: 'image', fileName: 'cat.png', url: '/api/uploads/cat.png', localPath: '/tmp/cat.png' }],
+    }
+    const result = formatInboundUserText(msg)
+    assert.ok(result.includes('[attached inline]'))
+    assert.ok(!result.includes('/api/uploads/cat.png'))
+  })
+
   it('truncates media list at 6 with overflow note', () => {
     const media: InboundMedia[] = Array.from({ length: 8 }, (_, i) => ({
       type: 'file' as const, fileName: `f${i}.txt`,
@@ -242,6 +270,36 @@ describe('formatInboundUserText', () => {
     }
     const result = formatInboundUserText(msg)
     assert.ok(result.includes('...and 2 more attachment(s)'))
+  })
+})
+
+describe('resolveImagePath', () => {
+  it('resolves absolute upload URLs back to the uploads directory', () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const fileName = `resolve-image-${Date.now()}.png`
+    const filePath = path.join(UPLOAD_DIR, fileName)
+    fs.writeFileSync(filePath, 'img')
+    try {
+      assert.equal(
+        resolveImagePath(undefined, `https://agent.swarmclaw.com/api/uploads/${fileName}`),
+        filePath,
+      )
+    } finally {
+      fs.rmSync(filePath, { force: true })
+    }
+  })
+
+  it('resolves sandbox and file upload urls when the file exists', () => {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true })
+    const fileName = `resolve-image-${Date.now()}.jpg`
+    const filePath = path.join(UPLOAD_DIR, fileName)
+    fs.writeFileSync(filePath, 'img')
+    try {
+      assert.equal(resolveImagePath(`sandbox:/api/uploads/${fileName}`), filePath)
+      assert.equal(resolveImagePath(`file:///api/uploads/${fileName}`), filePath)
+    } finally {
+      fs.rmSync(filePath, { force: true })
+    }
   })
 })
 

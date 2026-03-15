@@ -326,7 +326,10 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
     ? (liveStreamActive ? (liveStream?.thinking?.trim() ? liveStream.thinking : undefined) : message.thinking)
     : undefined
   const sourceText = liveStreamActive ? (liveStream?.text || '') : message.text
-  const copySourceText = liveStreamActive ? (liveStream?.text || '') : message.text
+  const connectorDeliveryTranscript = !isUser && message.kind === 'connector-delivery'
+    ? (message.source?.deliveryTranscript?.trim() || '')
+    : ''
+  const copySourceText = connectorDeliveryTranscript || (liveStreamActive ? (liveStream?.text || '') : message.text)
 
   // Extract ALL media from ALL tool events for inline display after the message text.
   // Covers send_file, browser screenshots, file tool outputs — everything.
@@ -382,7 +385,7 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
   const delegationSource = !isUser && message.kind === 'system' ? parseDelegationSource(message.text || '') : null
   // Detect task completion system messages (delegated or direct)
   const taskCompletion = !isUser && message.kind === 'system' ? parseTaskCompletion(message.text || '') : null
-  const rawDisplayText = delegationSource ? delegationSource.rest : sourceText
+  const rawDisplayText = connectorDeliveryTranscript || (delegationSource ? delegationSource.rest : sourceText)
   const displayText = rawDisplayText
     ? rawDisplayText.split('\n').filter((l) => !/\[(MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]/.test(l)).join('\n').trim()
     : ''
@@ -761,6 +764,14 @@ export const MessageBubble = memo(function MessageBubble({ message, assistantNam
           </div>
         ) : hasDisplayText ? (
           <div className={`msg-content text-[15px] md:text-[14px] break-words ${liveStreamActive ? 'streaming-cursor' : ''} ${isUser ? 'leading-[1.6] text-white/95' : 'leading-[1.7] text-text'}`}>
+            {!isUser && message.kind === 'connector-delivery' && connectorDeliveryTranscript && (
+              <div className="mb-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-3 py-1 text-[11px] font-700 uppercase tracking-[0.12em] text-emerald-200/85">
+                <span>Delivered via connector</span>
+                {message.source?.deliveryMode === 'voice_note' && (
+                  <span className="text-emerald-100/70">voice note</span>
+                )}
+              </div>
+            )}
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               rehypePlugins={[rehypeHighlight]}

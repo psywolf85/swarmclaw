@@ -283,4 +283,79 @@ describe('scheduler wake targeting', () => {
     assert.equal(output.firstTaskMissionId, output.linkedMissionIdFirst)
     assert.equal(output.secondTaskMissionId, output.linkedMissionIdFirst)
   })
+
+  it('can launch a structured session run from protocol-mode schedules', () => {
+    const output = runSchedulerWithTempDataDir(`
+      const storageMod = await import('@/lib/server/storage')
+      const schedulerMod = await import('@/lib/server/runtime/scheduler')
+      const protocolsMod = await import('@/lib/server/protocols/protocol-service')
+      const storage = storageMod.default || storageMod
+      const scheduler = schedulerMod.default || schedulerMod
+      const protocols = protocolsMod.default || protocolsMod
+
+      const now = Date.now()
+      storage.saveAgents({
+        'agent-1': {
+          id: 'agent-1',
+          name: 'Session Agent',
+          provider: 'ollama',
+          model: 'test-model',
+          systemPrompt: 'test',
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+
+      storage.saveProtocolTemplates({
+        'sched-protocol-template': {
+          id: 'sched-protocol-template',
+          name: 'Scheduler Protocol Template',
+          description: 'A test-only complete-immediately structured session.',
+          builtIn: false,
+          singleAgentAllowed: true,
+          tags: ['test'],
+          recommendedOutputs: [],
+          defaultPhases: [],
+          steps: [
+            { id: 'complete', kind: 'complete', label: 'Complete' },
+          ],
+          entryStepId: 'complete',
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+
+      storage.saveSchedules({
+        'sched-protocol': {
+          id: 'sched-protocol',
+          name: 'Run a structured check-in',
+          agentId: 'agent-1',
+          taskPrompt: 'Run a quick structured status pass.',
+          taskMode: 'protocol',
+          protocolTemplateId: 'sched-protocol-template',
+          scheduleType: 'once',
+          status: 'active',
+          runAt: now - 1000,
+          nextRunAt: now - 1000,
+          createdAt: now - 1000,
+          updatedAt: now - 1000,
+        },
+      })
+
+      await scheduler.runSchedulerTickForTests(now)
+      const runs = protocols.listProtocolRuns({ scheduleId: 'sched-protocol' })
+
+      console.log(JSON.stringify({
+        count: runs.length,
+        sourceKind: runs[0]?.sourceRef?.kind || null,
+        templateId: runs[0]?.templateId || null,
+        transcriptChatroomId: runs[0]?.transcriptChatroomId || null,
+      }))
+    `)
+
+    assert.equal(output.count, 1)
+    assert.equal(output.sourceKind, 'schedule')
+    assert.equal(output.templateId, 'sched-protocol-template')
+    assert.ok(output.transcriptChatroomId)
+  })
 })

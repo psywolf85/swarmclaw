@@ -18,6 +18,7 @@ describe('direct-memory-intent', () => {
       title: 'Launch marker',
       value: 'My launch marker is ALPHA-7',
       acknowledgement: 'I\'ll remember that your launch marker is ALPHA-7.',
+      exclusiveCompletion: false,
     })
   })
 
@@ -41,6 +42,20 @@ describe('direct-memory-intent', () => {
       title: 'Launch marker',
       value: 'My launch marker is ALPHA-8',
       acknowledgement: 'I\'ll use your updated launch marker going forward.',
+      exclusiveCompletion: false,
+    })
+  })
+
+  it('parses exclusive completion for pure memory turns', () => {
+    const parsed = parseDirectMemoryIntentResponse('{"action":"store","confidence":0.98,"title":"Launch marker","value":"My launch marker is ALPHA-9","acknowledgement":"I\\u2019ll remember that.","exclusiveCompletion":true}')
+
+    assert.deepEqual(parsed, {
+      action: 'store',
+      confidence: 0.98,
+      title: 'Launch marker',
+      value: 'My launch marker is ALPHA-9',
+      acknowledgement: 'I’ll remember that.',
+      exclusiveCompletion: true,
     })
   })
 

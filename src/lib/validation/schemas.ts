@@ -188,6 +188,180 @@ export const ChatroomCreateSchema = z.object({
   })).optional(),
 })
 
+export const ProtocolPhaseDefinitionSchema = z.object({
+  id: z.string().min(1),
+  kind: z.enum([
+    'present',
+    'collect_independent_inputs',
+    'round_robin',
+    'compare',
+    'decide',
+    'summarize',
+    'emit_tasks',
+    'wait',
+  ]),
+  label: z.string().min(1),
+  instructions: z.string().nullable().optional().default(null),
+  turnLimit: z.number().int().positive().nullable().optional().default(null),
+  completionCriteria: z.string().nullable().optional().default(null),
+})
+
+export const ProtocolConditionDefinitionSchema: z.ZodType<
+  | { type: 'summary_exists' }
+  | { type: 'artifact_exists'; artifactKind?: string | null }
+  | { type: 'artifact_count_at_least'; count: number; artifactKind?: string | null }
+  | { type: 'created_task_count_at_least'; count: number }
+  | { type: 'all'; conditions: unknown[] }
+  | { type: 'any'; conditions: unknown[] }
+> = z.lazy(() => z.union([
+  z.object({ type: z.literal('summary_exists') }),
+  z.object({
+    type: z.literal('artifact_exists'),
+    artifactKind: z.enum(['summary', 'decision', 'comparison', 'notes', 'action_items']).nullable().optional().default(null),
+  }),
+  z.object({
+    type: z.literal('artifact_count_at_least'),
+    count: z.number().int().nonnegative(),
+    artifactKind: z.enum(['summary', 'decision', 'comparison', 'notes', 'action_items']).nullable().optional().default(null),
+  }),
+  z.object({
+    type: z.literal('created_task_count_at_least'),
+    count: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal('all'),
+    conditions: z.array(ProtocolConditionDefinitionSchema).min(1),
+  }),
+  z.object({
+    type: z.literal('any'),
+    conditions: z.array(ProtocolConditionDefinitionSchema).min(1),
+  }),
+]))
+
+export const ProtocolBranchCaseSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  nextStepId: z.string().min(1),
+  description: z.string().nullable().optional().default(null),
+  when: ProtocolConditionDefinitionSchema.nullable().optional().default(null),
+})
+
+export const ProtocolRepeatConfigSchema = z.object({
+  bodyStepId: z.string().min(1),
+  nextStepId: z.string().nullable().optional().default(null),
+  maxIterations: z.number().int().positive(),
+  exitCondition: ProtocolConditionDefinitionSchema.nullable().optional().default(null),
+  onExhausted: z.enum(['advance', 'fail']).optional().default('fail'),
+})
+
+export const ProtocolStepDefinitionSchema: z.ZodTypeAny = z.lazy(() => z.object({
+  id: z.string().min(1),
+  kind: z.enum([
+    'present',
+    'collect_independent_inputs',
+    'round_robin',
+    'compare',
+    'decide',
+    'summarize',
+    'emit_tasks',
+    'wait',
+    'branch',
+    'repeat',
+    'parallel',
+    'join',
+    'complete',
+  ]),
+  label: z.string().min(1),
+  instructions: z.string().nullable().optional().default(null),
+  turnLimit: z.number().int().positive().nullable().optional().default(null),
+  completionCriteria: z.string().nullable().optional().default(null),
+  nextStepId: z.string().nullable().optional().default(null),
+  branchCases: z.array(ProtocolBranchCaseSchema).optional().default([]),
+  defaultNextStepId: z.string().nullable().optional().default(null),
+  repeat: ProtocolRepeatConfigSchema.nullable().optional().default(null),
+  parallel: ProtocolParallelConfigSchema.nullable().optional().default(null),
+  join: ProtocolJoinConfigSchema.nullable().optional().default(null),
+}))
+
+export const ProtocolParallelBranchDefinitionSchema = z.object({
+  id: z.string().min(1),
+  label: z.string().min(1),
+  steps: z.array(ProtocolStepDefinitionSchema).min(1),
+  entryStepId: z.string().nullable().optional().default(null),
+  participantAgentIds: z.array(z.string()).optional().default([]),
+  facilitatorAgentId: z.string().nullable().optional().default(null),
+  observerAgentIds: z.array(z.string()).optional().default([]),
+})
+
+export const ProtocolParallelConfigSchema = z.object({
+  branches: z.array(ProtocolParallelBranchDefinitionSchema).min(1),
+})
+
+export const ProtocolJoinConfigSchema = z.object({
+  parallelStepId: z.string().nullable().optional().default(null),
+})
+
+export const ProtocolRunCreateSchema = z.object({
+  title: z.string().min(1, 'A session title is required'),
+  templateId: z.string().min(1).optional().default('facilitated_discussion'),
+  participantAgentIds: z.array(z.string()).min(1, 'Select at least one participant').default([]),
+  facilitatorAgentId: z.string().nullable().optional().default(null),
+  observerAgentIds: z.array(z.string()).optional().default([]),
+  missionId: z.string().nullable().optional().default(null),
+  taskId: z.string().nullable().optional().default(null),
+  sessionId: z.string().nullable().optional().default(null),
+  parentChatroomId: z.string().nullable().optional().default(null),
+  scheduleId: z.string().nullable().optional().default(null),
+  autoStart: z.boolean().optional().default(true),
+  createTranscript: z.boolean().optional().default(true),
+  config: z.object({
+    goal: z.string().nullable().optional().default(null),
+    kickoffMessage: z.string().nullable().optional().default(null),
+    roundLimit: z.number().int().positive().nullable().optional().default(null),
+    decisionMode: z.string().nullable().optional().default(null),
+    autoEmitTasks: z.boolean().optional().default(false),
+    taskProjectId: z.string().nullable().optional().default(null),
+    postSummaryToParent: z.boolean().optional().default(true),
+  }).optional().default({
+    goal: null,
+    kickoffMessage: null,
+    roundLimit: null,
+    decisionMode: null,
+    autoEmitTasks: false,
+    taskProjectId: null,
+    postSummaryToParent: true,
+  }),
+  phases: z.array(ProtocolPhaseDefinitionSchema).optional(),
+  steps: z.array(ProtocolStepDefinitionSchema).optional(),
+  entryStepId: z.string().nullable().optional().default(null),
+})
+
+export const ProtocolTemplateUpsertSchema = z.object({
+  name: z.string().min(1, 'A template name is required'),
+  description: z.string().min(1, 'A template description is required'),
+  singleAgentAllowed: z.boolean().optional().default(true),
+  tags: z.array(z.string().min(1)).optional().default([]),
+  recommendedOutputs: z.array(z.string().min(1)).optional().default([]),
+  defaultPhases: z.array(ProtocolPhaseDefinitionSchema).optional().default([]),
+  steps: z.array(ProtocolStepDefinitionSchema).optional().default([]),
+  entryStepId: z.string().nullable().optional().default(null),
+}).superRefine((value, ctx) => {
+  if (value.defaultPhases.length === 0 && value.steps.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['steps'],
+      message: 'Provide at least one phase or one step.',
+    })
+  }
+})
+
+export const ProtocolRunActionSchema = z.object({
+  action: z.enum(['start', 'pause', 'resume', 'retry_phase', 'skip_phase', 'cancel', 'archive', 'inject_context']),
+  reason: z.string().nullable().optional().default(null),
+  phaseId: z.string().nullable().optional().default(null),
+  context: z.string().nullable().optional().default(null),
+})
+
 /** Format ZodError into a 400-friendly payload */
 export function formatZodError(err: z.ZodError) {
   return { error: 'Validation failed', issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })) }

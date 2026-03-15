@@ -7,6 +7,7 @@ const MAX_LOG_CHARS = 200_000
 const DEFAULT_BACKGROUND_YIELD_MS = 10_000
 const DEFAULT_TIMEOUT_MS = 30 * 60_000
 const DEFAULT_TTL_MS = 30 * 60_000
+const SIGKILL_ESCALATION_MS = 5_000
 const BACKGROUND_STARTUP_GRACE_MS = 500
 
 export type ProcessStatus = 'running' | 'exited' | 'killed' | 'failed' | 'timeout'
@@ -76,12 +77,14 @@ interface RuntimeState {
   records: Map<string, ProcessRecord>
   children: Map<string, ChildProcessWithoutNullStreams>
   exitWaiters: Map<string, Promise<ProcessRecord>>
+  sigkillTimers: Map<string, ReturnType<typeof setTimeout>>
 }
 
 const state: RuntimeState = hmrSingleton<RuntimeState>('__swarmclaw_process_manager__', () => ({
   records: new Map<string, ProcessRecord>(),
   children: new Map<string, ChildProcessWithoutNullStreams>(),
   exitWaiters: new Map<string, Promise<ProcessRecord>>(),
+  sigkillTimers: new Map<string, ReturnType<typeof setTimeout>>(),
 }))
 
 function now() {
@@ -110,6 +113,11 @@ function markEnded(id: string, patch: Partial<ProcessRecord>) {
   rec.endedAt = patch.endedAt ?? now()
   rec.exitCode = patch.exitCode ?? rec.exitCode
   rec.signal = patch.signal ?? rec.signal
+  const escalationTimer = state.sigkillTimers.get(id)
+  if (escalationTimer) {
+    clearTimeout(escalationTimer)
+    state.sigkillTimers.delete(id)
+  }
   if (rec.sandboxMode === 'ephemeral' && rec.sandboxContainerName) {
     cleanupSandboxContainer(rec.sandboxContainerName)
   }
@@ -119,9 +127,9 @@ function cleanupSandboxContainer(containerName: string) {
   if (!detectDocker().available) return
   try {
     const child = spawn('docker', ['rm', '-f', containerName], { stdio: 'ignore', detached: true })
-    child.on('error', () => { /* Docker may disappear between detect and cleanup */ })
+    child.on('error', (err) => { console.warn(`[process-manager] Docker cleanup error for ${containerName}:`, err.message) })
     child.unref()
-  } catch { /* Docker may not be present or container already removed */ }
+  } catch (err: unknown) { console.warn(`[process-manager] Docker cleanup spawn failed for ${containerName}:`, err instanceof Error ? err.message : String(err)) }
 }
 
 function normalizeLines(text: string): string[] {
@@ -250,6 +258,13 @@ export async function startManagedProcess(opts: StartProcessOptions): Promise<St
     rec.status = 'timeout'
     appendLog(id, '\n[process] Timeout reached. Terminating process.\n')
     try { child.kill('SIGTERM') } catch { /* noop */ }
+    const escalationTimer = setTimeout(() => {
+      if (!state.children.has(id)) return
+      console.warn(`[process-manager] Process ${id} (pid=${rec.pid}) did not exit after SIGTERM, sending SIGKILL`)
+      appendLog(id, '\n[process] SIGKILL escalation — process ignored SIGTERM.\n')
+      try { child.kill('SIGKILL') } catch { /* noop */ }
+    }, SIGKILL_ESCALATION_MS)
+    state.sigkillTimers.set(id, escalationTimer)
   }, timeoutMs)
 
   child.stdout.on('data', (buf: Buffer) => appendLog(id, buf.toString()))
@@ -453,4 +468,32 @@ export function cleanupSessionProcesses(sessionId: string): number {
     cleaned++
   }
   return cleaned
+}
+
+/** Reap orphaned sandbox containers from prior crashes. */
+export async function reapOrphanedSandboxContainers(): Promise<number> {
+  if (!detectDocker().available) return 0
+  try {
+    const { execSync } = await import('child_process')
+    const output = execSync('docker ps --filter name=swarmclaw-sb- --format {{.Names}}', {
+      encoding: 'utf-8',
+      timeout: 10_000,
+    }).trim()
+    if (!output) return 0
+    const containers = output.split('\n').filter(Boolean)
+    let reaped = 0
+    for (const name of containers) {
+      const isTracked = Array.from(state.records.values()).some(
+        (r) => r.sandboxContainerName === name && r.status === 'running',
+      )
+      if (!isTracked) {
+        console.warn(`[process-manager] Reaping orphaned sandbox container: ${name}`)
+        cleanupSandboxContainer(name)
+        reaped++
+      }
+    }
+    return reaped
+  } catch {
+    return 0
+  }
 }

@@ -268,7 +268,11 @@ export function normalizeSchedulePayload(payload: SchedulePayload, opts: Normali
   normalized.agentId = agentId
 
   // Preserve taskMode and message fields
-  const taskMode = normalized.taskMode === 'wake_only' ? 'wake_only' : 'task'
+  const taskMode = normalized.taskMode === 'wake_only'
+    ? 'wake_only'
+    : normalized.taskMode === 'protocol'
+      ? 'protocol'
+      : 'task'
   normalized.taskMode = taskMode
   if (taskMode === 'wake_only') {
     const message = trimString(normalized.message)
@@ -278,6 +282,20 @@ export function normalizeSchedulePayload(payload: SchedulePayload, opts: Normali
     normalized.message = message
     // wake_only still needs a taskPrompt for display/logging — derive or use message
     normalized.taskPrompt = normalized.taskPrompt ? trimString(normalized.taskPrompt) : message
+  } else if (taskMode === 'protocol') {
+    const protocolTemplateId = trimString(normalized.protocolTemplateId) || 'single_agent_structured_run'
+    normalized.protocolTemplateId = protocolTemplateId
+    const participantIds = Array.isArray(normalized.protocolParticipantAgentIds)
+      ? normalized.protocolParticipantAgentIds.map((value) => trimString(value)).filter(Boolean)
+      : []
+    normalized.protocolParticipantAgentIds = participantIds.length > 0 ? participantIds : [agentId]
+    const facilitatorAgentId = trimString(normalized.protocolFacilitatorAgentId) || agentId
+    normalized.protocolFacilitatorAgentId = facilitatorAgentId
+    const kickoffMessage = trimString(normalized.message)
+    if (kickoffMessage) normalized.message = kickoffMessage
+    else if (normalized.message != null) delete normalized.message
+    const goalPrompt = trimString(normalized.taskPrompt) || kickoffMessage || trimString(normalized.name) || 'Run the structured session and conclude it.'
+    normalized.taskPrompt = goalPrompt
   } else {
     const taskPrompt = deriveTaskPrompt(normalized)
     if (!taskPrompt) {
@@ -286,8 +304,10 @@ export function normalizeSchedulePayload(payload: SchedulePayload, opts: Normali
     normalized.taskPrompt = taskPrompt
   }
 
-  const validationError = validateScheduleArtifacts(normalized, baseDir)
-  if (validationError) return { ok: false, error: `Error: ${validationError}` }
+  if (taskMode !== 'protocol') {
+    const validationError = validateScheduleArtifacts(normalized, baseDir)
+    if (validationError) return { ok: false, error: `Error: ${validationError}` }
+  }
 
   if (normalized.status !== 'archived' && normalized.nextRunAt == null) {
     if (normalized.scheduleType === 'once') {

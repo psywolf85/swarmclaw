@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { useAppStore } from '@/stores/use-app-store'
+import { api } from '@/lib/app/api-client'
 import { createTask, updateTask, archiveTask, unarchiveTask } from '@/lib/tasks'
 import { getMissionPath } from '@/lib/app/navigation'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
@@ -12,6 +13,7 @@ import { AgentPickerList } from '@/components/shared/agent-picker-list'
 import { DirBrowser } from '@/components/shared/dir-browser'
 import { SheetFooter } from '@/components/shared/sheet-footer'
 import { inputClass } from '@/components/shared/form-styles'
+import { StructuredSessionLauncher } from '@/components/protocols/structured-session-launcher'
 import type { BoardTask, TaskComment, TaskQualityGateConfig } from '@/types'
 import { dedup, errorMessage } from '@/lib/shared-utils'
 import { SectionLabel } from '@/components/shared/section-label'
@@ -79,6 +81,8 @@ export function TaskSheet() {
   const [qualityGateRequireVerification, setQualityGateRequireVerification] = useState(false)
   const [qualityGateRequireArtifact, setQualityGateRequireArtifact] = useState(false)
   const [qualityGateRequireReport, setQualityGateRequireReport] = useState(false)
+  const [structuredSessionOpen, setStructuredSessionOpen] = useState(false)
+  const [activeStructuredRunId, setActiveStructuredRunId] = useState<string | null>(null)
 
   const editing = editingId ? tasks[editingId] : null
   const agentList = Object.values(agents).sort((a, b) => a.name.localeCompare(b.name))
@@ -148,6 +152,26 @@ export function TaskSheet() {
       setAgentId(agentList[0].id)
     }
   }, [open, editing, agentId, agentList.length, agents])
+
+  useEffect(() => {
+    if (!editing?.id || !open) {
+      setActiveStructuredRunId(null)
+      return
+    }
+    let cancelled = false
+    void api<Array<{ id: string; status: string }>>('GET', `/protocols/runs?taskId=${encodeURIComponent(editing.id)}&limit=6`)
+      .then((runs) => {
+        if (cancelled) return
+        const active = (Array.isArray(runs) ? runs : []).find((run) => !['completed', 'failed', 'cancelled', 'archived'].includes(run.status))
+        setActiveStructuredRunId(active?.id || null)
+      })
+      .catch(() => {
+        if (!cancelled) setActiveStructuredRunId(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [editing?.id, open])
 
   const onClose = () => {
     setOpen(false)
@@ -588,6 +612,22 @@ export function TaskSheet() {
 
         {/* Footer: Edit + Close */}
         <div className="flex gap-3 pt-2 border-t border-white/[0.04]">
+          {activeStructuredRunId && (
+            <button
+              onClick={() => router.push(`/protocols?runId=${encodeURIComponent(activeStructuredRunId)}`)}
+              className="flex-1 py-3.5 rounded-[14px] border border-sky-500/20 bg-sky-500/10 text-sky-100 text-[15px] font-600 cursor-pointer hover:bg-sky-500/14 transition-all"
+              style={{ fontFamily: 'inherit' }}
+            >
+              Open Session
+            </button>
+          )}
+          <button
+            onClick={() => setStructuredSessionOpen(true)}
+            className="flex-1 py-3.5 rounded-[14px] border border-accent-bright/20 bg-accent-bright/10 text-accent-bright text-[15px] font-600 cursor-pointer hover:bg-accent-bright/14 transition-all"
+            style={{ fontFamily: 'inherit' }}
+          >
+            {activeStructuredRunId ? 'Run Another Session' : 'Run Structured Session'}
+          </button>
           <button
             onClick={onClose}
             className="flex-1 py-3.5 rounded-[14px] border border-white/[0.08] bg-transparent text-text-2 text-[15px] font-600 cursor-pointer hover:bg-surface-2 transition-all"
@@ -1124,6 +1164,16 @@ export function TaskSheet() {
         saveLabel={editing ? 'Save' : 'Create'}
         saveDisabled={!title.trim() || !agentId}
         left={<>
+          {editing && activeStructuredRunId && (
+            <button onClick={() => router.push(`/protocols?runId=${encodeURIComponent(activeStructuredRunId)}`)} className="py-3.5 px-6 rounded-[14px] border border-sky-500/20 bg-transparent text-sky-100 text-[15px] font-600 cursor-pointer hover:bg-sky-500/10 transition-all" style={{ fontFamily: 'inherit' }}>
+              Open Session
+            </button>
+          )}
+          {editing && (
+            <button onClick={() => setStructuredSessionOpen(true)} className="py-3.5 px-6 rounded-[14px] border border-accent-bright/20 bg-transparent text-accent-bright text-[15px] font-600 cursor-pointer hover:bg-accent-bright/10 transition-all" style={{ fontFamily: 'inherit' }}>
+              {activeStructuredRunId ? 'Run Another Session' : 'Run Structured Session'}
+            </button>
+          )}
           {editing && editing.status !== 'archived' && (
             <button onClick={handleArchive} className="py-3.5 px-6 rounded-[14px] border border-white/[0.08] bg-transparent text-text-3 text-[15px] font-600 cursor-pointer hover:bg-white/[0.04] transition-all" style={{ fontFamily: 'inherit' }}>
               Archive
@@ -1140,6 +1190,21 @@ export function TaskSheet() {
             </button>
           )}
         </>}
+      />
+      <StructuredSessionLauncher
+        open={structuredSessionOpen}
+        onClose={() => setStructuredSessionOpen(false)}
+        onCreated={(run) => {
+          router.push(`/protocols?runId=${encodeURIComponent(run.id)}`)
+        }}
+        initialContext={{
+          taskId: editing?.id || null,
+          taskLabel: editing?.title || null,
+          participantAgentIds: editing?.agentId ? [editing.agentId] : agentId ? [agentId] : [],
+          facilitatorAgentId: editing?.agentId || agentId || null,
+          title: editing ? `Structured session: ${editing.title}` : title ? `Structured session: ${title}` : null,
+          goal: editing?.description || description || title || null,
+        }}
       />
     </BottomSheet>
   )

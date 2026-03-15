@@ -18,6 +18,7 @@ import type {
   AppNotification,
   AppSettings,
   BoardTask,
+  Chatroom,
   EstopState,
   ExternalAgentRuntime,
   GatewayProfile,
@@ -26,6 +27,9 @@ import type {
   Message,
   Mission,
   MissionEvent,
+  ProtocolTemplate,
+  ProtocolRun,
+  ProtocolRunEvent,
   RunEventRecord,
   RunReflection,
   Schedule,
@@ -241,6 +245,9 @@ const COLLECTIONS = [
   'external_agents',
   'missions',
   'mission_events',
+  'protocol_templates',
+  'protocol_runs',
+  'protocol_run_events',
 ] as const
 
 export type StorageCollection = (typeof COLLECTIONS)[number]
@@ -248,6 +255,9 @@ export type StorageCollection = (typeof COLLECTIONS)[number]
 for (const table of COLLECTIONS) {
   db.exec(`CREATE TABLE IF NOT EXISTS ${table} (id TEXT PRIMARY KEY, data TEXT NOT NULL)`)
 }
+
+// Index for efficient protocol_run_events queries by runId
+db.exec(`CREATE INDEX IF NOT EXISTS idx_protocol_run_events_runid ON protocol_run_events (json_extract(data, '$.runId'))`)
 
 // Singleton tables (single row)
 db.exec(`CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL)`)
@@ -1044,6 +1054,9 @@ const JSON_FILES: Record<string, string> = {
   external_agents: path.join(DATA_DIR, 'external-agents.json'),
   missions: path.join(DATA_DIR, 'missions.json'),
   mission_events: path.join(DATA_DIR, 'mission-events.json'),
+  protocol_templates: path.join(DATA_DIR, 'protocol-templates.json'),
+  protocol_runs: path.join(DATA_DIR, 'protocol-runs.json'),
+  protocol_run_events: path.join(DATA_DIR, 'protocol-run-events.json'),
 }
 
 const MIGRATION_FLAG = path.join(DATA_DIR, '.sqlite_migrated')
@@ -1768,6 +1781,49 @@ export const loadMissionEvent = missionEventsStore.loadItem as (id: string) => M
 export const upsertMissionEvent = missionEventsStore.upsert as (id: string, value: MissionEvent) => void
 export const upsertMissionEvents = missionEventsStore.upsertMany as (entries: Array<[string, MissionEvent]>) => void
 
+const protocolTemplatesStore = createCollectionStore('protocol_templates')
+export const loadProtocolTemplates = protocolTemplatesStore.load as () => Record<string, ProtocolTemplate>
+export const saveProtocolTemplates = protocolTemplatesStore.save as (items: Record<string, ProtocolTemplate>) => void
+export const loadProtocolTemplate = protocolTemplatesStore.loadItem as (id: string) => ProtocolTemplate | null
+export const upsertProtocolTemplate = protocolTemplatesStore.upsert as (id: string, value: ProtocolTemplate) => void
+export const patchProtocolTemplate = protocolTemplatesStore.patch as (
+  id: string,
+  updater: (current: ProtocolTemplate | null) => ProtocolTemplate | null,
+) => ProtocolTemplate | null
+export const deleteProtocolTemplate = protocolTemplatesStore.deleteItem
+
+const protocolRunsStore = createCollectionStore('protocol_runs')
+export const loadProtocolRuns = protocolRunsStore.load as () => Record<string, ProtocolRun>
+export const saveProtocolRuns = protocolRunsStore.save as (items: Record<string, ProtocolRun>) => void
+export const loadProtocolRun = protocolRunsStore.loadItem as (id: string) => ProtocolRun | null
+export const upsertProtocolRun = protocolRunsStore.upsert as (id: string, value: ProtocolRun) => void
+export const patchProtocolRun = protocolRunsStore.patch as (
+  id: string,
+  updater: (current: ProtocolRun | null) => ProtocolRun | null,
+) => ProtocolRun | null
+export const deleteProtocolRun = protocolRunsStore.deleteItem
+
+const protocolRunEventsStore = createCollectionStore('protocol_run_events')
+export const loadProtocolRunEvents = protocolRunEventsStore.load as () => Record<string, ProtocolRunEvent>
+export const saveProtocolRunEvents = protocolRunEventsStore.save as (items: Record<string, ProtocolRunEvent>) => void
+export const loadProtocolRunEvent = protocolRunEventsStore.loadItem as (id: string) => ProtocolRunEvent | null
+export const upsertProtocolRunEvent = protocolRunEventsStore.upsert as (id: string, value: ProtocolRunEvent) => void
+export const upsertProtocolRunEvents = protocolRunEventsStore.upsertMany as (entries: Array<[string, ProtocolRunEvent]>) => void
+export const deleteProtocolRunEvent = protocolRunEventsStore.deleteItem
+
+export function loadProtocolRunEventsByRunId(runId: string): ProtocolRunEvent[] {
+  const rows = db.prepare(
+    `SELECT data FROM protocol_run_events WHERE json_extract(data, '$.runId') = ? ORDER BY json_extract(data, '$.createdAt') ASC`,
+  ).all(runId) as Array<{ data: string }>
+  const results: ProtocolRunEvent[] = []
+  for (const row of rows) {
+    try {
+      results.push(JSON.parse(row.data) as ProtocolRunEvent)
+    } catch { /* skip malformed rows */ }
+  }
+  return results
+}
+
 // --- Skills ---
 const skillsStore = createCollectionStore('skills')
 export const loadSkills = skillsStore.load
@@ -1913,6 +1969,8 @@ export const saveConnectors = connectorsStore.save
 const chatroomsStore = createCollectionStore('chatrooms')
 export const loadChatrooms = chatroomsStore.load
 export const saveChatrooms = chatroomsStore.save
+export const loadChatroom = chatroomsStore.loadItem as (id: string) => Chatroom | null
+export const upsertChatroom = chatroomsStore.upsert as (id: string, value: Chatroom) => void
 
 // --- Documents ---
 const documentsStore = createCollectionStore('documents')

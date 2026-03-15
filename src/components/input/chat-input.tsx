@@ -8,6 +8,7 @@ import { uploadImage } from '@/lib/upload'
 import { useAutoResize } from '@/hooks/use-auto-resize'
 import { useSpeechRecognition } from '@/hooks/use-speech-recognition'
 import { FilePreview } from '@/components/shared/file-preview'
+import { ComposerShell } from '@/components/input/composer-shell'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { listQueuedMessagesForSession } from '@/lib/chat/queued-message-queue'
 import { toast } from 'sonner'
@@ -325,17 +326,68 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
           </div>
         )}
 
-        <div className="glass rounded-[20px] overflow-hidden
-          shadow-[0_4px_32px_rgba(0,0,0,0.3)] focus-within:border-border-focus focus-within:shadow-[0_4px_32px_rgba(99,102,241,0.08)] transition-all duration-300">
-
-          {pendingFiles.length > 0 && (
+        <ComposerShell
+          top={pendingFiles.length > 0 ? (
             <div className="flex items-center gap-2 px-5 pt-4 flex-wrap">
               {pendingFiles.map((f, i) => (
                 <FilePreview key={`${f.path}-${i}`} file={f} onRemove={() => removePendingFile(i)} />
               ))}
             </div>
-          )}
+          ) : undefined}
+          footer={(
+            <div className="flex items-center gap-1 px-4 pb-3.5">
+              <button
+                type="button"
+                onClick={() => setExtrasOpen((open) => !open)}
+                aria-label="Add attachment"
+                data-testid="chat-add"
+                className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] border-none bg-transparent
+                  text-text-3 text-[13px] cursor-pointer hover:text-text-2 hover:bg-white/[0.05] transition-all duration-200"
+                style={{ fontFamily: 'inherit' }}
+              >
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                  <path d="M12 5v14" />
+                  <path d="M5 12h14" />
+                </svg>
+                <span className="hidden sm:inline">Add</span>
+              </button>
 
+              <div className="flex-1" />
+
+              <span className="text-[11px] text-text-3/60 tabular-nums mr-2 font-mono">
+                {value.length > 0 && value.length}
+              </span>
+
+              <button
+                onClick={() => { void handleSend() }}
+                disabled={!hasContent}
+                aria-label={shouldQueue ? 'Queue message' : 'Send message'}
+                data-testid="chat-send"
+                className={`w-9 h-9 rounded-[11px] border-none flex items-center justify-center
+                  shrink-0 cursor-pointer transition-all duration-250
+                  ${hasContent
+                    ? shouldQueue
+                      ? 'bg-amber-500/20 text-amber-400 active:scale-90 border border-amber-500/30'
+                      : 'bg-accent-bright text-white active:scale-90 shadow-[0_4px_16px_rgba(99,102,241,0.3)]'
+                    : 'bg-white/[0.04] text-text-3 pointer-events-none'}`}
+                title={shouldQueue ? 'Queue message' : 'Send message'}
+              >
+                {shouldQueue && hasContent ? (
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                ) : (
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                    <line x1="12" y1="19" x2="12" y2="5" />
+                    <polyline points="5 12 12 5 19 12" />
+                  </svg>
+                )}
+              </button>
+            </div>
+          )}
+          hint="Shift+Enter for newline"
+        >
           <textarea
             ref={textareaRef}
             value={value}
@@ -350,58 +402,7 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
               max-h-[140px] leading-[1.55] placeholder:text-text-3/70 border-none"
             style={{ fontFamily: 'inherit' }}
           />
-
-          <div className="flex items-center gap-1 px-4 pb-3.5">
-            <button
-              type="button"
-              onClick={() => setExtrasOpen((open) => !open)}
-              aria-label="Add attachment"
-              data-testid="chat-add"
-              className="flex items-center gap-1.5 px-3 py-2 rounded-[10px] border-none bg-transparent
-                text-text-3 text-[13px] cursor-pointer hover:text-text-2 hover:bg-white/[0.05] transition-all duration-200"
-              style={{ fontFamily: 'inherit' }}
-            >
-              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-                <path d="M12 5v14" />
-                <path d="M5 12h14" />
-              </svg>
-              <span className="hidden sm:inline">Add</span>
-            </button>
-
-            <div className="flex-1" />
-
-            <span className="text-[11px] text-text-3/60 tabular-nums mr-2 font-mono">
-              {value.length > 0 && value.length}
-            </span>
-
-            <button
-              onClick={() => { void handleSend() }}
-              disabled={!hasContent}
-              aria-label={shouldQueue ? 'Queue message' : 'Send message'}
-              data-testid="chat-send"
-              className={`w-9 h-9 rounded-[11px] border-none flex items-center justify-center
-                shrink-0 cursor-pointer transition-all duration-250
-                ${hasContent
-                  ? shouldQueue
-                    ? 'bg-amber-500/20 text-amber-400 active:scale-90 border border-amber-500/30'
-                    : 'bg-accent-bright text-white active:scale-90 shadow-[0_4px_16px_rgba(99,102,241,0.3)]'
-                  : 'bg-white/[0.04] text-text-3 pointer-events-none'}`}
-              title={shouldQueue ? 'Queue message' : 'Send message'}
-            >
-              {shouldQueue && hasContent ? (
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="12" y1="5" x2="12" y2="19" />
-                  <line x1="5" y1="12" x2="19" y2="12" />
-                </svg>
-              ) : (
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-                  <line x1="12" y1="19" x2="12" y2="5" />
-                  <polyline points="5 12 12 5 19 12" />
-                </svg>
-              )}
-            </button>
-          </div>
-        </div>
+        </ComposerShell>
 
         {extrasOpen && (
           <div className="absolute left-0 bottom-[72px] w-[280px] max-w-[calc(100vw-2rem)] rounded-[16px] border border-white/[0.08] bg-raised/95 p-2 shadow-[0_18px_64px_rgba(0,0,0,0.55)] backdrop-blur-xl">
@@ -526,10 +527,6 @@ export function ChatInput({ streaming, busy, onSend, onStop, pluginChatActions =
           onChange={handleFileChange}
           className="hidden"
         />
-
-        <p className="text-[10px] text-text-3/40 mt-1.5 px-1 select-none">
-          Shift+Enter for newline
-        </p>
 
         {micError && (
           <p className="text-[11px] text-danger/80 mt-2 px-1">{micError}</p>

@@ -232,6 +232,9 @@ export function formatMediaLine(media: InboundMedia): string {
   const typeLabel = media.type.toUpperCase()
   const name = media.fileName || media.mimeType || 'attachment'
   const size = media.sizeBytes ? ` (${Math.max(1, Math.round(media.sizeBytes / 1024))} KB)` : ''
+  if (typeof media.localPath === 'string' && media.localPath.trim()) {
+    return `- ${typeLabel}: ${name}${size} [attached inline]`
+  }
   if (media.url) return `- ${typeLabel}: ${name}${size} -> ${media.url}`
   return `- ${typeLabel}: ${name}${size}`
 }

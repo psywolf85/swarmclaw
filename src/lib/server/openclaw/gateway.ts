@@ -1,11 +1,13 @@
 import { WebSocket } from 'ws'
 import { randomUUID } from 'crypto'
-import { wsConnect, buildOpenClawConnectParams } from '@/lib/providers/openclaw'
+import { wsConnect } from '@/lib/providers/openclaw'
 import { deriveOpenClawWsUrl } from '@/lib/openclaw/openclaw-endpoint'
 import { loadAgents, loadCredentials, decryptKey } from '../storage'
 import { notify, notifyWithPayload } from '../ws-hub'
 import { getGatewayProfile, getGatewayProfiles, resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
+import { isAgentDisabled } from '@/lib/server/agents/agent-availability'
 import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
+import type { Agent } from '@/types'
 
 // --- Types ---
 
@@ -22,13 +24,40 @@ type EventHandler = (payload: unknown) => void
 interface GatewayState {
   instances: Map<string, OpenClawGateway>
   activeKey: string | null
+  manualKeys: Set<string>
 }
 
 function getState(): GatewayState {
   return hmrSingleton<GatewayState>('__swarmclaw_ocgateway__', () => ({
     instances: new Map<string, OpenClawGateway>(),
     activeKey: null,
+    manualKeys: new Set<string>(),
   }))
+}
+
+const gatewayState = getState()
+if (!gatewayState.manualKeys) gatewayState.manualKeys = new Set<string>()
+
+const DEFAULT_OPENCLAW_WS_URL = 'ws://127.0.0.1:18789'
+
+function buildGatewayConfigFromAgent(agent: Agent, options?: { allowDisabled?: boolean; allowTrashed?: boolean }): GatewayConfig | null {
+  if (!options?.allowTrashed && agent.trashedAt) return null
+  if (!options?.allowDisabled && isAgentDisabled(agent)) return null
+
+  const route = resolvePrimaryAgentRoute(agent)
+  if (route?.provider !== 'openclaw') return null
+
+  const routeProfile = route.gatewayProfileId ? getGatewayProfile(route.gatewayProfileId) : null
+  return {
+    key: route.gatewayProfileId ? `profile:${route.gatewayProfileId}` : `agent:${agent.id}`,
+    profileId: route.gatewayProfileId ?? null,
+    wsUrl: routeProfile?.wsUrl
+      ? normalizeWsUrl(routeProfile.wsUrl)
+      : route.apiEndpoint
+        ? deriveOpenClawWsUrl(route.apiEndpoint)
+        : DEFAULT_OPENCLAW_WS_URL,
+    token: resolveTokenForCredential(route.credentialId),
+  }
 }
 
 // --- Helper: resolve gateway config from first OpenClaw agent ---
@@ -79,21 +108,15 @@ export function resolveGatewayConfig(target?: {
   const agentId = typeof target?.agentId === 'string' ? target.agentId.trim() : ''
   if (agentId) {
     const agents = loadAgents({ includeTrashed: true })
-    const agent = agents[agentId]
-    const route = resolvePrimaryAgentRoute(agent)
-    if (route?.provider === 'openclaw') {
-      const routeProfile = route.gatewayProfileId ? getGatewayProfile(route.gatewayProfileId) : null
-      return {
-        key: route.gatewayProfileId ? `profile:${route.gatewayProfileId}` : `agent:${agentId}`,
-        profileId: route.gatewayProfileId ?? null,
-        wsUrl: routeProfile?.wsUrl
-          ? normalizeWsUrl(routeProfile.wsUrl)
-          : route.apiEndpoint
-            ? deriveOpenClawWsUrl(route.apiEndpoint)
-            : 'ws://127.0.0.1:18789',
-        token: resolveTokenForCredential(route.credentialId),
-      }
-    }
+    const agent = agents[agentId] as Agent | undefined
+    const config = agent ? buildGatewayConfigFromAgent(agent, { allowDisabled: true, allowTrashed: true }) : null
+    if (config) return config
+  }
+
+  const agents = loadAgents({ includeTrashed: true }) as Record<string, Agent>
+  for (const agent of Object.values(agents)) {
+    const config = buildGatewayConfigFromAgent(agent)
+    if (config) return config
   }
 
   const gatewayProfiles = getGatewayProfiles('openclaw')
@@ -106,27 +129,12 @@ export function resolveGatewayConfig(target?: {
       token: resolveTokenForCredential(profile.credentialId),
     }
   }
-
-  const agents = loadAgents({ includeTrashed: true })
-  for (const agent of Object.values(agents)) {
-    if (agent?.provider !== 'openclaw') continue
-    const wsUrl = agent.apiEndpoint
-      ? deriveOpenClawWsUrl(agent.apiEndpoint)
-      : 'ws://127.0.0.1:18789'
-    return {
-      key: `agent:${agent.id}`,
-      profileId: agent.gatewayProfileId ?? null,
-      wsUrl,
-      token: resolveTokenForCredential(agent.credentialId),
-    }
-  }
   return null
 }
 
 export function hasOpenClawAgents(): boolean {
-  if (getGatewayProfiles('openclaw').length > 0) return true
-  const agents = loadAgents({ includeTrashed: true })
-  return Object.values(agents).some((a) => a?.provider === 'openclaw' && !a.trashedAt)
+  const agents = loadAgents({ includeTrashed: true }) as Record<string, Agent>
+  return Object.values(agents).some((agent) => Boolean(buildGatewayConfigFromAgent(agent)))
 }
 
 // --- Gateway Client ---
@@ -360,6 +368,7 @@ export function disconnectGateway(profileId?: string | null) {
     if (instance) {
       instance.disconnect()
       state.instances.delete(key)
+      state.manualKeys.delete(key)
       if (state.activeKey === key) state.activeKey = null
     }
     return
@@ -367,8 +376,19 @@ export function disconnectGateway(profileId?: string | null) {
   for (const [instanceKey, instance] of state.instances.entries()) {
     instance.disconnect()
     state.instances.delete(instanceKey)
+    state.manualKeys.delete(instanceKey)
   }
   state.activeKey = null
+}
+
+export function disconnectAutoGateways() {
+  const state = getState()
+  for (const [key, instance] of state.instances.entries()) {
+    if (state.manualKeys.has(key)) continue
+    instance.disconnect()
+    state.instances.delete(key)
+    if (state.activeKey === key) state.activeKey = null
+  }
 }
 
 /** Manual connect with explicit URL/token (used by gateway connection panel) */
@@ -381,7 +401,8 @@ export async function manualConnect(url?: string, token?: string, profileId?: st
     instance.disconnect()
   }
   state.instances.set(key, instance)
-  const wsUrl = url ? normalizeWsUrl(url) : config?.wsUrl ?? 'ws://127.0.0.1:18789'
+  state.manualKeys.add(key)
+  const wsUrl = url ? normalizeWsUrl(url) : config?.wsUrl ?? DEFAULT_OPENCLAW_WS_URL
   const resolvedToken = token ?? config?.token
   const ok = await instance.connect(wsUrl, resolvedToken)
   if (ok) {

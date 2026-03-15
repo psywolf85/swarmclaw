@@ -1,12 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useCallback, useState, useMemo } from 'react'
+import { useRouter } from 'next/navigation'
 import { useChatroomStore } from '@/stores/use-chatroom-store'
 import type { StreamingAgent } from '@/stores/use-chatroom-store'
 import { useAppStore } from '@/stores/use-app-store'
 import { useNavigate } from '@/lib/app/navigation'
 import { useNow } from '@/hooks/use-now'
 import { useWs } from '@/hooks/use-ws'
+import { api } from '@/lib/app/api-client'
 import { ChatroomMessageBubble } from './chatroom-message'
 import { ChatroomInput } from './chatroom-input'
 import { ChatroomTypingBar } from './chatroom-typing-bar'
@@ -14,7 +16,11 @@ import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip'
 import { HeartbeatMoment, ActivityMoment, isNotableTool } from '@/components/chat/activity-moment'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
-import type { Chatroom, ChatroomMessage, ChatroomMember, Agent } from '@/types'
+import {
+  StructuredSessionLauncher,
+  type StructuredSessionLaunchContext,
+} from '@/components/protocols/structured-session-launcher'
+import type { Chatroom, ChatroomMessage, ChatroomMember, Agent, ProtocolRun } from '@/types'
 
 function getRoleBadge(role: string) {
   if (role === 'admin') return { label: 'Admin', className: 'bg-purple-500/20 text-purple-400 border-purple-500/30' }
@@ -79,6 +85,7 @@ function dayLabel(ts: number, now: number | null): string {
 }
 
 export function ChatroomView() {
+  const router = useRouter()
   const navigateTo = useNavigate()
   const navigateToAgent = (agentId: string) => navigateTo('agents', agentId)
   const now = useNow()
@@ -89,7 +96,7 @@ export function ChatroomView() {
   const toggleReaction = useChatroomStore((s) => s.toggleReaction)
   const togglePin = useChatroomStore((s) => s.togglePin)
   const setReplyingTo = useChatroomStore((s) => s.setReplyingTo)
-  const loadChatrooms = useChatroomStore((s) => s.loadChatrooms)
+  const loadChatroomById = useChatroomStore((s) => s.loadChatroomById)
   const setChatroomSheetOpen = useChatroomStore((s) => s.setChatroomSheetOpen)
   const setEditingChatroomId = useChatroomStore((s) => s.setEditingChatroomId)
   const deleteMessage = useChatroomStore((s) => s.deleteMessage)
@@ -104,6 +111,15 @@ export function ChatroomView() {
   const [isNearBottom, setIsNearBottom] = useState(true)
   const [agentMoments, setAgentMoments] = useState<Record<string, MomentType>>({})
   const [detailsOpen, setDetailsOpen] = useState(false)
+  const [structuredSessionOpen, setStructuredSessionOpen] = useState(false)
+  const [structuredSessionVariant, setStructuredSessionVariant] = useState<'default' | 'breakout'>('default')
+  const [structuredSessionContext, setStructuredSessionContext] = useState<StructuredSessionLaunchContext | null>(null)
+  const [injectContextOpen, setInjectContextOpen] = useState(false)
+  const [injectContext, setInjectContext] = useState('')
+  const [injectPending, setInjectPending] = useState(false)
+  const [injectError, setInjectError] = useState<string | null>(null)
+  const [linkedRun, setLinkedRun] = useState<ProtocolRun | null>(null)
+  const [activeParentRun, setActiveParentRun] = useState<ProtocolRun | null>(null)
 
   const handleHeartbeatPulse = useCallback((agentId: string) => {
     setAgentMoments((prev) => ({ ...prev, [agentId]: { kind: 'heartbeat' } }))
@@ -146,8 +162,9 @@ export function ChatroomView() {
   }, [chatroomMessages])
 
   const refreshChatroom = useCallback(() => {
-    loadChatrooms()
-  }, [loadChatrooms])
+    if (!currentChatroomId) return
+    void loadChatroomById(currentChatroomId)
+  }, [currentChatroomId, loadChatroomById])
 
   useWs(currentChatroomId ? `chatroom:${currentChatroomId}` : '', refreshChatroom)
 
@@ -159,6 +176,7 @@ export function ChatroomView() {
 
   const streamingAgentIds = useMemo(() => new Set(streamingAgents.keys()), [streamingAgents])
   const chatroomId = chatroom?.id || null
+  const isStructuredSessionRoom = chatroom?.hidden === true && !!chatroom?.protocolRunId
   const pinnedIds = useMemo(() => chatroom?.pinnedMessageIds ?? [], [chatroom?.pinnedMessageIds])
   const pinnedMessages = useMemo(() => (
     chatroom
@@ -169,6 +187,17 @@ export function ChatroomView() {
   const mutedCount = chatroom ? chatroom.agentIds.filter((agentId) => isAgentMuted(chatroom, agentId, now)).length : 0
   const adminCount = chatroom ? chatroom.agentIds.filter((agentId) => getMemberRole(chatroom, agentId) === 'admin').length : 0
   const lastReadAt = chatroom ? (lastReadTimestamps[chatroom.id] || 0) : 0
+  const defaultStructuredSessionContext = useMemo<StructuredSessionLaunchContext | null>(() => {
+    if (!chatroom) return null
+    return {
+      parentChatroomId: chatroom.id,
+      parentChatroomLabel: chatroom.name,
+      participantAgentIds: chatroom.agentIds || [],
+      facilitatorAgentId: chatroom.agentIds?.[0] || null,
+      title: `Structured session: ${chatroom.name}`,
+      goal: chatroom.description || null,
+    }
+  }, [chatroom])
   const unreadCount = useMemo(() => (
     chatroom
       ? chatroom.messages.filter((msg) => msg.senderId !== 'user' && msg.senderId !== 'system' && (msg.time || 0) > lastReadAt).length
@@ -199,6 +228,46 @@ export function ChatroomView() {
   useEffect(() => {
     setDetailsOpen(false)
   }, [chatroomId])
+
+  const refreshLinkedRun = useCallback(() => {
+    if (!chatroom?.protocolRunId) {
+      setLinkedRun(null)
+      return
+    }
+    void api<{ run: ProtocolRun }>('GET', `/protocols/runs/${chatroom.protocolRunId}`)
+      .then((detail) => {
+        setLinkedRun(detail?.run || null)
+        setInjectError(null)
+      })
+      .catch(() => {
+        setLinkedRun(null)
+      })
+  }, [chatroom?.protocolRunId])
+
+  useEffect(() => {
+    void refreshLinkedRun()
+  }, [refreshLinkedRun])
+
+  useWs(chatroom?.protocolRunId ? 'protocol_runs' : '', refreshLinkedRun, 2000)
+
+  const refreshParentRun = useCallback(() => {
+    if (!chatroom?.id || isStructuredSessionRoom) {
+      setActiveParentRun(null)
+      return
+    }
+    void api<ProtocolRun[]>(`GET`, `/protocols/runs?parentChatroomId=${encodeURIComponent(chatroom.id)}&limit=6`)
+      .then((runs) => {
+        const active = (Array.isArray(runs) ? runs : []).find((run) => !['completed', 'failed', 'cancelled', 'archived'].includes(run.status))
+        setActiveParentRun(active || null)
+      })
+      .catch(() => setActiveParentRun(null))
+  }, [chatroom?.id, isStructuredSessionRoom])
+
+  useEffect(() => {
+    void refreshParentRun()
+  }, [refreshParentRun])
+
+  useWs(!chatroom?.protocolRunId && chatroom?.id ? 'protocol_runs' : '', refreshParentRun, 2000)
 
   useEffect(() => {
     const node = scrollRef.current
@@ -242,6 +311,25 @@ export function ChatroomView() {
     sendMessage(`@${targetAgent.name.replace(/\s+/g, '')} [Transferred from @${msg.senderName.replace(/\s+/g, '')}]: "${truncated}"`)
   }
 
+  const handleInjectContext = async () => {
+    if (!chatroom?.protocolRunId || !injectContext.trim()) return
+    setInjectPending(true)
+    try {
+      await api('POST', `/protocols/runs/${chatroom.protocolRunId}/actions`, {
+        action: 'inject_context',
+        context: injectContext.trim(),
+      })
+      setInjectContext('')
+      setInjectContextOpen(false)
+      setInjectError(null)
+      void Promise.all([refreshLinkedRun(), refreshChatroom()])
+    } catch (error) {
+      setInjectError(error instanceof Error ? error.message : 'Unable to inject context into the structured session.')
+    } finally {
+      setInjectPending(false)
+    }
+  }
+
   return (
     <div className="flex-1 flex min-h-0 min-w-0">
       <div className="min-w-0 flex-1 flex flex-col h-full">
@@ -255,17 +343,25 @@ export function ChatroomView() {
             <h3 className="text-[14px] font-700 text-text truncate">{chatroom.name}</h3>
             <div className="flex flex-wrap items-center gap-2 mt-1">
               <p className="text-[11px] text-text-3 truncate">
-                {memberAgents.length} agent{memberAgents.length !== 1 ? 's' : ''}
-                {chatroom.description ? ` · ${chatroom.description}` : ''}
+                {isStructuredSessionRoom
+                  ? `Temporary live room${linkedRun?.title ? ` · ${linkedRun.title}` : ''}`
+                  : `${memberAgents.length} agent${memberAgents.length !== 1 ? 's' : ''}${chatroom.description ? ` · ${chatroom.description}` : ''}`}
               </p>
+              {isStructuredSessionRoom && linkedRun && (
+                <span className="px-1.5 py-0.5 rounded-[5px] bg-sky-500/10 text-[10px] font-700 uppercase tracking-[0.08em] text-sky-300">
+                  {linkedRun.status}
+                </span>
+              )}
               <span className="px-1.5 py-0.5 rounded-[5px] bg-white/[0.04] text-[10px] font-700 uppercase tracking-[0.08em] text-text-3/70">
-                {chatroom.chatMode === 'parallel' ? 'Parallel' : 'Sequential'}
+                {isStructuredSessionRoom ? 'Structured Session' : chatroom.chatMode === 'parallel' ? 'Parallel' : 'Sequential'}
               </span>
-              <span className={`px-1.5 py-0.5 rounded-[5px] text-[10px] font-700 uppercase tracking-[0.08em] ${
-                chatroom.autoAddress ? 'bg-emerald-500/10 text-emerald-400' : 'bg-white/[0.04] text-text-3/70'
-              }`}>
-                Auto-address {chatroom.autoAddress ? 'on' : 'off'}
-              </span>
+              {!isStructuredSessionRoom && (
+                <span className={`px-1.5 py-0.5 rounded-[5px] text-[10px] font-700 uppercase tracking-[0.08em] ${
+                  chatroom.autoAddress ? 'bg-emerald-500/10 text-emerald-400' : 'bg-white/[0.04] text-text-3/70'
+                }`}>
+                  Auto-address {chatroom.autoAddress ? 'on' : 'off'}
+                </span>
+              )}
               {streamingAgents.size > 0 && (
                 <span className="px-1.5 py-0.5 rounded-[5px] bg-sky-500/10 text-[10px] font-700 uppercase tracking-[0.08em] text-sky-400">
                   {streamingAgents.size} active now
@@ -311,6 +407,50 @@ export function ChatroomView() {
             )}
           </div>
 
+          {isStructuredSessionRoom ? (
+            <>
+              {chatroom.protocolRunId && (
+                <button
+                  type="button"
+                  onClick={() => router.push(`/protocols?runId=${encodeURIComponent(chatroom.protocolRunId || '')}`)}
+                  className="shrink-0 rounded-[9px] border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-600 text-text-2 hover:bg-white/[0.06] cursor-pointer transition-colors"
+                >
+                  Back to Session
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setInjectContextOpen(true)}
+                className="shrink-0 rounded-[9px] border border-sky-500/20 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-600 text-sky-100 hover:bg-sky-500/16 cursor-pointer transition-colors"
+              >
+                Inject Context
+              </button>
+            </>
+          ) : (
+            <>
+              {activeParentRun && (
+                <button
+                  type="button"
+                  onClick={() => router.push(`/protocols?runId=${encodeURIComponent(activeParentRun.id)}`)}
+                  className="shrink-0 rounded-[9px] border border-sky-500/20 bg-sky-500/10 px-2.5 py-1.5 text-[11px] font-600 text-sky-100 hover:bg-sky-500/16 cursor-pointer transition-colors"
+                >
+                  Watch Session
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setStructuredSessionVariant('default')
+                  setStructuredSessionContext(defaultStructuredSessionContext)
+                  setStructuredSessionOpen(true)
+                }}
+                className="shrink-0 rounded-[9px] border border-white/[0.08] bg-white/[0.03] px-2.5 py-1.5 text-[11px] font-600 text-text-2 hover:bg-white/[0.06] cursor-pointer transition-colors"
+              >
+                Start Session
+              </button>
+            </>
+          )}
+
           <button
             type="button"
             onClick={() => setDetailsOpen(true)}
@@ -319,19 +459,33 @@ export function ChatroomView() {
             Details
           </button>
 
-          <button
-            onClick={() => {
-              setEditingChatroomId(chatroom.id)
-              setChatroomSheetOpen(true)
-            }}
-            className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center hover:bg-white/[0.08] transition-all cursor-pointer"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-text-3">
-              <circle cx="12" cy="12" r="3" />
-              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-            </svg>
-          </button>
+          {!isStructuredSessionRoom && (
+            <button
+              onClick={() => {
+                setEditingChatroomId(chatroom.id)
+                setChatroomSheetOpen(true)
+              }}
+              className="shrink-0 w-7 h-7 rounded-full flex items-center justify-center hover:bg-white/[0.08] transition-all cursor-pointer"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="text-text-3">
+                <circle cx="12" cy="12" r="3" />
+                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+              </svg>
+            </button>
+          )}
         </div>
+
+        {isStructuredSessionRoom && (
+          <div className="border-b border-white/[0.06] bg-sky-500/[0.04] px-4 py-3">
+            <div className="flex flex-wrap items-center gap-2 text-[12px] text-sky-100">
+              <span className="font-700 uppercase tracking-[0.08em] text-sky-200/72">Watching Live Room</span>
+              {linkedRun?.title && <span className="text-text-2">· {linkedRun.title}</span>}
+            </div>
+            <div className="mt-1 text-[12px] text-text-3/72">
+              This temporary room mirrors the active structured session. Use Inject Context to steer the run without turning this room into a normal free-form chat.
+            </div>
+          </div>
+        )}
 
         {pinnedMessages.length > 0 && (
           <div className="border-b border-white/[0.06] shrink-0">
@@ -452,9 +606,21 @@ export function ChatroomView() {
           )}
         </div>
 
+        {isStructuredSessionRoom && (
+          <div className="border-t border-white/[0.06] bg-white/[0.02] px-4 py-2.5 text-[12px] text-text-3/68">
+            Live rooms are watch-first. To steer the session, use <span className="font-700 text-text-2">Inject Context</span> instead of sending a normal room message.
+          </div>
+        )}
+
         <ChatroomInput
           agents={memberAgents}
           onSend={sendMessage}
+          disabled={isStructuredSessionRoom}
+          onBreakoutRequest={(context) => {
+            setStructuredSessionVariant('breakout')
+            setStructuredSessionContext(context)
+            setStructuredSessionOpen(true)
+          }}
         />
       </div>
 
@@ -466,6 +632,7 @@ export function ChatroomView() {
           pinnedMessages={pinnedMessages}
           mutedCount={mutedCount}
           adminCount={adminCount}
+          now={now}
           onFocusMessage={focusMessage}
           onNavigateToAgent={navigateToAgent}
         />
@@ -479,6 +646,7 @@ export function ChatroomView() {
           pinnedMessages={pinnedMessages}
           mutedCount={mutedCount}
           adminCount={adminCount}
+          now={now}
           onFocusMessage={(messageId) => {
             setDetailsOpen(false)
             setTimeout(() => focusMessage(messageId), 50)
@@ -486,6 +654,58 @@ export function ChatroomView() {
           onNavigateToAgent={navigateToAgent}
           compact
         />
+      </BottomSheet>
+      <StructuredSessionLauncher
+        open={structuredSessionOpen}
+        onClose={() => {
+          setStructuredSessionOpen(false)
+          setStructuredSessionVariant('default')
+          setStructuredSessionContext(null)
+        }}
+        onCreated={(run) => {
+          router.push(`/protocols?runId=${encodeURIComponent(run.id)}`)
+        }}
+        variant={structuredSessionVariant}
+        initialContext={structuredSessionContext || defaultStructuredSessionContext}
+      />
+      <BottomSheet
+        open={injectContextOpen}
+        onClose={() => {
+          setInjectContextOpen(false)
+          setInjectError(null)
+        }}
+        title="Inject Context"
+        description="Add steering guidance to the active structured session without sending a normal room message."
+      >
+        {injectError && (
+          <div className="mb-4 rounded-[12px] border border-red-500/20 bg-red-500/10 px-4 py-3 text-[13px] text-red-200">
+            {injectError}
+          </div>
+        )}
+        <textarea
+          value={injectContext}
+          onChange={(event) => setInjectContext(event.target.value)}
+          rows={5}
+          placeholder="Add a correction, tighter constraint, or something the session should focus on next."
+          className="w-full rounded-[14px] border border-white/[0.06] bg-white/[0.04] px-4 py-3 text-[14px] leading-relaxed text-text outline-none placeholder:text-text-3/35"
+        />
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button
+            type="button"
+            onClick={() => setInjectContextOpen(false)}
+            className="rounded-[10px] border border-white/[0.08] bg-white/[0.03] px-3 py-2 text-[12px] font-700 text-text-2 cursor-pointer"
+          >
+            Close
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleInjectContext()}
+            disabled={!injectContext.trim() || injectPending}
+            className="rounded-[10px] bg-accent-bright px-3 py-2 text-[12px] font-700 text-black transition-opacity disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+          >
+            {injectPending ? 'Injecting…' : 'Inject Context'}
+          </button>
+        </div>
       </BottomSheet>
     </div>
   )
@@ -498,6 +718,7 @@ function RoomDetailsPanel({
   pinnedMessages,
   mutedCount,
   adminCount,
+  now,
   onFocusMessage,
   onNavigateToAgent,
   compact = false,
@@ -508,6 +729,7 @@ function RoomDetailsPanel({
   pinnedMessages: ChatroomMessage[]
   mutedCount: number
   adminCount: number
+  now: number | null
   onFocusMessage: (messageId: string) => void
   onNavigateToAgent: (agentId: string) => void
   compact?: boolean
@@ -545,7 +767,7 @@ function RoomDetailsPanel({
           <div className="space-y-2">
             {memberAgents.map((agent) => {
               const role = getMemberRole(chatroom, agent.id)
-              const muted = isAgentMuted(chatroom, agent.id, Date.now())
+              const muted = isAgentMuted(chatroom, agent.id, now)
               return (
                 <button
                   key={agent.id}

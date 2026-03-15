@@ -3,11 +3,110 @@ import { describe, it } from 'node:test'
 import type { SSEEvent } from '@/types'
 import {
   resolveRequestedToolPreflightResponse,
+  runExclusiveDirectMemoryPreflight,
   runPostLlmToolRouting,
 } from '@/lib/server/chat-execution/chat-turn-tool-routing'
 import { resolveSessionToolPolicy } from '@/lib/server/tool-capability-policy'
 
 describe('chat-turn-tool-routing', () => {
+  it('preflights an exclusive direct memory store before model execution', async () => {
+    const events: SSEEvent[] = []
+    const result = await runExclusiveDirectMemoryPreflight({
+      session: {
+        cwd: process.cwd(),
+        tools: ['memory'],
+      },
+      sessionId: 'preflight-memory-store',
+      message: 'Please remember that my launch marker is ALPHA-9.',
+      effectiveMessage: 'Please remember that my launch marker is ALPHA-9.',
+      enabledPlugins: ['memory'],
+      toolPolicy: resolveSessionToolPolicy(['memory'], {}),
+      appSettings: {},
+      internal: false,
+      source: 'chat',
+      toolEvents: [],
+      emit: (event) => { events.push(event) },
+    }, {
+      classifyDirectMemoryIntent: async () => ({
+        action: 'store',
+        confidence: 0.99,
+        title: 'Launch marker',
+        value: 'Launch marker: ALPHA-9',
+        acknowledgement: 'I\'ll remember that.',
+        exclusiveCompletion: true,
+      }),
+      invokeTool: async (_ctx, toolName, args, _failurePrefix, calledNames) => {
+        calledNames.add(toolName)
+        events.push({ t: 'tool_call', toolName, toolInput: JSON.stringify(args), toolCallId: 'call-1' })
+        events.push({ t: 'tool_result', toolName, toolOutput: 'Stored memory "Launch marker".', toolCallId: 'call-1' })
+        return {
+          invoked: true,
+          responseOverride: null,
+          toolOutputText: 'Stored memory "Launch marker".',
+        }
+      },
+    })
+
+    assert.equal(result?.fullResponse, 'I\'ll remember that.')
+    assert.equal(result?.calledNames.has('memory_store'), true)
+  })
+
+  it('does not preflight composite turns that also asked for other work', async () => {
+    const result = await runExclusiveDirectMemoryPreflight({
+      session: {
+        cwd: process.cwd(),
+        tools: ['memory'],
+      },
+      sessionId: 'preflight-memory-composite',
+      message: 'Remember that my launch marker is ALPHA-9 and then make a file called notes.txt.',
+      effectiveMessage: 'Remember that my launch marker is ALPHA-9 and then make a file called notes.txt.',
+      enabledPlugins: ['memory'],
+      toolPolicy: resolveSessionToolPolicy(['memory'], {}),
+      appSettings: {},
+      internal: false,
+      source: 'chat',
+      toolEvents: [],
+      emit: () => {},
+    }, {
+      classifyDirectMemoryIntent: async () => ({
+        action: 'store',
+        confidence: 0.98,
+        title: 'Launch marker',
+        value: 'Launch marker: ALPHA-9',
+        acknowledgement: 'I\'ll remember that.',
+        exclusiveCompletion: false,
+      }),
+    })
+
+    assert.equal(result, null)
+  })
+
+  it('fails open when direct-memory preflight classification times out', async () => {
+    const started = Date.now()
+    const result = await runExclusiveDirectMemoryPreflight({
+      session: {
+        cwd: process.cwd(),
+        tools: ['memory'],
+      },
+      sessionId: 'preflight-memory-timeout',
+      message: 'Please remember that my launch marker is ALPHA-9.',
+      effectiveMessage: 'Please remember that my launch marker is ALPHA-9.',
+      enabledPlugins: ['memory'],
+      toolPolicy: resolveSessionToolPolicy(['memory'], {}),
+      appSettings: {},
+      internal: false,
+      source: 'chat',
+      toolEvents: [],
+      emit: () => {},
+    }, {
+      classifyDirectMemoryIntent: async () => new Promise<never>(() => {}),
+      memoryIntentTimeoutMs: 1,
+    })
+
+    assert.equal(result, null)
+    assert.ok((Date.now() - started) < 250, 'preflight timeout should fail open quickly')
+  })
+
   it('fails fast before model execution when an explicitly requested tool is unavailable', () => {
     const response = resolveRequestedToolPreflightResponse({
       message: 'Use delegate_to_codex_cli. task: "Say hi in one sentence."',
@@ -185,6 +284,7 @@ describe('chat-turn-tool-routing', () => {
         title: 'Launch marker',
         value: 'My launch marker is ALPHA-7',
         acknowledgement: 'I\'ll remember that your launch marker is ALPHA-7.',
+        exclusiveCompletion: true,
       }),
       invokeTool: async (_ctx, toolName, args, _failurePrefix, calledNames) => {
         invocations.push({ toolName, args })
@@ -232,6 +332,7 @@ describe('chat-turn-tool-routing', () => {
         title: 'Launch marker',
         value: 'My launch marker is ALPHA-8',
         acknowledgement: 'I\'ll use your updated launch marker going forward.',
+        exclusiveCompletion: true,
       }),
       invokeTool: async (_ctx, toolName, args, _failurePrefix, calledNames) => {
         invocations.push({ toolName, args })
@@ -336,5 +437,38 @@ describe('chat-turn-tool-routing', () => {
     assert.equal(result.fullResponse, 'I do not have your launch marker in memory yet.')
     assert.equal(result.errorMessage, undefined)
     assert.equal(result.calledNames.has('memory_search'), true)
+  })
+
+  it('fails open when post-LLM memory classification times out', async () => {
+    let invoked = false
+    const started = Date.now()
+    const result = await runPostLlmToolRouting({
+      session: {
+        cwd: process.cwd(),
+        tools: ['memory'],
+      },
+      sessionId: 'session-memory-timeout',
+      message: 'What is my launch marker right now?',
+      effectiveMessage: 'What is my launch marker right now?',
+      enabledPlugins: ['memory'],
+      toolPolicy: resolveSessionToolPolicy(['memory'], {}),
+      appSettings: {},
+      internal: false,
+      source: 'chat',
+      toolEvents: [],
+      emit: () => {},
+    }, 'Current response.', undefined, {
+      classifyDirectMemoryIntent: async () => new Promise<never>(() => {}),
+      memoryIntentTimeoutMs: 1,
+      invokeTool: async () => {
+        invoked = true
+        throw new Error('should not invoke a tool when classification times out')
+      },
+    })
+
+    assert.equal(result.fullResponse, 'Current response.')
+    assert.equal(result.errorMessage, undefined)
+    assert.equal(invoked, false)
+    assert.ok((Date.now() - started) < 250, 'post-LLM timeout should fail open quickly')
   })
 })

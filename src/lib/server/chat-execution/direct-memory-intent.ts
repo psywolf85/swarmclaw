@@ -11,12 +11,13 @@ const DirectMemoryIntentResponseSchema = z.object({
   query: z.string().optional().nullable(),
   acknowledgement: z.string().optional().nullable(),
   missResponse: z.string().optional().nullable(),
+  exclusiveCompletion: z.boolean().optional().nullable(),
 })
 
 export type DirectMemoryIntent =
   | { action: 'none'; confidence: number }
-  | { action: 'store'; confidence: number; title?: string; value: string; acknowledgement: string }
-  | { action: 'update'; confidence: number; title?: string; value: string; acknowledgement: string }
+  | { action: 'store'; confidence: number; title?: string; value: string; acknowledgement: string; exclusiveCompletion: boolean }
+  | { action: 'update'; confidence: number; title?: string; value: string; acknowledgement: string; exclusiveCompletion: boolean }
   | { action: 'recall'; confidence: number; query: string; missResponse: string }
 
 export interface DirectMemoryIntentClassifierInput {
@@ -117,6 +118,7 @@ export function parseDirectMemoryIntentResponse(text: string): DirectMemoryInten
       ...(title ? { title } : {}),
       value,
       acknowledgement: normalizeText(parsed.data.acknowledgement) || defaultAcknowledgement(parsed.data.action),
+      exclusiveCompletion: parsed.data.exclusiveCompletion === true,
     }
   }
 
@@ -155,10 +157,11 @@ function buildDirectMemoryIntentPrompt(input: DirectMemoryIntentClassifierInput)
     '- Choose "none" for ordinary conversation, current-thread-only questions, file/code/document work, and anything that should not touch durable memory.',
     '- Be conservative. If unsure, return {"action":"none","confidence":0}.',
     '- For "store" and "update", return the durable fact in "value" and a short natural user-facing acknowledgement in "acknowledgement". Do not mention tools, memory ids, storage, creation, or updating.',
+    '- Set "exclusiveCompletion" to true only when a successful memory write fully satisfies the user turn and the assistant should stop after the acknowledgement. Set it to false when the user also asked for other work in the same turn.',
     '- For "recall", return a concise search query in "query" and a short natural "missResponse". Do not mention tools.',
     '',
     'Output shape:',
-    '{"action":"none|store|update|recall","confidence":0-1,"title":"optional short title","value":"for store/update","query":"for recall","acknowledgement":"for store/update","missResponse":"for recall"}',
+    '{"action":"none|store|update|recall","confidence":0-1,"title":"optional short title","value":"for store/update","query":"for recall","acknowledgement":"for store/update","missResponse":"for recall","exclusiveCompletion":true}',
     '',
     `user_message: ${JSON.stringify(message)}`,
     `assistant_response: ${JSON.stringify(currentResponse)}`,

@@ -109,8 +109,9 @@ export function resolveSuccessfulTerminalToolBoundary(params: {
   toolName: string
   toolInput: unknown
   toolOutput: string
+  allowMemoryWriteTerminal?: boolean
 }): TerminalToolBoundary | null {
-  if (shouldTerminateOnSuccessfulMemoryMutation(params)) {
+  if (params.allowMemoryWriteTerminal !== false && shouldTerminateOnSuccessfulMemoryMutation(params)) {
     return {
       kind: 'memory_write',
       responseText: buildSuccessfulMemoryMutationResponse({

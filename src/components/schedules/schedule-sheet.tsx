@@ -8,7 +8,7 @@ import { AgentPickerList } from '@/components/shared/agent-picker-list'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { inputClass } from '@/components/shared/form-styles'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
-import type { ScheduleType, ScheduleStatus } from '@/types'
+import type { ScheduleTaskMode, ScheduleType, ScheduleStatus } from '@/types'
 import cronstrue from 'cronstrue'
 import { SectionLabel } from '@/components/shared/section-label'
 import { SCHEDULE_TEMPLATES, type ScheduleTemplate } from '@/lib/schedules/schedule-templates'
@@ -104,7 +104,7 @@ export function ScheduleSheet() {
   const [cron, setCron] = useState('0 * * * *')
   const [intervalMs, setIntervalMs] = useState(3600000)
   const [status, setStatus] = useState<ScheduleStatus>('active')
-  const [taskMode, setTaskMode] = useState<'task' | 'wake_only'>('task')
+  const [taskMode, setTaskMode] = useState<ScheduleTaskMode>('task')
   const [message, setMessage] = useState('')
   const [customCron, setCustomCron] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -133,7 +133,7 @@ export function ScheduleSheet() {
         setCron(editing.cron || '0 * * * *')
         setIntervalMs(editing.intervalMs || 3600000)
         setStatus(editing.status)
-        setTaskMode(editing.taskMode === 'wake_only' ? 'wake_only' : 'task')
+        setTaskMode(editing.taskMode === 'wake_only' ? 'wake_only' : editing.taskMode === 'protocol' ? 'protocol' : 'task')
         setMessage(editing.message || '')
         setCustomCron(!CRON_PRESETS.some((p) => p.cron === editing.cron))
       } else if (templatePrefill) {
@@ -186,7 +186,8 @@ export function ScheduleSheet() {
       agentId,
       taskPrompt: taskMode === 'wake_only' ? message : taskPrompt,
       taskMode,
-      message: taskMode === 'wake_only' ? message : undefined,
+      message: taskMode === 'task' ? undefined : message,
+      protocolTemplateId: taskMode === 'protocol' ? 'single_agent_structured_run' : undefined,
       scheduleType,
       cron: scheduleType === 'cron' ? cron : undefined,
       intervalMs: scheduleType === 'interval' ? intervalMs : undefined,
@@ -343,9 +344,9 @@ export function ScheduleSheet() {
           <div className="mb-8">
             <div className="flex items-center gap-2 mb-3">
               <SectionLabel className="mb-0">Task Mode</SectionLabel>
-              <HintTip text="Create task: creates a board task for the agent. Wake agent only: sends a message to the agent without creating a task." />
+              <HintTip text="Create task: creates a board task. Wake agent only: sends a message without a task. Structured session: launches a bounded structured run instead of a normal task." />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-3 gap-3">
               <button
                 onClick={() => setTaskMode('task')}
                 className={`py-3 px-4 rounded-[14px] text-center cursor-pointer transition-all duration-200
@@ -368,6 +369,17 @@ export function ScheduleSheet() {
               >
                 Wake agent only
               </button>
+              <button
+                onClick={() => setTaskMode('protocol')}
+                className={`py-3 px-4 rounded-[14px] text-center cursor-pointer transition-all duration-200
+                  active:scale-[0.97] text-[14px] font-600 border
+                  ${taskMode === 'protocol'
+                    ? 'bg-accent-soft border-accent-bright/25 text-accent-bright'
+                    : 'bg-surface border-white/[0.06] text-text-2 hover:bg-surface-2'}`}
+                style={{ fontFamily: 'inherit' }}
+              >
+                Structured session
+              </button>
             </div>
           </div>
 
@@ -383,6 +395,31 @@ export function ScheduleSheet() {
                 style={{ fontFamily: 'inherit' }}
               />
             </div>
+          ) : taskMode === 'protocol' ? (
+            <>
+              <div className="mb-4">
+                <SectionLabel>Structured Session Goal</SectionLabel>
+                <textarea
+                  value={taskPrompt}
+                  onChange={(e) => setTaskPrompt(e.target.value)}
+                  placeholder="What should this structured session accomplish?"
+                  rows={4}
+                  className={`${inputClass} resize-y min-h-[100px]`}
+                  style={{ fontFamily: 'inherit' }}
+                />
+              </div>
+              <div className="mb-8">
+                <SectionLabel>Kickoff Context</SectionLabel>
+                <textarea
+                  value={message}
+                  onChange={(e) => setMessage(e.target.value)}
+                  placeholder="Optional context for the structured session run"
+                  rows={3}
+                  className={`${inputClass} resize-y min-h-[88px]`}
+                  style={{ fontFamily: 'inherit' }}
+                />
+              </div>
+            </>
           ) : (
             <div className="mb-8">
               <SectionLabel>Task Prompt</SectionLabel>
@@ -552,12 +589,24 @@ export function ScheduleSheet() {
             )}
             <div>
               <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">Mode</span>
-              <div className="text-[14px] text-text font-600 mt-0.5">{taskMode === 'wake_only' ? 'Wake agent only' : 'Create task'}</div>
+              <div className="text-[14px] text-text font-600 mt-0.5">{taskMode === 'wake_only' ? 'Wake agent only' : taskMode === 'protocol' ? 'Structured session' : 'Create task'}</div>
             </div>
             <div>
-              <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">{taskMode === 'wake_only' ? 'Wake Message' : 'Task'}</span>
+              <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">{taskMode === 'wake_only' ? 'Wake Message' : taskMode === 'protocol' ? 'Session Goal' : 'Task'}</span>
               <div className="text-[13px] text-text-2 mt-0.5 whitespace-pre-wrap">{taskMode === 'wake_only' ? message : taskPrompt}</div>
             </div>
+            {taskMode === 'protocol' && message.trim() && (
+              <div>
+                <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">Kickoff Context</span>
+                <div className="text-[13px] text-text-2 mt-0.5 whitespace-pre-wrap">{message}</div>
+              </div>
+            )}
+            {taskMode === 'protocol' && (
+              <div>
+                <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">Template</span>
+                <div className="text-[13px] text-text-2 mt-0.5">Single-agent structured run</div>
+              </div>
+            )}
             <div className="h-px bg-white/[0.06]" />
             <div>
               <span className="text-[11px] text-text-3/50 uppercase tracking-wider font-600">Schedule</span>
