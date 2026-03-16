@@ -213,7 +213,6 @@ The building blocks are the same: **agents, tools, memory, delegation, schedules
 
 - **`build:ci` repair**: fixed the langgraph checkpoint duplicate-column crash that blocked CI/build validation.
 - **Safer storage writes**: credentials and agents use upsert-only save behavior, and a collection safety guard blocks accidental bulk-delete paths.
->>>>>>> Stashed changes
 
 ### v1.1.2 Highlights
 
