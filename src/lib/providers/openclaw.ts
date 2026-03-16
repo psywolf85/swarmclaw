@@ -1,6 +1,7 @@
 import { WebSocket } from 'ws'
 import crypto, { randomUUID } from 'crypto'
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import type { StreamChatOptions } from './index'
 import type { Agent } from '@/types'
@@ -41,8 +42,8 @@ interface DeviceIdentity {
 /** Resolve the openclaw CLI's state directory (~/.openclaw by default). */
 function resolveCliStateDir(): string {
   const override = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim()
-  if (override) return path.resolve(override.replace(/^~/, process.env.HOME || ''))
-  const home = process.env.HOME || process.env.USERPROFILE || ''
+  if (override) return path.resolve(override.replace(/^~/, os.homedir()))
+  const home = os.homedir()
   // Check new path first, then legacy
   const newDir = path.join(home, '.openclaw')
   if (fs.existsSync(newDir)) return newDir

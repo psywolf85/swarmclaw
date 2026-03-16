@@ -1,12 +1,9 @@
 import fs from 'fs'
 import type { StreamChatOptions } from './index'
-import { PROVIDER_DEFAULTS } from './provider-defaults'
+import { PROVIDER_DEFAULTS, IMAGE_EXTS, TEXT_EXTS, PDF_MAX_CHARS, MAX_HISTORY_MESSAGES, writeSSE } from './provider-defaults'
 import { resolveImagePath } from '@/lib/server/resolve-image'
 
-const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|bmp)$/i
-const TEXT_EXTS = /\.(txt|md|csv|json|xml|html|js|ts|tsx|jsx|py|go|rs|java|c|cpp|h|yml|yaml|toml|env|log|sh|sql|css|scss)$/i
-
-async function fileToContentParts(filePath: string): Promise<any[]> {
+async function fileToContentParts(filePath: string): Promise<Array<Record<string, unknown>>> {
   if (!filePath || !fs.existsSync(filePath)) return []
   const name = filePath.split('/').pop() || 'file'
   if (IMAGE_EXTS.test(filePath)) {
@@ -29,8 +26,7 @@ async function fileToContentParts(filePath: string): Promise<any[]> {
       const result = await pdfParse(buf)
       const pdfText = (result.text || '').trim()
       if (!pdfText) return [{ type: 'text', text: `[Attached PDF: ${name} — no extractable text]` }]
-      const maxChars = 100_000
-      const truncated = pdfText.length > maxChars ? pdfText.slice(0, maxChars) + '\n\n[... truncated]' : pdfText
+      const truncated = pdfText.length > PDF_MAX_CHARS ? pdfText.slice(0, PDF_MAX_CHARS) + '\n\n[... truncated]' : pdfText
       return [{ type: 'text', text: `[Attached PDF: ${name} (${result.numpages} pages)]\n\n${truncated}` }]
     } catch {
       return [{ type: 'text', text: `[Attached PDF: ${name} — could not extract text]` }]
@@ -113,7 +109,7 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
       if (resContentType.includes('text/html')) {
         const msg = 'Received HTML instead of API response. The endpoint may be misconfigured or returning a landing page.'
         console.error(`[${session.id}] received HTML instead of API response from ${baseUrl} (provider: ${session.provider})`)
-        write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
+        writeSSE(write, 'err', msg)
         active.delete(session.id)
         reject(new Error(msg))
         return
@@ -129,7 +125,7 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
           else if (parsed.message) errMsg = parsed.message
           else if (parsed.detail) errMsg = parsed.detail
         } catch {}
-        write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
+        writeSSE(write, 'err', errMsg)
         active.delete(session.id)
         reject(new Error(`OpenAI error ${res.status}: ${errMsg}`))
         return
@@ -165,7 +161,7 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
             const delta = parsed.choices?.[0]?.delta?.content
             if (delta) {
               fullResponse += delta
-              write(`data: ${JSON.stringify({ t: 'd', text: delta })}\n\n`)
+              writeSSE(write, 'd', delta)
             }
             // Extract usage from the final chunk (stream_options: include_usage)
             if (usageEnabled && parsed.usage && onUsage) {
@@ -181,10 +177,11 @@ export function streamOpenAiChat({ session, message, imagePath, imageUrl, apiKey
       if (!fullResponse) {
         console.error(`[${session.id}] openai stream ended with no content (provider: ${session.provider}, endpoint: ${baseUrl})`)
       }
-    } catch (err: any) {
-      if (err.name !== 'AbortError') {
-        console.error(`[${session.id}] openai request error:`, err.message)
-        write(`data: ${JSON.stringify({ t: 'err', text: `Connection failed: ${err.message}` })}\n\n`)
+    } catch (err: unknown) {
+      const errObj = err as { name?: string; message?: string }
+      if (errObj.name !== 'AbortError') {
+        console.error(`[${session.id}] openai request error:`, errObj.message)
+        writeSSE(write, 'err', `Connection failed: ${errObj.message}`)
       }
       active.delete(session.id)
       reject(err)
@@ -203,7 +200,7 @@ async function buildMessages(session: Record<string, unknown>, message: string, 
   }
 
   if (loadHistory) {
-    const history = loadHistory(session.id as string).slice(-40)
+    const history = loadHistory(session.id as string).slice(-MAX_HISTORY_MESSAGES)
     for (const m of history) {
       const histImagePath = resolveImagePath(m.imagePath as string | undefined, m.imageUrl as string | undefined)
       if (m.role === 'user' && histImagePath) {

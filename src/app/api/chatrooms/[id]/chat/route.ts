@@ -67,6 +67,11 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (chatroom.autoAddress && mentions.length === 0) {
     mentions = [...chatroom.agentIds]
   }
+  // If a specific agent is targeted, ensure they're in the mentions
+  const incomingTargetAgentId = typeof body.targetAgentId === 'string' ? body.targetAgentId : undefined
+  if (incomingTargetAgentId && chatroom.agentIds.includes(incomingTargetAgentId) && !mentions.includes(incomingTargetAgentId)) {
+    mentions.push(incomingTargetAgentId)
+  }
   const mentionHealth = filterHealthyChatroomAgents(mentions, agents)
   mentions = mentionHealth.healthyAgentIds
   const userMessage: ChatroomMessage = {
@@ -81,6 +86,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     ...(imagePath ? { imagePath } : {}),
     ...(attachedFiles ? { attachedFiles } : {}),
     ...(replyToId ? { replyToId } : {}),
+    ...(incomingTargetAgentId ? { targetAgentId: incomingTargetAgentId } : {}),
   }
   chatroom.messages.push(userMessage)
   compactChatroomMessages(chatroom)
@@ -89,6 +95,20 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   saveChatrooms(chatrooms)
   notify('chatrooms')
   notify(`chatroom:${id}`)
+
+  // If sender is an agent (via triggerResponses tool), just persist the message — don't re-process agents
+  if (senderId !== 'user' && agents[senderId]) {
+    const encoder = new TextEncoder()
+    const noopStream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ t: 'done' })}\n\n`))
+        controller.close()
+      },
+    })
+    return new NextResponse(noopStream, {
+      headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', 'Connection': 'keep-alive', 'X-Accel-Buffering': 'no' },
+    })
+  }
 
   // Build reply context if replying to a message
   let replyContext = ''
@@ -243,7 +263,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
 
             if (responseText.trim() && !shouldSuppressHiddenControlText(rawResponseText)) {
               appendSyntheticSessionMessage(syntheticSession.id, 'assistant', responseText)
-              const parsedMentions = parseMentions(responseText, agents, freshChatroom.agentIds)
+              const parsedMentions = parseMentions(responseText, agents, freshChatroom.agentIds, { senderId: agent.id, skipImplicit: true })
               const chainedHealth = filterHealthyChatroomAgents(parsedMentions, agents)
               const newMentions = chainedHealth.healthyAgentIds
               if (chainedHealth.skipped.length > 0) {

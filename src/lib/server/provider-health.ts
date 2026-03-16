@@ -17,12 +17,15 @@ const states: Map<string, ProviderHealthState> =
 const cliCheckCache = new Map<string, { at: number; ok: boolean }>()
 const delegateReadyCache = new Map<string, { at: number; ok: boolean }>()
 const CLI_CHECK_TTL_MS = 30_000
+const isWindows = process.platform === 'win32'
 
 function commandExists(binary: string): boolean {
   const now = Date.now()
   const cached = cliCheckCache.get(binary)
   if (cached && now - cached.at < CLI_CHECK_TTL_MS) return cached.ok
-  const probe = spawnSync('/bin/zsh', ['-lc', `command -v ${binary} >/dev/null 2>&1`], { timeout: 2000 })
+  const probe = isWindows
+    ? spawnSync('where', [binary], { timeout: 2000, stdio: 'pipe' })
+    : spawnSync('/bin/zsh', ['-lc', `command -v ${binary} >/dev/null 2>&1`], { timeout: 2000 })
   const ok = (probe.status ?? 1) === 0
   cliCheckCache.set(binary, { at: now, ok })
   return ok

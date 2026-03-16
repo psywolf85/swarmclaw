@@ -1,13 +1,10 @@
 import fs from 'fs'
 import https from 'https'
 import type { StreamChatOptions } from './index'
-import { PROVIDER_DEFAULTS } from './provider-defaults'
+import { PROVIDER_DEFAULTS, IMAGE_EXTS, TEXT_EXTS, ANTHROPIC_MAX_TOKENS, MAX_HISTORY_MESSAGES, writeSSE } from './provider-defaults'
 import { resolveImagePath } from '@/lib/server/resolve-image'
 
-const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|bmp)$/i
-const TEXT_EXTS = /\.(txt|md|csv|json|xml|html|js|ts|tsx|jsx|py|go|rs|java|c|cpp|h|yml|yaml|toml|env|log|sh|sql|css|scss)$/i
-
-function fileToContentBlocks(filePath: string): any[] {
+function fileToContentBlocks(filePath: string): Array<Record<string, unknown>> {
   if (!filePath || !fs.existsSync(filePath)) return []
   if (IMAGE_EXTS.test(filePath)) {
     const data = fs.readFileSync(filePath).toString('base64')
@@ -34,7 +31,7 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
 
     const body: Record<string, unknown> = {
       model,
-      max_tokens: 8192,
+      max_tokens: ANTHROPIC_MAX_TOKENS,
       messages,
       stream: true,
     }
@@ -79,7 +76,7 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
             const parsed = JSON.parse(errBody)
             if (parsed.error?.message) errMsg = parsed.error.message
           } catch {}
-          write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
+          writeSSE(write, 'err', errMsg)
           active.delete(session.id)
           reject(new Error(msg))
         })
@@ -101,13 +98,11 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
             const parsed = JSON.parse(data)
             if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
               fullResponse += parsed.delta.text
-              write(`data: ${JSON.stringify({ t: 'd', text: parsed.delta.text })}\n\n`)
+              writeSSE(write, 'd', parsed.delta.text)
             }
-            // message_start carries input token count
             if (parsed.type === 'message_start' && parsed.message?.usage) {
               usageInput = parsed.message.usage.input_tokens || 0
             }
-            // message_delta carries output token count
             if (parsed.type === 'message_delta' && parsed.usage) {
               usageOutput = parsed.usage.output_tokens || 0
             }
@@ -129,7 +124,7 @@ export function streamAnthropicChat({ session, message, imagePath, apiKey, syste
 
     apiReq.on('error', (e) => {
       console.error(`[${session.id}] anthropic request error:`, e.message)
-      write(`data: ${JSON.stringify({ t: 'err', text: e.message })}\n\n`)
+      writeSSE(write, 'err', e.message)
       active.delete(session.id)
       reject(e)
     })
@@ -142,7 +137,7 @@ function buildMessages(session: Record<string, unknown> & { id: string }, messag
   const msgs: Array<{ role: string; content: unknown }> = []
 
   if (loadHistory) {
-    const history = loadHistory(session.id).slice(-40)
+    const history = loadHistory(session.id).slice(-MAX_HISTORY_MESSAGES)
     for (const m of history) {
       const histImagePath = resolveImagePath(m.imagePath as string | undefined, m.imageUrl as string | undefined)
       if (m.role === 'user' && histImagePath) {
@@ -154,7 +149,6 @@ function buildMessages(session: Record<string, unknown> & { id: string }, messag
     }
   }
 
-  // Current message with optional attachment (imagePath already resolved by caller)
   if (imagePath) {
     const blocks = fileToContentBlocks(imagePath)
     msgs.push({ role: 'user', content: [...blocks, { type: 'text', text: message }] })

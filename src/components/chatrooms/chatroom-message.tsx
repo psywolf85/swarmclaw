@@ -393,8 +393,8 @@ export function ChatroomMessageBubble({ message, agents, onToggleReaction, onRep
         )}
       </div>
 
-      {/* Action buttons (reply + pin + transfer + moderate + reaction) */}
-      <div className="relative shrink-0 mt-0.5 flex items-start gap-1" style={{ zIndex: showPicker || showTransferPicker || showModMenu ? 50 : undefined }}>
+      {/* Action buttons — visible on hover or when a picker/menu is open */}
+      <div className={`relative shrink-0 mt-0.5 flex items-start gap-1 transition-opacity duration-150 ${showPicker || showTransferPicker || showModMenu ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} style={{ zIndex: showPicker || showTransferPicker || showModMenu ? 50 : undefined }}>
         {/* Reply button */}
         {onReply && (
           <button

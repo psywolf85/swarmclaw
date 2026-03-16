@@ -4,6 +4,7 @@ import { extractSuggestions } from '@/lib/server/suggestions'
 import {
   looksLikeExternalWalletTask,
 } from '@/lib/server/chat-execution/stream-continuation'
+import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 import {
   buildSuccessfulMemoryMutationResponse,
   resolveToolAction,
@@ -79,8 +80,10 @@ export function shouldForceExternalServiceSummary(params: {
   finalResponse: string
   hasToolCalls: boolean
   toolEventCount: number
+  classification?: MessageClassification | null
 }): boolean {
-  if (!looksLikeExternalWalletTask(params.userMessage)) return false
+  const walletDetected = params.classification ? params.classification.walletIntent !== 'none' : looksLikeExternalWalletTask(params.userMessage)
+  if (!walletDetected) return false
   if (!params.hasToolCalls || params.toolEventCount === 0) return false
   const trimmed = params.finalResponse.trim()
   if (!trimmed) return true
@@ -196,4 +199,53 @@ export function compactThreadRecallText(text: string, maxChars = 180): string {
   const compact = extractSuggestions(text || '').clean.replace(/\s+/g, ' ').trim()
   if (!compact) return ''
   return compact.length > maxChars ? `${compact.slice(0, maxChars - 3)}...` : compact
+}
+
+// ---------------------------------------------------------------------------
+// Functions relocated from stream-agent-chat.ts to avoid circular deps
+// ---------------------------------------------------------------------------
+
+const TOOL_SUMMARY_SHORT_RESPONSE_EXEMPT_TOOLS = new Set([
+  'use_skill',
+])
+
+export function shouldSkipToolSummaryForShortResponse(params: {
+  fullText: string
+  toolEvents: MessageToolEvent[]
+  isConnectorSession?: boolean
+}): boolean {
+  if (params.isConnectorSession) return false
+  if (!params.fullText.trim()) return false
+  if (!Array.isArray(params.toolEvents) || params.toolEvents.length === 0) return false
+  const toolNames = Array.from(new Set(
+    params.toolEvents
+      .map((event) => canonicalizeExtensionId(event.name) || event.name)
+      .filter((name): name is string => typeof name === 'string' && name.trim().length > 0),
+  ))
+  if (toolNames.length === 0) return false
+  return toolNames.every((toolName) => TOOL_SUMMARY_SHORT_RESPONSE_EXEMPT_TOOLS.has(toolName))
+}
+
+export async function resolveExclusiveMemoryWriteTerminalAllowance(params: {
+  sessionId: string
+  agentId?: string | null
+  message: string
+  classifyMemoryIntent?: (input: import('@/lib/server/chat-execution/direct-memory-intent').DirectMemoryIntentClassifierInput) => Promise<Awaited<ReturnType<typeof import('@/lib/server/chat-execution/direct-memory-intent').classifyDirectMemoryIntent>>>
+}): Promise<boolean> {
+  try {
+    const { classifyDirectMemoryIntent } = await import('@/lib/server/chat-execution/direct-memory-intent')
+    const classifier = params.classifyMemoryIntent || classifyDirectMemoryIntent
+    const directMemoryIntent = await classifier({
+      sessionId: params.sessionId,
+      agentId: params.agentId || null,
+      message: params.message,
+      currentResponse: '',
+      currentError: null,
+      toolEvents: [],
+    })
+    return (directMemoryIntent?.action === 'store' || directMemoryIntent?.action === 'update')
+      && directMemoryIntent.exclusiveCompletion === true
+  } catch {
+    return false
+  }
 }

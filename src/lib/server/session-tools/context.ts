@@ -155,6 +155,7 @@ export function extractResumeIdentifier(text: string): string | null {
 
 const binaryLookupCache = new Map<string, { checkedAt: number; path: string | null }>()
 const BINARY_LOOKUP_TTL_MS = 30_000
+const isWindows = process.platform === 'win32'
 
 export function findBinaryOnPath(binaryName: string): string | null {
   const now = Date.now()
@@ -162,10 +163,9 @@ export function findBinaryOnPath(binaryName: string): string | null {
   if (cached && now - cached.checkedAt < BINARY_LOOKUP_TTL_MS) return cached.path
 
   const { spawnSync } = require('child_process')
-  const probe = spawnSync('/bin/zsh', ['-lc', `command -v ${binaryName} 2>/dev/null`], {
-    encoding: 'utf-8',
-    timeout: 2000,
-  })
+  const probe = isWindows
+    ? spawnSync('where', [binaryName], { encoding: 'utf-8', timeout: 2000, stdio: 'pipe' })
+    : spawnSync('/bin/zsh', ['-lc', `command -v ${binaryName} 2>/dev/null`], { encoding: 'utf-8', timeout: 2000 })
   const resolved = (probe.stdout || '').trim() || null
   binaryLookupCache.set(binaryName, { checkedAt: now, path: resolved })
   return resolved

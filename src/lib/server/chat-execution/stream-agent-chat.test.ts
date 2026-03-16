@@ -31,9 +31,37 @@ import {
   shouldForceWorkspaceScopeShellFallback,
 } from '@/lib/server/chat-execution/stream-continuation'
 import type { DirectMemoryIntentClassifierInput } from '@/lib/server/chat-execution/direct-memory-intent'
+import {
+  parseClassificationResponse,
+  isDeliverableTask,
+  isBroadGoal,
+  hasWalletIntent,
+  hasTransactionalWalletIntent,
+  hasHumanSignals,
+  hasSignificantEvent,
+  isResearchSynthesis,
+} from '@/lib/server/chat-execution/message-classifier'
+import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 
-const streamAgentChatSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'stream-agent-chat.ts'), 'utf-8')
-const streamContinuationSource = fs.readFileSync(path.join(path.dirname(new URL(import.meta.url).pathname), 'stream-continuation.ts'), 'utf-8')
+const _dir = path.dirname(new URL(import.meta.url).pathname)
+const _readSibling = (name: string) => fs.readFileSync(path.join(_dir, name), 'utf-8')
+// The core streaming module was decomposed into several files — combine them
+// so existing source-pattern assertions keep working.
+const streamAgentChatSource = [
+  _readSibling('stream-agent-chat.ts'),
+  _readSibling('chat-turn-state.ts'),
+  _readSibling('continuation-limits.ts'),
+  _readSibling('prompt-builder.ts'),
+  _readSibling('prompt-mode.ts'),
+  _readSibling('prompt-budget.ts'),
+  _readSibling('iteration-timers.ts'),
+  _readSibling('iteration-event-handler.ts'),
+  _readSibling('continuation-evaluator.ts'),
+  _readSibling('post-stream-finalization.ts'),
+  _readSibling('chat-streaming-utils.ts'),
+  _readSibling('message-classifier.ts'),
+].join('\n')
+const streamContinuationSource = _readSibling('stream-continuation.ts')
 const streamSources = `${streamAgentChatSource}\n${streamContinuationSource}`
 
 describe('buildToolDisciplineLines', () => {
@@ -216,7 +244,7 @@ describe('buildToolDisciplineLines', () => {
 
   it('forces early workspace-tool kickoff for explicit saved-artifact deliverables', () => {
     assert.ok(streamAgentChatSource.includes('shouldEnforceEarlyRequiredToolKickoff'))
-    assert.ok(streamAgentChatSource.includes('REQUIRED_TOOL_KICKOFF_TIMEOUT_MS'))
+    assert.ok(streamAgentChatSource.includes('requiredToolKickoffMs'))
     assert.ok(streamAgentChatSource.includes('tool_kickoff_timeout'))
     assert.ok(streamAgentChatSource.includes('did not start the required workspace tool step'))
   })
@@ -254,13 +282,13 @@ describe('buildToolDisciplineLines', () => {
     // The requiredToolsPending filter must canonicalize tool names so that
     // alias names (e.g. ask_human) match canonical names from LangGraph events.
     assert.ok(streamAgentChatSource.includes('canonicalizeExtensionId(toolName) || toolName'))
-    assert.ok(streamAgentChatSource.includes('!usedToolNames.has(toolName) && !usedToolNames.has(canonical)'))
+    assert.ok(streamAgentChatSource.includes('usedToolNames.has(toolName) && !') && streamAgentChatSource.includes('usedToolNames.has(canonical)'))
   })
 
   it('treats shell-based HTTP commands (curl/gh) as satisfying web research requirements', () => {
     // When shell runs curl/wget/gh, the web tool should be marked as used.
     assert.ok(streamAgentChatSource.includes("curl|wget|http|gh\\s+(issue|pr|api|repo|release|search|run)"))
-    assert.ok(streamAgentChatSource.includes("if (cmdMatch) usedToolNames.add('web')"))
+    assert.ok(streamAgentChatSource.includes("usedToolNames.add('web')"))
   })
 })
 
@@ -557,11 +585,14 @@ describe('resolveContinuationAssistantText', () => {
   })
 
   it('rolls back partial iteration text before transient retries restart the turn', () => {
-    assert.ok(streamAgentChatSource.includes('const iterationStartState:'))
-    assert.ok(streamAgentChatSource.includes('fullText = iterationStartState.fullText'))
-    assert.ok(streamAgentChatSource.includes('lastSegment = iterationStartState.lastSegment'))
-    assert.ok(streamAgentChatSource.includes('lastSettledSegment = iterationStartState.lastSettledSegment'))
-    assert.ok(streamAgentChatSource.includes('needsTextSeparator = iterationStartState.needsTextSeparator'))
+    // After refactor: snapshot/restore is encapsulated in ChatTurnState class
+    assert.ok(streamAgentChatSource.includes('state.snapshot()'))
+    assert.ok(streamAgentChatSource.includes('state.restore(iterationStartState)'))
+    // The snapshot captures all key fields
+    assert.ok(streamAgentChatSource.includes('this.fullText = snap.fullText'))
+    assert.ok(streamAgentChatSource.includes('this.lastSegment = snap.lastSegment'))
+    assert.ok(streamAgentChatSource.includes('this.lastSettledSegment = snap.lastSettledSegment'))
+    assert.ok(streamAgentChatSource.includes('this.needsTextSeparator = snap.needsTextSeparator'))
   })
 })
 
@@ -1181,5 +1212,153 @@ describe('transient provider retry coverage', () => {
     assert.ok(streamAgentChatSource.includes('RateLimitError'))
     assert.ok(streamAgentChatSource.includes('too many requests'))
     assert.ok(streamAgentChatSource.includes('internal server error'))
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Message classifier tests
+// ---------------------------------------------------------------------------
+
+describe('parseClassificationResponse', () => {
+  it('parses valid classification JSON', () => {
+    const result = parseClassificationResponse(JSON.stringify({
+      isDeliverableTask: true,
+      isBroadGoal: false,
+      walletIntent: 'none',
+      hasHumanSignals: false,
+      hasSignificantEvent: false,
+      isResearchSynthesis: true,
+      explicitToolRequests: ['web'],
+      confidence: 0.9,
+    }))
+    assert.ok(result)
+    assert.equal(result.isDeliverableTask, true)
+    assert.equal(result.isBroadGoal, false)
+    assert.equal(result.walletIntent, 'none')
+    assert.equal(result.isResearchSynthesis, true)
+    assert.deepEqual(result.explicitToolRequests, ['web'])
+    assert.equal(result.confidence, 0.9)
+  })
+
+  it('extracts JSON from markdown code block', () => {
+    const text = '```json\n{"isDeliverableTask":false,"isBroadGoal":false,"walletIntent":"none","hasHumanSignals":false,"hasSignificantEvent":false,"isResearchSynthesis":false,"explicitToolRequests":[],"confidence":0.8}\n```'
+    const result = parseClassificationResponse(text)
+    assert.ok(result)
+    assert.equal(result.isDeliverableTask, false)
+    assert.equal(result.confidence, 0.8)
+  })
+
+  it('returns null for invalid JSON', () => {
+    assert.equal(parseClassificationResponse('not json'), null)
+    assert.equal(parseClassificationResponse(''), null)
+  })
+
+  it('returns null for missing required fields', () => {
+    const result = parseClassificationResponse('{"isDeliverableTask": true}')
+    assert.equal(result, null)
+  })
+
+  it('rejects invalid walletIntent values', () => {
+    const result = parseClassificationResponse(JSON.stringify({
+      isDeliverableTask: false,
+      isBroadGoal: false,
+      walletIntent: 'invalid',
+      hasHumanSignals: false,
+      hasSignificantEvent: false,
+      isResearchSynthesis: false,
+      explicitToolRequests: [],
+      confidence: 0.5,
+    }))
+    assert.equal(result, null)
+  })
+})
+
+describe('message classifier adapter functions', () => {
+  const deliverableClassification: MessageClassification = {
+    isDeliverableTask: true,
+    isBroadGoal: true,
+    walletIntent: 'none',
+    hasHumanSignals: false,
+    hasSignificantEvent: false,
+    isResearchSynthesis: false,
+    explicitToolRequests: [],
+    confidence: 0.95,
+  }
+
+  const walletClassification: MessageClassification = {
+    isDeliverableTask: false,
+    isBroadGoal: false,
+    walletIntent: 'transactional',
+    hasHumanSignals: false,
+    hasSignificantEvent: false,
+    isResearchSynthesis: false,
+    explicitToolRequests: [],
+    confidence: 0.9,
+  }
+
+  const humanSignalClassification: MessageClassification = {
+    isDeliverableTask: false,
+    isBroadGoal: false,
+    walletIntent: 'none',
+    hasHumanSignals: true,
+    hasSignificantEvent: true,
+    isResearchSynthesis: false,
+    explicitToolRequests: [],
+    confidence: 0.85,
+  }
+
+  it('isDeliverableTask prefers classification over regex', () => {
+    // Classification says true, even for a message regex would reject
+    assert.equal(isDeliverableTask(deliverableClassification, 'tell me a joke'), true)
+    // Classification says false
+    assert.equal(isDeliverableTask({ ...deliverableClassification, isDeliverableTask: false }, 'tell me a joke'), false)
+  })
+
+  it('isDeliverableTask falls back to regex when classification is null', () => {
+    assert.equal(isDeliverableTask(null, 'Write a competitive analysis report and save to analysis.md'), true)
+    assert.equal(isDeliverableTask(null, 'Hi'), false)
+  })
+
+  it('isBroadGoal prefers classification over regex', () => {
+    assert.equal(isBroadGoal(deliverableClassification, 'short'), true)
+    assert.equal(isBroadGoal({ ...deliverableClassification, isBroadGoal: false }, 'short'), false)
+  })
+
+  it('hasWalletIntent uses classification', () => {
+    assert.equal(hasWalletIntent(walletClassification, 'swap ETH for USDC'), true)
+    assert.equal(hasWalletIntent({ ...walletClassification, walletIntent: 'none' }, 'swap ETH for USDC'), false)
+  })
+
+  it('hasTransactionalWalletIntent distinguishes read_only from transactional', () => {
+    assert.equal(hasTransactionalWalletIntent(walletClassification, 'anything'), true)
+    assert.equal(hasTransactionalWalletIntent({ ...walletClassification, walletIntent: 'read_only' }, 'anything'), false)
+    assert.equal(hasTransactionalWalletIntent({ ...walletClassification, walletIntent: 'none' }, 'anything'), false)
+  })
+
+  it('hasHumanSignals uses classification', () => {
+    assert.equal(hasHumanSignals(humanSignalClassification, 'anything'), true)
+    assert.equal(hasHumanSignals({ ...humanSignalClassification, hasHumanSignals: false }, 'anything'), false)
+  })
+
+  it('hasHumanSignals falls back to regex when null', () => {
+    assert.equal(hasHumanSignals(null, 'my wife and I are moving next week'), true)
+    assert.equal(hasHumanSignals(null, 'what is 2+2'), false)
+  })
+
+  it('hasSignificantEvent uses classification', () => {
+    assert.equal(hasSignificantEvent(humanSignalClassification, 'anything'), true)
+    assert.equal(hasSignificantEvent({ ...humanSignalClassification, hasSignificantEvent: false }, 'anything'), false)
+  })
+
+  it('isResearchSynthesis uses classification', () => {
+    const researchClass: MessageClassification = { ...deliverableClassification, isResearchSynthesis: true }
+    assert.equal(isResearchSynthesis(researchClass, null), true)
+    assert.equal(isResearchSynthesis({ ...researchClass, isResearchSynthesis: false }, null), false)
+  })
+
+  it('isResearchSynthesis falls back to routing intent when null', () => {
+    assert.equal(isResearchSynthesis(null, 'research'), true)
+    assert.equal(isResearchSynthesis(null, 'browsing'), true)
+    assert.equal(isResearchSynthesis(null, 'coding'), false)
   })
 })

@@ -98,11 +98,14 @@ function tryRealpath(targetPath) {
   }
 }
 
+const isWindows = process.platform === 'win32'
+
 function runRootCommand(command, args, execImpl = execFileSync) {
   try {
     return String(execImpl(command, args, {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe'],
+      ...(isWindows && { shell: true }),
     })).trim()
   } catch {
     return null

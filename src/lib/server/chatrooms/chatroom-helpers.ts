@@ -76,7 +76,7 @@ export function parseMentions(
   text: string,
   agents: Record<string, Agent>,
   memberIds: string[],
-  opts?: { replyTargetAgentId?: string | null },
+  opts?: { replyTargetAgentId?: string | null; senderId?: string | null; skipImplicit?: boolean },
 ): string[] {
   if (/@all\b/i.test(text)) return [...memberIds]
   const mentionPattern = /(?:^|[\s(])@([a-zA-Z0-9._-]+)/g
@@ -106,18 +106,23 @@ export function parseMentions(
     }
   }
 
+  // Filter out self-mentions so agents don't cascade to themselves
+  const senderId = opts?.senderId
+  const explicitNonSelf = senderId ? mentioned.filter((mid) => mid !== senderId) : mentioned
+
   // 3. Implicit mentions (OpenClaw Style - Reading the room)
-  // Only if no explicit mentions were found.
-  if (mentioned.length === 0) {
+  // Only if no non-self explicit mentions found AND implicit matching is enabled.
+  if (explicitNonSelf.length === 0 && !opts?.skipImplicit) {
     for (const id of memberIds) {
       const agent = agents[id]
       if (agent && isImplicitlyMentioned(text, agent)) {
-        mentioned.push(id)
+        if (!mentioned.includes(id)) mentioned.push(id)
       }
     }
   }
 
-  return mentioned
+  // Remove self from final list when senderId is provided
+  return senderId ? mentioned.filter((mid) => mid !== senderId) : mentioned
 }
 
 export function resolveReplyTargetAgentId(
@@ -211,6 +216,8 @@ export function buildChatroomSystemPrompt(chatroom: Chatroom, agents: Record<str
     '- **Implicit Mentions**: If someone uses your name, creature, or vibe in a message but doesn\'t @tag you, they are still "reading the room" and you may respond if it\'s relevant to you.',
     '- **Don\'t narrate your capabilities** unless asked. Just demonstrate them by doing things.',
     '- **Read the room.** Look at recent messages to understand context. Don\'t repeat what others already said.',
+    '- **Direct responses first.** When the user asks you a question, answer it yourself. Don\'t delegate to or coordinate with other agents unless the user explicitly requests collaboration.',
+    '- **Don\'t volunteer other agents.** Saying "let me check with @Bob" when the user asked YOU is unhelpful. Answer directly.',
     '',
     '## Recent Messages',
     recentMessages || '(no messages yet)',

@@ -4,6 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 
+const isWindows = process.platform === 'win32'
 const args = new Set(process.argv.slice(2))
 const startAfterSetup = args.has('--start') || args.has('--prod')
 const productionMode = args.has('--prod')
@@ -25,6 +26,7 @@ function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     cwd,
     stdio: 'inherit',
+    ...(isWindows && { shell: true }),
     ...options,
   })
   if (result.error) fail(result.error.message)
@@ -39,6 +41,7 @@ function runOptional(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     cwd,
     stdio: 'inherit',
+    ...(isWindows && { shell: true }),
     ...options,
   })
   if (result.error || (result.status ?? 1) !== 0) {
@@ -60,7 +63,7 @@ function ensureNodeVersion() {
 }
 
 function ensureNpm() {
-  const result = spawnSync('npm', ['--version'], { cwd, encoding: 'utf8' })
+  const result = spawnSync('npm', ['--version'], { cwd, encoding: 'utf8', ...(isWindows && { shell: true }) })
   if (result.error || (result.status ?? 1) !== 0) {
     fail('npm was not found. Install npm and rerun this setup command.')
   }
@@ -69,7 +72,7 @@ function ensureNpm() {
 
 function commandExists(name) {
   const lookup = process.platform === 'win32' ? 'where' : 'which'
-  const result = spawnSync(lookup, [name], { cwd, encoding: 'utf8' })
+  const result = spawnSync(lookup, [name], { cwd, encoding: 'utf8', ...(isWindows && { shell: true }) })
   return !result.error && (result.status ?? 1) === 0
 }
 

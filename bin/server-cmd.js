@@ -154,6 +154,8 @@ function resolveInstalledNext(pkgRoot = PKG_ROOT) {
   }
 }
 
+const isWindows = process.platform === 'win32'
+
 function ensurePackageDependencies(pkgRoot = PKG_ROOT) {
   const resolved = resolveInstalledNext(pkgRoot)
   if (resolved && fs.existsSync(resolved.nextCli)) return resolved
@@ -161,7 +163,7 @@ function ensurePackageDependencies(pkgRoot = PKG_ROOT) {
   const packageManager = detectPackageManager(pkgRoot, process.env)
   const install = getInstallCommand(packageManager)
   log(`Installing dependencies with ${packageManager}...`)
-  execFileSync(install.command, install.args, { cwd: pkgRoot, stdio: 'inherit' })
+  execFileSync(install.command, install.args, { cwd: pkgRoot, stdio: 'inherit', ...(isWindows && { shell: true }) })
 
   const installed = resolveInstalledNext(pkgRoot)
   if (installed && fs.existsSync(installed.nextCli)) return installed

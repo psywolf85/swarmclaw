@@ -2,11 +2,9 @@ import fs from 'fs'
 import http from 'http'
 import https from 'https'
 import type { StreamChatOptions } from './index'
+import { IMAGE_EXTS, TEXT_EXTS, MAX_HISTORY_MESSAGES, writeSSE } from './provider-defaults'
 import { resolveOllamaRuntimeConfig } from '@/lib/server/ollama-runtime'
 import { resolveImagePath } from '@/lib/server/resolve-image'
-
-const IMAGE_EXTS = /\.(png|jpg|jpeg|gif|webp|bmp)$/i
-const TEXT_EXTS = /\.(txt|md|csv|json|xml|html|js|ts|tsx|jsx|py|go|rs|java|c|cpp|h|yml|yaml|toml|env|log|sh|sql|css|scss)$/i
 
 export function streamOllamaChat({ session, message, imagePath, apiKey, write, active, loadHistory, onUsage, signal }: StreamChatOptions): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -20,7 +18,7 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
     const model = runtime.model || 'llama3'
     const endpoint = runtime.endpoint
     if (runtime.useCloud && !runtime.apiKey) {
-      write(`data: ${JSON.stringify({ t: 'err', text: 'Ollama Cloud model requires an API key. Set OLLAMA_API_KEY or attach an Ollama credential.' })}\n\n`)
+      writeSSE(write, 'err', 'Ollama Cloud model requires an API key. Set OLLAMA_API_KEY or attach an Ollama credential.')
       active.delete(session.id)
       resolve('')
       return
@@ -72,7 +70,7 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
         apiRes.on('end', () => {
           const msg = `Ollama error ${apiRes.statusCode}: ${errBody.slice(0, 200)}`
           console.error(`[${session.id}] ${msg}`)
-          write(`data: ${JSON.stringify({ t: 'err', text: msg.slice(0, 120) })}\n\n`)
+          writeSSE(write, 'err', msg.slice(0, 120))
           active.delete(session.id)
           reject(new Error(msg))
         })
@@ -93,9 +91,8 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
             const content = parsed.message?.content
             if (content) {
               fullResponse += content
-              write(`data: ${JSON.stringify({ t: 'd', text: content })}\n\n`)
+              writeSSE(write, 'd', content)
             }
-            // Final chunk (done: true) carries token counts
             if (parsed.done && onUsage) {
               const input = parsed.prompt_eval_count || 0
               const output = parsed.eval_count || 0
@@ -122,7 +119,7 @@ export function streamOllamaChat({ session, message, imagePath, apiKey, write, a
       if (e.code === 'ECONNREFUSED') {
         errMsg = `Cannot connect to Ollama at ${endpoint}. Is Ollama running?`
       }
-      write(`data: ${JSON.stringify({ t: 'err', text: errMsg })}\n\n`)
+      writeSSE(write, 'err', errMsg)
       active.delete(session.id)
       reject(new Error(errMsg))
     })
@@ -151,7 +148,7 @@ function buildMessages(session: Record<string, unknown>, message: string, imageP
   const msgs: Array<{ role: string; content: string; images?: string[] }> = []
 
   if (loadHistory) {
-    const history = loadHistory(session.id as string).slice(-40)
+    const history = loadHistory(session.id as string).slice(-MAX_HISTORY_MESSAGES)
     for (const m of history) {
       const histImagePath = resolveImagePath(m.imagePath as string | undefined, m.imageUrl as string | undefined)
       if (m.role === 'user' && histImagePath) {

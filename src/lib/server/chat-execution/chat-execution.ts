@@ -17,7 +17,8 @@ import { getProvider } from '@/lib/providers'
 import { estimateCost, checkAgentBudgetLimits } from '@/lib/server/cost'
 import { log } from '@/lib/server/logger'
 import { logExecution } from '@/lib/server/execution-log'
-import { buildToolAvailabilityLines, buildToolDisciplineLines, streamAgentChat } from '@/lib/server/chat-execution/stream-agent-chat'
+import { streamAgentChat } from '@/lib/server/chat-execution/stream-agent-chat'
+import { buildToolSection, joinPromptSegments } from '@/lib/server/chat-execution/prompt-builder'
 import { pruneIncompleteToolEvents } from '@/lib/server/chat-execution/chat-streaming-utils'
 import { runLinkUnderstanding } from '@/lib/server/link-understanding'
 import type { Session } from '@/types'
@@ -310,10 +311,7 @@ function extractEventJson(line: string): SSEEvent | null {
 }
 
 function joinSystemPromptBlocks(...blocks: Array<string | null | undefined>): string | undefined {
-  const joined = blocks
-    .map((block) => (typeof block === 'string' ? block.trim() : ''))
-    .filter(Boolean)
-    .join('\n\n')
+  const joined = joinPromptSegments(...blocks)
   return joined || undefined
 }
 
@@ -674,10 +672,8 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   } else {
     parts.push(buildEnabledToolsAutonomyGuidance().join('\n'))
   }
-  const toolAvailabilityLines = buildToolAvailabilityLines(enabledExtensions)
-  if (toolAvailabilityLines.length > 0) parts.push(['## Tool Availability', ...toolAvailabilityLines].join('\n'))
-  const toolDisciplineLines = buildToolDisciplineLines(enabledExtensions)
-  if (toolDisciplineLines.length > 0) parts.push(['## Tool Discipline', ...toolDisciplineLines].join('\n'))
+  const toolSectionLines = buildToolSection(enabledExtensions)
+  if (toolSectionLines.length > 0) parts.push(['## Tool Discipline', ...toolSectionLines].join('\n'))
   const operatingGuidance = collectCapabilityOperatingGuidance(enabledExtensions)
   if (operatingGuidance.length > 0) parts.push(['## Tool Guidance', ...operatingGuidance].join('\n'))
   const capabilityLines = collectCapabilityDescriptions(enabledExtensions)
@@ -1496,6 +1492,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         source,
         internal,
         error: failureText,
+        stack: err instanceof Error ? err.stack?.split('\n').slice(0, 6).join('\n') : undefined,
       })
     } finally {
       clearInterval(partialSaveTimer)

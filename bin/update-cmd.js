@@ -16,6 +16,8 @@ const {
   resolvePackageRoot,
 } = require('./install-root.js')
 
+const isWindows = process.platform === 'win32'
+
 const PKG_ROOT = resolvePackageRoot({
   moduleDir: __dirname,
   argv1: process.argv[1],
@@ -83,6 +85,7 @@ function runRegistrySelfUpdate(
       cwd: PKG_ROOT,
       stdio: 'inherit',
       timeout: 120_000,
+      ...(isWindows && { shell: true }),
     })
     logger.log(`Global update complete via ${packageManager}.`)
   } catch (err) {
@@ -170,7 +173,7 @@ If running from a registry install, update the global package with its owning pa
       const packageManager = detectPackageManager(PKG_ROOT, process.env)
       const install = getInstallCommand(packageManager, true)
       log(`Package files changed — running ${packageManager} install...`)
-      execFileSync(install.command, install.args, { cwd: PKG_ROOT, stdio: 'inherit', timeout: 120_000 })
+      execFileSync(install.command, install.args, { cwd: PKG_ROOT, stdio: 'inherit', timeout: 120_000, ...(isWindows && { shell: true }) })
     }
   } catch {
     // If diff fails, skip install check.

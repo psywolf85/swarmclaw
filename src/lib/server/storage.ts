@@ -7,12 +7,9 @@ import Database from 'better-sqlite3'
 
 import { perf } from '@/lib/server/runtime/perf'
 import { DATA_DIR, IS_BUILD_BOOTSTRAP, WORKSPACE_DIR } from './data-dir'
-import { safeJsonParseObject } from './json-utils'
 import { normalizeHeartbeatSettingFields } from '@/lib/runtime/heartbeat-defaults'
 import { normalizeRuntimeSettingFields } from '@/lib/runtime/runtime-loop'
-import { normalizeAgentSandboxConfig } from '@/lib/agent-sandbox-defaults'
 import { normalizeCapabilitySelection } from '@/lib/capability-selection'
-import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
 import type {
   Agent,
   AppNotification,
@@ -39,140 +36,43 @@ import type {
   SupervisorIncident,
   UsageRecord,
 } from '@/types'
-import { dedup, hmrSingleton } from '@/lib/shared-utils'
+import { dedup } from '@/lib/shared-utils'
+
+// --- Extracted modules ---
+import {
+  TTLCache,
+  LRUMap,
+  collectionCache,
+  factoryTtlCaches,
+  capacityFor,
+  getSettingsCache,
+  getAgentsCache,
+} from './storage-cache'
+import { normalizeStoredRecord } from './storage-normalization'
+import {
+  tryAcquireRuntimeLock as _tryAcquireRuntimeLock,
+  renewRuntimeLock as _renewRuntimeLock,
+  readRuntimeLock as _readRuntimeLock,
+  isRuntimeLockActive as _isRuntimeLockActive,
+  releaseRuntimeLock as _releaseRuntimeLock,
+} from './storage-locks'
+
+// Re-export cache classes/utilities for any external consumers
+export { TTLCache, LRUMap } from './storage-cache'
+
+// Re-export auth (side-effects run on import)
+export {
+  getAccessKey,
+  validateAccessKey,
+  isFirstTimeSetup,
+  markSetupComplete,
+  replaceAccessKey,
+} from './storage-auth'
+
+// Force auth side-effects to run (env loading, key generation)
+import './storage-auth'
+
 export const UPLOAD_DIR = path.join(DATA_DIR, 'uploads')
-
-// --- TTL Cache (read-through with write-through invalidation) ---
-
-interface TTLEntry<T> {
-  value: T
-  expiresAt: number
-}
-
-/**
- * Simple TTL cache for hot-path reads that rarely change.
- * Stored on globalThis so HMR doesn't reset it.
- */
-class TTLCache<T> {
-  private entry: TTLEntry<T> | null = null
-  constructor(private readonly ttlMs: number) {}
-
-  get(): T | undefined {
-    if (!this.entry) return undefined
-    if (Date.now() > this.entry.expiresAt) {
-      this.entry = null
-      return undefined
-    }
-    return this.entry.value
-  }
-
-  set(value: T): void {
-    this.entry = { value, expiresAt: Date.now() + this.ttlMs }
-  }
-
-  invalidate(): void {
-    this.entry = null
-  }
-}
-
-type TTLCacheStore = {
-  settings?: TTLCache<AppSettings>
-  agents?: TTLCache<Record<string, unknown>>
-}
-const ttlCaches: TTLCacheStore = hmrSingleton<TTLCacheStore>('__swarmclaw_ttl_caches__', () => ({}))
-
-function getSettingsCache() { return ttlCaches.settings ?? (ttlCaches.settings = new TTLCache(60_000)) }
-function getAgentsCache() { return ttlCaches.agents ?? (ttlCaches.agents = new TTLCache(15_000)) }
-
-// --- LRU Cache ---
-
-const DEFAULT_LRU_CAPACITY = 5000
-
-/** Per-collection capacity overrides from COLLECTION_CACHE_LIMITS env var (JSON). */
-function parseCacheLimits(): Record<string, number> {
-  const raw = process.env.COLLECTION_CACHE_LIMITS
-  if (!raw) return {}
-  const parsed = safeJsonParseObject(raw)
-  if (!parsed) return {}
-  const result: Record<string, number> = {}
-  for (const [k, v] of Object.entries(parsed)) {
-    if (typeof v === 'number' && v > 0) result[k] = v
-  }
-  return result
-}
-
-const cacheLimits = parseCacheLimits()
-
-function capacityFor(collection: string): number {
-  return cacheLimits[collection] ?? DEFAULT_LRU_CAPACITY
-}
-
-/**
- * A Map wrapper with LRU eviction. JS Maps iterate in insertion order,
- * so the *first* key is the least-recently-used entry.
- */
-class LRUMap<K, V> {
-  private readonly map = new Map<K, V>()
-  readonly capacity: number
-
-  constructor(capacity: number) {
-    this.capacity = Math.max(1, capacity)
-  }
-
-  get(key: K): V | undefined {
-    if (!this.map.has(key)) return undefined
-    const value = this.map.get(key)!
-    // Move to end (most-recently-used)
-    this.map.delete(key)
-    this.map.set(key, value)
-    return value
-  }
-
-  set(key: K, value: V): this {
-    if (this.map.has(key)) {
-      this.map.delete(key)
-    }
-    this.map.set(key, value)
-    // Evict oldest if over capacity
-    if (this.map.size > this.capacity) {
-      const oldest = this.map.keys().next().value as K
-      this.map.delete(oldest)
-    }
-    return this
-  }
-
-  has(key: K): boolean {
-    return this.map.has(key)
-  }
-
-  delete(key: K): boolean {
-    return this.map.delete(key)
-  }
-
-  get size(): number {
-    return this.map.size
-  }
-
-  clear(): void {
-    this.map.clear()
-  }
-
-  keys(): MapIterator<K> {
-    return this.map.keys()
-  }
-
-  values(): MapIterator<V> {
-    return this.map.values()
-  }
-
-  entries(): MapIterator<[K, V]> {
-    return this.map.entries()
-  }
-
-  [Symbol.iterator](): MapIterator<[K, V]> {
-    return this.map[Symbol.iterator]()
-  }
-}
 
 // Ensure directories exist
 for (const dir of [DATA_DIR, UPLOAD_DIR, WORKSPACE_DIR]) {
@@ -196,8 +96,6 @@ type ActiveProcess = ChildProcess | {
   source?: string
   kill: (signal?: NodeJS.Signals | number) => boolean | void
 }
-const collectionCache: Map<string, LRUMap<string, string>> =
-  hmrSingleton('__swarmclaw_storage_collection_cache__', () => new Map<string, LRUMap<string, string>>())
 
 // Collection tables (id → JSON blob)
 const COLLECTIONS = [
@@ -273,6 +171,11 @@ db.exec(`CREATE TABLE IF NOT EXISTS runtime_locks (
   updated_at INTEGER NOT NULL
 )`)
 
+// --- Internal normalize helper that binds the loadItem dependency ---
+function normalize(table: string, value: unknown): unknown {
+  return normalizeStoredRecord(table, value, loadCollectionItem)
+}
+
 function readCollectionRaw(table: string): LRUMap<string, string> {
   const rows = db.prepare(`SELECT id, data FROM ${table}`).all() as { id: string; data: string }[]
   const raw = new LRUMap<string, string>(capacityFor(table))
@@ -300,7 +203,7 @@ function loadCollectionWithNormalizationState(table: string): {
   let normalizedCount = 0
   for (const [id, data] of raw.entries()) {
     try {
-      const normalized = normalizeStoredRecord(table, JSON.parse(data))
+      const normalized = normalize(table, JSON.parse(data))
       if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) continue
       result[id] = normalized as StoredObject
       if (JSON.stringify(normalized) !== data) normalizedCount += 1
@@ -310,437 +213,6 @@ function loadCollectionWithNormalizationState(table: string): {
   }
   endPerf({ count: raw.size, normalizedCount })
   return { result, normalizedCount }
-}
-
-function normalizeStoredRecord(table: string, value: unknown): unknown {
-  if (table === 'agents') {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-
-    const agent = value as StoredObject
-    const normalizedCapabilities = normalizeCapabilitySelection({
-      tools: Array.isArray(agent.tools) ? agent.tools as string[] : undefined,
-      extensions: Array.isArray(agent.extensions) ? agent.extensions as string[] : undefined,
-    })
-    agent.tools = normalizedCapabilities.tools
-    agent.extensions = normalizedCapabilities.extensions
-    if ('plugins' in agent) delete agent.plugins
-    const legacyAssignScope = agent.platformAssignScope === 'all' || agent.platformAssignScope === 'self'
-      ? agent.platformAssignScope
-      : null
-    const legacyTargetIds = Array.isArray(agent.subAgentIds)
-      ? agent.subAgentIds.filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
-      : []
-    if (typeof agent.delegationEnabled !== 'boolean') {
-      agent.delegationEnabled = legacyAssignScope === 'all'
-    }
-    if (agent.delegationTargetMode !== 'all' && agent.delegationTargetMode !== 'selected') {
-      agent.delegationTargetMode = legacyTargetIds.length > 0 ? 'selected' : 'all'
-    }
-    if (!Array.isArray(agent.delegationTargetAgentIds)) {
-      agent.delegationTargetAgentIds = legacyTargetIds
-    }
-    delete agent.platformAssignScope
-    delete agent.subAgentIds
-    delete agent.isOrchestrator
-    agent.sandboxConfig = normalizeAgentSandboxConfig(agent.sandboxConfig)
-    return agent
-  }
-
-  if (table === 'tasks') {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-    const task = value as StoredObject
-    if ('missionSummary' in task) delete task.missionSummary
-    return task
-  }
-
-  if (table === 'missions') {
-    return normalizeStoredMissionRecord(value)
-  }
-
-  if (table === 'mission_events') {
-    return normalizeStoredMissionEventRecord(value)
-  }
-
-  if (table === 'delegation_jobs') {
-    return normalizeStoredDelegationJobRecord(value)
-  }
-
-  if (table === 'schedules') {
-    return normalizeStoredScheduleRecord(value)
-  }
-
-  if (table !== 'sessions') return value
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-
-  const session = value as StoredObject
-  if (session.sessionType !== 'human') session.sessionType = 'human'
-  const isLegacyShortcut = (
-    (typeof session.id === 'string' && session.id.startsWith('agent-thread-'))
-    || (typeof session.name === 'string' && session.name.startsWith('agent-thread:'))
-  )
-  if (
-    isLegacyShortcut
-    && typeof session.agentId === 'string'
-    && session.agentId.trim()
-    && (!session.shortcutForAgentId || session.shortcutForAgentId !== session.agentId)
-  ) {
-    session.shortcutForAgentId = session.agentId
-  }
-  const normalizedCapabilities = normalizeCapabilitySelection({
-    tools: Array.isArray(session.tools) ? session.tools as string[] : undefined,
-    extensions: Array.isArray(session.extensions) ? session.extensions as string[] : undefined,
-  })
-  session.tools = normalizedCapabilities.tools
-  session.extensions = normalizedCapabilities.extensions
-  if ('plugins' in session) delete session.plugins
-  if ('mainLoopState' in session) delete session.mainLoopState
-  if ('missionSummary' in session) delete session.missionSummary
-  return session
-}
-
-const VALID_SCHEDULE_STATUSES = new Set(['active', 'paused', 'completed', 'failed', 'archived'])
-
-function normalizeStoredScheduleType(primary: unknown, legacy: unknown): 'cron' | 'interval' | 'once' {
-  const explicit = primary === 'cron' || primary === 'interval' || primary === 'once'
-    ? primary
-    : null
-  const legacyValue = legacy === 'cron' || legacy === 'interval' || legacy === 'once'
-    ? legacy
-    : null
-  if (!explicit && legacyValue) return legacyValue
-  if (explicit === 'interval' && legacyValue && legacyValue !== 'interval') return legacyValue
-  return explicit || legacyValue || 'interval'
-}
-
-function normalizeStoredScheduleTimestamp(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const intValue = Math.trunc(value)
-    return intValue > 0 ? intValue : null
-  }
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed) return null
-  if (/^\d+$/.test(trimmed)) {
-    const parsed = Number.parseInt(trimmed, 10)
-    return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-  }
-  const parsedTime = Date.parse(trimmed)
-  if (!Number.isFinite(parsedTime) || parsedTime <= 0) return null
-  return Math.trunc(parsedTime)
-}
-
-function normalizeStoredSchedulePositiveInt(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    const intValue = Math.trunc(value)
-    return intValue > 0 ? intValue : null
-  }
-  if (typeof value !== 'string') return null
-  const trimmed = value.trim()
-  if (!trimmed || !/^\d+$/.test(trimmed)) return null
-  const parsed = Number.parseInt(trimmed, 10)
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : null
-}
-
-function normalizeStoredConnectorChannelId(platform: unknown, raw: unknown): string | null {
-  if (typeof raw !== 'string') return null
-  const trimmed = raw.trim()
-  if (!trimmed) return null
-  if (platform !== 'whatsapp') return trimmed
-  const withoutPrefix = trimmed.replace(/^whatsapp:/i, '').trim()
-  if (!withoutPrefix) return null
-  if (/^[\d]+(-[\d]+)*@g\.us$/i.test(withoutPrefix)) return withoutPrefix
-  const userMatch = withoutPrefix.match(/^(\d+)(?::\d+)?@s\.whatsapp\.net$/i)
-  if (userMatch) return `${userMatch[1]}@s.whatsapp.net`
-  const lidMatch = withoutPrefix.match(/^(\d+)(?::\d+)?@lid$/i)
-  if (lidMatch) return withoutPrefix
-  if (withoutPrefix.includes('@')) return withoutPrefix
-  const digits = withoutPrefix.replace(/[^\d+]/g, '')
-  const cleaned = digits.startsWith('+') ? digits.slice(1) : digits
-  return cleaned ? `${cleaned}@s.whatsapp.net` : null
-}
-
-function resolveStoredOwnerFollowupTarget(schedule: StoredObject): {
-  connectorId: string
-  channelId: string
-  senderId: string | null
-  senderName: string | null
-} | null {
-  const createdInSessionId = typeof schedule.createdInSessionId === 'string' ? schedule.createdInSessionId.trim() : ''
-  const agentId = typeof schedule.agentId === 'string' ? schedule.agentId.trim() : ''
-  if (!createdInSessionId || !agentId) return null
-
-  const sourceSession = loadCollectionItem('sessions', createdInSessionId) as StoredObject | null
-  if (!sourceSession || isDirectConnectorSession(sourceSession)) return null
-
-  const agent = loadCollectionItem('agents', agentId) as StoredObject | null
-  const threadSessionId = typeof agent?.threadSessionId === 'string' ? agent.threadSessionId.trim() : ''
-  if (threadSessionId && createdInSessionId !== threadSessionId) return null
-
-  const sessionConnectorContext = sourceSession.connectorContext && typeof sourceSession.connectorContext === 'object'
-    ? sourceSession.connectorContext as StoredObject
-    : null
-  const contextIsOwnerConversation = sessionConnectorContext?.isOwnerConversation === true
-  const contextConnectorId = typeof sessionConnectorContext?.connectorId === 'string' ? sessionConnectorContext.connectorId.trim() : ''
-  const contextChannelId = normalizeStoredConnectorChannelId(sessionConnectorContext?.platform, sessionConnectorContext?.channelId)
-  if (contextIsOwnerConversation && contextConnectorId && contextChannelId) {
-    const contextSenderId = typeof sessionConnectorContext?.senderId === 'string' ? sessionConnectorContext.senderId.trim() : ''
-    const contextSenderName = typeof sessionConnectorContext?.senderName === 'string' ? sessionConnectorContext.senderName.trim() : ''
-    return {
-      connectorId: contextConnectorId,
-      channelId: contextChannelId,
-      senderId: contextSenderId || null,
-      senderName: contextSenderName || null,
-    }
-  }
-
-  const connectorId = typeof schedule.followupConnectorId === 'string' ? schedule.followupConnectorId.trim() : ''
-  if (!connectorId) return null
-  const connector = loadCollectionItem('connectors', connectorId) as StoredObject | null
-  if (!connector) return null
-  const connectorAgentId = typeof connector.agentId === 'string' ? connector.agentId.trim() : ''
-  if (connectorAgentId && connectorAgentId !== agentId) return null
-
-  const connectorConfig = connector.config && typeof connector.config === 'object'
-    ? connector.config as Record<string, unknown>
-    : {}
-  const ownerSenderId = typeof connectorConfig.ownerSenderId === 'string' ? connectorConfig.ownerSenderId.trim() : ''
-  const ownerChannelId = normalizeStoredConnectorChannelId(
-    connector.platform,
-    ownerSenderId || connectorConfig.outboundJid || connectorConfig.outboundTarget,
-  )
-  if (!ownerChannelId) return null
-
-  return {
-    connectorId,
-    channelId: ownerChannelId,
-    senderId: ownerSenderId || null,
-    senderName: null,
-  }
-}
-
-function normalizeStoredScheduleRecord(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-
-  const schedule = value as StoredObject
-  schedule.scheduleType = normalizeStoredScheduleType(schedule.scheduleType, schedule.type)
-  if ('type' in schedule) delete schedule.type
-
-  const status = typeof schedule.status === 'string' ? schedule.status.trim().toLowerCase() : ''
-  schedule.status = VALID_SCHEDULE_STATUSES.has(status) ? status : 'active'
-
-  const intervalMs = normalizeStoredSchedulePositiveInt(schedule.intervalMs)
-  if (intervalMs != null) schedule.intervalMs = intervalMs
-  else delete schedule.intervalMs
-
-  const staggerSec = normalizeStoredSchedulePositiveInt(schedule.staggerSec)
-  if (staggerSec != null) schedule.staggerSec = staggerSec
-  else delete schedule.staggerSec
-
-  const runAt = normalizeStoredScheduleTimestamp(schedule.runAt)
-  if (runAt != null) schedule.runAt = runAt
-  else delete schedule.runAt
-
-  const lastRunAt = normalizeStoredScheduleTimestamp(schedule.lastRunAt)
-  if (lastRunAt != null) schedule.lastRunAt = lastRunAt
-  else delete schedule.lastRunAt
-
-  const nextRunAt = normalizeStoredScheduleTimestamp(schedule.nextRunAt)
-  if (nextRunAt != null) schedule.nextRunAt = nextRunAt
-  else delete schedule.nextRunAt
-
-  const archivedAt = normalizeStoredScheduleTimestamp(schedule.archivedAt)
-  if (archivedAt != null) schedule.archivedAt = archivedAt
-  else delete schedule.archivedAt
-
-  const archivedFromStatus = typeof schedule.archivedFromStatus === 'string'
-    ? schedule.archivedFromStatus.trim().toLowerCase()
-    : ''
-  if (archivedFromStatus === 'active' || archivedFromStatus === 'paused' || archivedFromStatus === 'completed' || archivedFromStatus === 'failed') {
-    schedule.archivedFromStatus = archivedFromStatus
-  } else {
-    delete schedule.archivedFromStatus
-  }
-
-  if (schedule.status === 'archived') {
-    delete schedule.nextRunAt
-  } else if (schedule.scheduleType === 'once') {
-    if (typeof schedule.runAt === 'number') {
-      if (schedule.status === 'completed' || schedule.status === 'failed') {
-        delete schedule.nextRunAt
-      } else if (typeof schedule.nextRunAt !== 'number' || schedule.nextRunAt !== schedule.runAt) {
-        schedule.nextRunAt = schedule.runAt
-      }
-    }
-  } else if (schedule.scheduleType === 'cron') {
-    if (!schedule.cron) delete schedule.nextRunAt
-  }
-
-  const ownerTarget = resolveStoredOwnerFollowupTarget(schedule)
-  if (ownerTarget) {
-    schedule.followupConnectorId = ownerTarget.connectorId
-    schedule.followupChannelId = ownerTarget.channelId
-    if (ownerTarget.senderId) schedule.followupSenderId = ownerTarget.senderId
-    else delete schedule.followupSenderId
-    if (ownerTarget.senderName) schedule.followupSenderName = ownerTarget.senderName
-    else delete schedule.followupSenderName
-    delete schedule.followupThreadId
-  }
-
-  return schedule
-}
-
-function normalizeStoredStringArray(value: unknown, maxItems = 128): string[] {
-  if (!Array.isArray(value)) return []
-  const seen = new Set<string>()
-  const out: string[] = []
-  for (const entry of value) {
-    if (typeof entry !== 'string') continue
-    const trimmed = entry.trim()
-    if (!trimmed || seen.has(trimmed)) continue
-    seen.add(trimmed)
-    out.push(trimmed)
-    if (out.length >= maxItems) break
-  }
-  return out
-}
-
-function normalizeStoredMissionRecord(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const mission = value as StoredObject
-
-  const validStatuses = new Set(['active', 'waiting', 'completed', 'failed', 'cancelled'])
-  const validPhases = new Set(['intake', 'planning', 'dispatching', 'executing', 'verifying', 'waiting', 'completed', 'failed'])
-  const validWaitKinds = new Set(['human_reply', 'approval', 'external_dependency', 'provider', 'blocked_task', 'blocked_mission', 'scheduled', 'other'])
-  const validPlannerDecisions = new Set(['dispatch_task', 'dispatch_session_turn', 'spawn_child_mission', 'wait', 'verify_now', 'complete_candidate', 'replan', 'fail_terminal', 'cancel'])
-  const validVerificationVerdicts = new Set(['continue', 'waiting', 'completed', 'failed', 'replan'])
-
-  const status = typeof mission.status === 'string' ? mission.status.trim().toLowerCase() : ''
-  mission.status = validStatuses.has(status) ? status : 'active'
-
-  const phase = typeof mission.phase === 'string' ? mission.phase.trim().toLowerCase() : ''
-  mission.phase = validPhases.has(phase) ? phase : 'planning'
-
-  const sourceRef = mission.sourceRef && typeof mission.sourceRef === 'object' && !Array.isArray(mission.sourceRef)
-    ? mission.sourceRef as StoredObject
-    : null
-  if (sourceRef && typeof sourceRef.kind === 'string') {
-    mission.sourceRef = sourceRef
-  } else if (typeof mission.sessionId === 'string' && mission.sessionId.trim()) {
-    mission.sourceRef = { kind: 'chat', sessionId: mission.sessionId.trim() }
-  } else {
-    mission.sourceRef = { kind: 'manual' }
-  }
-
-  const childMissionIds = normalizeStoredStringArray(mission.childMissionIds, 256)
-  if (childMissionIds.length > 0) mission.childMissionIds = childMissionIds
-  else delete mission.childMissionIds
-
-  const dependencyMissionIds = normalizeStoredStringArray(mission.dependencyMissionIds, 256)
-  if (dependencyMissionIds.length > 0) mission.dependencyMissionIds = dependencyMissionIds
-  else delete mission.dependencyMissionIds
-
-  const dependencyTaskIds = normalizeStoredStringArray(mission.dependencyTaskIds, 256)
-  if (dependencyTaskIds.length > 0) mission.dependencyTaskIds = dependencyTaskIds
-  else delete mission.dependencyTaskIds
-
-  const taskIds = normalizeStoredStringArray(mission.taskIds, 256)
-  if (taskIds.length > 0) mission.taskIds = taskIds
-  else delete mission.taskIds
-
-  const parentMissionId = typeof mission.parentMissionId === 'string' && mission.parentMissionId.trim()
-    ? mission.parentMissionId.trim()
-    : ''
-  if (parentMissionId) mission.parentMissionId = parentMissionId
-  else delete mission.parentMissionId
-
-  const rootMissionId = typeof mission.rootMissionId === 'string' && mission.rootMissionId.trim()
-    ? mission.rootMissionId.trim()
-    : ''
-  mission.rootMissionId = rootMissionId || (typeof mission.id === 'string' ? mission.id : null)
-
-  const waitState = mission.waitState && typeof mission.waitState === 'object' && !Array.isArray(mission.waitState)
-    ? mission.waitState as StoredObject
-    : null
-  if (waitState) {
-    const waitKind = typeof waitState.kind === 'string' ? waitState.kind.trim().toLowerCase() : ''
-    waitState.kind = validWaitKinds.has(waitKind) ? waitKind : 'other'
-    if (typeof waitState.reason !== 'string' || !waitState.reason.trim()) waitState.reason = 'Mission is waiting.'
-    const dependencyTaskId = typeof waitState.dependencyTaskId === 'string' && waitState.dependencyTaskId.trim()
-      ? waitState.dependencyTaskId.trim()
-      : ''
-    if (dependencyTaskId) waitState.dependencyTaskId = dependencyTaskId
-    else delete waitState.dependencyTaskId
-    const dependencyMissionId = typeof waitState.dependencyMissionId === 'string' && waitState.dependencyMissionId.trim()
-      ? waitState.dependencyMissionId.trim()
-      : ''
-    if (dependencyMissionId) waitState.dependencyMissionId = dependencyMissionId
-    else delete waitState.dependencyMissionId
-    const providerKey = typeof waitState.providerKey === 'string' && waitState.providerKey.trim()
-      ? waitState.providerKey.trim()
-      : ''
-    if (providerKey) waitState.providerKey = providerKey
-    else delete waitState.providerKey
-    mission.waitState = waitState
-  } else {
-    delete mission.waitState
-  }
-
-  const controllerState = mission.controllerState && typeof mission.controllerState === 'object' && !Array.isArray(mission.controllerState)
-    ? mission.controllerState as StoredObject
-    : null
-  if (controllerState) mission.controllerState = controllerState
-  else delete mission.controllerState
-
-  const plannerState = mission.plannerState && typeof mission.plannerState === 'object' && !Array.isArray(mission.plannerState)
-    ? mission.plannerState as StoredObject
-    : null
-  if (plannerState) {
-    const decision = typeof plannerState.lastDecision === 'string' ? plannerState.lastDecision.trim() : ''
-    if (!validPlannerDecisions.has(decision)) delete plannerState.lastDecision
-    mission.plannerState = plannerState
-  } else {
-    delete mission.plannerState
-  }
-
-  const verificationState = mission.verificationState && typeof mission.verificationState === 'object' && !Array.isArray(mission.verificationState)
-    ? mission.verificationState as StoredObject
-    : { candidate: false }
-  verificationState.candidate = verificationState.candidate === true
-  const requiredTaskIds = normalizeStoredStringArray(verificationState.requiredTaskIds, 128)
-  if (requiredTaskIds.length > 0) verificationState.requiredTaskIds = requiredTaskIds
-  else delete verificationState.requiredTaskIds
-  const requiredChildMissionIds = normalizeStoredStringArray(verificationState.requiredChildMissionIds, 128)
-  if (requiredChildMissionIds.length > 0) verificationState.requiredChildMissionIds = requiredChildMissionIds
-  else delete verificationState.requiredChildMissionIds
-  const requiredArtifacts = normalizeStoredStringArray(verificationState.requiredArtifacts, 128)
-  if (requiredArtifacts.length > 0) verificationState.requiredArtifacts = requiredArtifacts
-  else delete verificationState.requiredArtifacts
-  const lastVerdict = typeof verificationState.lastVerdict === 'string' ? verificationState.lastVerdict.trim().toLowerCase() : ''
-  if (validVerificationVerdicts.has(lastVerdict)) verificationState.lastVerdict = lastVerdict
-  else delete verificationState.lastVerdict
-  mission.verificationState = verificationState
-
-  return mission
-}
-
-function normalizeStoredMissionEventRecord(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const event = value as StoredObject
-  if (!event.data || typeof event.data !== 'object' || Array.isArray(event.data)) event.data = null
-  if (typeof event.source !== 'string' || !event.source.trim()) event.source = 'system'
-  return event
-}
-
-function normalizeStoredDelegationJobRecord(value: unknown): unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-  const job = value as StoredObject
-  const missionId = typeof job.missionId === 'string' && job.missionId.trim() ? job.missionId.trim() : ''
-  if (missionId) job.missionId = missionId
-  else delete job.missionId
-  const parentMissionId = typeof job.parentMissionId === 'string' && job.parentMissionId.trim() ? job.parentMissionId.trim() : ''
-  if (parentMissionId) job.parentMissionId = parentMissionId
-  else delete job.parentMissionId
-  return job
 }
 
 function loadCollection(table: string): Record<string, StoredObject> {
@@ -757,7 +229,7 @@ function saveCollection(table: string, data: Record<string, unknown>) {
   const toDelete: string[] = []
 
   for (const [id, val] of Object.entries(data)) {
-    const normalized = normalizeStoredRecord(table, val)
+    const normalized = normalize(table, val)
     const serialized = JSON.stringify(normalized)
     if (typeof serialized !== 'string') continue
     next.set(id, serialized)
@@ -822,7 +294,7 @@ function deleteCollectionItem(table: string, id: string) {
  * concurrent processes are modifying different items.
  */
 function upsertCollectionItem(table: string, id: string, value: unknown) {
-  const serialized = JSON.stringify(normalizeStoredRecord(table, value))
+  const serialized = JSON.stringify(normalize(table, value))
   db.prepare(`INSERT OR REPLACE INTO ${table} (id, data) VALUES (?, ?)`).run(id, serialized)
   // Update the in-memory cache
   const cached = collectionCache.get(table)
@@ -836,7 +308,7 @@ function loadCollectionItem(table: string, id: string): unknown | null {
   const row = db.prepare(`SELECT data FROM ${table} WHERE id = ?`).get(id) as { data: string } | undefined
   if (!row) return null
   try {
-    return normalizeStoredRecord(table, JSON.parse(row.data))
+    return normalize(table, JSON.parse(row.data))
   } catch {
     return null
   }
@@ -845,7 +317,7 @@ function loadCollectionItem(table: string, id: string): unknown | null {
 function upsertCollectionItems(table: string, entries: Array<[string, unknown]>): void {
   if (!entries.length) return
   const prepared = entries
-    .map(([id, value]) => [id, JSON.stringify(normalizeStoredRecord(table, value))] as const)
+    .map(([id, value]) => [id, JSON.stringify(normalize(table, value))] as const)
     .filter(([, serialized]) => typeof serialized === 'string')
   if (!prepared.length) return
 
@@ -917,8 +389,6 @@ interface CollectionStore<T = any> {
   deleteItem(id: string): void
 }
 
-const factoryTtlCaches = hmrSingleton('__swarmclaw_factory_ttl__', () => new Map<string, TTLCache<Record<string, unknown>>>())
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- see CollectionStore
 function createCollectionStore<T = any>(
   table: StorageCollection,
@@ -982,11 +452,6 @@ function saveSingleton(table: string, data: unknown) {
   db.prepare(`INSERT OR REPLACE INTO ${table} (id, data) VALUES (1, ?)`).run(JSON.stringify(data))
 }
 
-function normalizeLockTtlMs(ttlMs: number): number {
-  if (!Number.isFinite(ttlMs)) return 1_000
-  return Math.max(1_000, Math.trunc(ttlMs))
-}
-
 export function patchQueue<T>(updater: (queue: string[]) => T): T {
   let result!: T
   const transaction = db.transaction(() => {
@@ -999,56 +464,26 @@ export function patchQueue<T>(updater: (queue: string[]) => T): T {
   return result
 }
 
+// --- Runtime Locks (delegated to storage-locks, bound to db) ---
+
 export function tryAcquireRuntimeLock(name: string, owner: string, ttlMs: number): boolean {
-  let acquired = false
-  const now = Date.now()
-  const expiresAt = now + normalizeLockTtlMs(ttlMs)
-  const transaction = db.transaction(() => {
-    const row = db.prepare('SELECT owner, expires_at FROM runtime_locks WHERE name = ?').get(name) as
-      | { owner: string; expires_at: number }
-      | undefined
-    if (!row || row.owner === owner || row.expires_at <= now) {
-      db.prepare(`
-        INSERT OR REPLACE INTO runtime_locks (name, owner, expires_at, updated_at)
-        VALUES (?, ?, ?, ?)
-      `).run(name, owner, expiresAt, now)
-      acquired = true
-    }
-  })
-  transaction()
-  return acquired
+  return _tryAcquireRuntimeLock(db, name, owner, ttlMs)
 }
 
 export function renewRuntimeLock(name: string, owner: string, ttlMs: number): boolean {
-  const now = Date.now()
-  const expiresAt = now + normalizeLockTtlMs(ttlMs)
-  const result = db.prepare(`
-    UPDATE runtime_locks
-    SET expires_at = ?, updated_at = ?
-    WHERE name = ? AND owner = ?
-  `).run(expiresAt, now, name, owner)
-  return result.changes > 0
+  return _renewRuntimeLock(db, name, owner, ttlMs)
 }
 
 export function readRuntimeLock(name: string): { owner: string; expiresAt: number; updatedAt: number } | null {
-  const row = db.prepare('SELECT owner, expires_at, updated_at FROM runtime_locks WHERE name = ?').get(name) as
-    | { owner: string; expires_at: number; updated_at: number }
-    | undefined
-  if (!row) return null
-  return {
-    owner: row.owner,
-    expiresAt: row.expires_at,
-    updatedAt: row.updated_at,
-  }
+  return _readRuntimeLock(db, name)
 }
 
 export function isRuntimeLockActive(name: string): boolean {
-  const row = readRuntimeLock(name)
-  return Boolean(row && row.expiresAt > Date.now())
+  return _isRuntimeLockActive(db, name)
 }
 
 export function releaseRuntimeLock(name: string, owner: string): void {
-  db.prepare('DELETE FROM runtime_locks WHERE name = ? AND owner = ?').run(name, owner)
+  _releaseRuntimeLock(db, name, owner)
 }
 
 // --- JSON Migration ---
@@ -1236,7 +671,7 @@ Be concise but not curt. Warmth doesn't require verbosity. When someone asks "ho
           existing.updatedAt = Date.now()
         }
         const beforeNormalize = JSON.stringify(existing)
-        const normalized = normalizeStoredRecord('agents', structuredClone(existing)) as Record<string, unknown>
+        const normalized = normalize('agents', structuredClone(existing)) as Record<string, unknown>
         if (beforeNormalize !== JSON.stringify(normalized)) {
           Object.assign(existing, normalized)
           existing.updatedAt = Date.now()
@@ -1253,72 +688,6 @@ Be concise but not curt. Warmth doesn't require verbosity. When someone asks "ho
       }
     }
   }
-}
-
-// --- .env loading ---
-function loadEnv() {
-  const envPath = path.join(process.cwd(), '.env.local')
-  if (fs.existsSync(envPath)) {
-    fs.readFileSync(envPath, 'utf8').split('\n').forEach(line => {
-      const [k, ...v] = line.split('=')
-      if (k && v.length) process.env[k.trim()] = v.join('=').trim()
-    })
-  }
-}
-if (!IS_BUILD_BOOTSTRAP) {
-  loadEnv()
-}
-
-// Auto-generate CREDENTIAL_SECRET if missing
-if (!IS_BUILD_BOOTSTRAP && !process.env.CREDENTIAL_SECRET) {
-  const secret = crypto.randomBytes(32).toString('hex')
-  const envPath = path.join(process.cwd(), '.env.local')
-  fs.appendFileSync(envPath, `\nCREDENTIAL_SECRET=${secret}\n`)
-  process.env.CREDENTIAL_SECRET = secret
-  console.log('[credentials] Generated CREDENTIAL_SECRET in .env.local')
-}
-
-// Auto-generate ACCESS_KEY if missing (used for simple auth)
-const SETUP_FLAG = path.join(DATA_DIR, '.setup_pending')
-if (!IS_BUILD_BOOTSTRAP && !process.env.ACCESS_KEY) {
-  const key = crypto.randomBytes(16).toString('hex')
-  const envPath = path.join(process.cwd(), '.env.local')
-  fs.appendFileSync(envPath, `\nACCESS_KEY=${key}\n`)
-  process.env.ACCESS_KEY = key
-  fs.writeFileSync(SETUP_FLAG, key)
-  console.log(`\n${'='.repeat(50)}`)
-  console.log(`  ACCESS KEY: ${key}`)
-  console.log(`  Use this key to connect from the browser.`)
-  console.log(`${'='.repeat(50)}\n`)
-}
-
-export function getAccessKey(): string {
-  return process.env.ACCESS_KEY || ''
-}
-
-export function validateAccessKey(key: string): boolean {
-  return key === process.env.ACCESS_KEY
-}
-
-export function isFirstTimeSetup(): boolean {
-  return fs.existsSync(SETUP_FLAG)
-}
-
-export function markSetupComplete(): void {
-  if (fs.existsSync(SETUP_FLAG)) fs.unlinkSync(SETUP_FLAG)
-}
-
-/** Replace the access key in memory and in .env.local (first-time setup override). */
-export function replaceAccessKey(newKey: string): void {
-  const envPath = path.join(process.cwd(), '.env.local')
-  if (fs.existsSync(envPath)) {
-    const contents = fs.readFileSync(envPath, 'utf-8')
-    const updated = contents.replace(/^ACCESS_KEY=.*$/m, `ACCESS_KEY=${newKey}`)
-    fs.writeFileSync(envPath, updated)
-  } else {
-    fs.appendFileSync(envPath, `\nACCESS_KEY=${newKey}\n`)
-  }
-  process.env.ACCESS_KEY = newKey
 }
 
 // --- Sessions ---
@@ -1371,7 +740,7 @@ export function saveSessions(s: Record<string, Session | StoredObject>) {
   // Explicit deletion goes through deleteSession(id).
   const entries: Array<[string, unknown]> = Object.entries(s).map(([id, session]) => [
     id,
-    normalizeStoredRecord('sessions', structuredClone(session as unknown as StoredObject)),
+    normalize('sessions', structuredClone(session as unknown as StoredObject)),
   ])
   if (entries.length > 0) upsertCollectionItems('sessions', entries)
 }
@@ -1467,7 +836,7 @@ function migrateAgents(agents: Record<string, Record<string, unknown>>): boolean
   for (const [id, agent] of Object.entries(agents)) {
     if (!agent || typeof agent !== 'object') continue
     const before = JSON.stringify(agent)
-    const normalized = normalizeStoredRecord('agents', agent) as Record<string, unknown>
+    const normalized = normalize('agents', agent) as Record<string, unknown>
     agents[id] = normalized
     if (JSON.stringify(normalized) !== before) changed = true
   }
@@ -1512,7 +881,7 @@ export function saveAgents(p: Record<string, Agent | StoredObject>) {
   // without includeTrashed and then save back.
   const entries: Array<[string, unknown]> = Object.entries(p).map(([id, agent]) => [
     id,
-    normalizeStoredRecord('agents', structuredClone(agent)),
+    normalize('agents', structuredClone(agent)),
   ])
   if (entries.length > 0) upsertCollectionItems('agents', entries)
   getAgentsCache().invalidate()
@@ -1522,7 +891,7 @@ export function loadAgent(id: string, opts?: { includeTrashed?: boolean }): Stor
   const agent = loadCollectionItem('agents', id) as StoredAgentRecord | null
   if (!agent) return null
   const before = JSON.stringify(agent)
-  const normalized = normalizeStoredRecord('agents', agent) as StoredAgentRecord
+  const normalized = normalize('agents', agent) as StoredAgentRecord
   if (JSON.stringify(normalized) !== before) upsertCollectionItem('agents', id, normalized)
   if (!opts?.includeTrashed && normalized.trashedAt) return null
   return normalized

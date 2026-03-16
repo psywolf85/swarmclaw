@@ -11,6 +11,7 @@ import path from 'node:path'
 import type { MessageToolEvent } from '@/types'
 import { extractSuggestions } from '@/lib/server/suggestions'
 import { isSuccessfulMemoryMutationToolEvent } from '@/lib/server/chat-execution/memory-mutation-tools'
+import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 
 // ---------------------------------------------------------------------------
 // Types
@@ -238,8 +239,10 @@ export function shouldForceExternalExecutionFollowthrough(params: {
   finalResponse: string
   hasToolCalls: boolean
   toolEvents: MessageToolEvent[]
+  classification?: MessageClassification | null
 }): boolean {
-  if (!looksLikeBoundedExternalExecutionTask(params.userMessage)) return false
+  const isTransactional = params.classification ? params.classification.walletIntent === 'transactional' : looksLikeBoundedExternalExecutionTask(params.userMessage)
+  if (!isTransactional) return false
   if (!params.hasToolCalls || params.toolEvents.length < 4) return false
   if (hasStateChangingWalletEvidence(params.toolEvents)) return false
   const distinctHosts = countDistinctExternalResearchHosts(params.toolEvents)
@@ -257,8 +260,10 @@ export function shouldForceExternalExecutionKickoffFollowthrough(params: {
   finalResponse: string
   hasToolCalls: boolean
   toolEvents: MessageToolEvent[]
+  classification?: MessageClassification | null
 }): boolean {
-  if (!looksLikeBoundedExternalExecutionTask(params.userMessage)) return false
+  const isTransactional = params.classification ? params.classification.walletIntent === 'transactional' : looksLikeBoundedExternalExecutionTask(params.userMessage)
+  if (!isTransactional) return false
   if (params.hasToolCalls || params.toolEvents.length > 0) return false
 
   const trimmed = params.finalResponse.trim()
@@ -281,9 +286,11 @@ export function shouldForceDeliverableFollowthrough(params: {
   toolEvents: MessageToolEvent[]
   cwd?: string
   history?: Array<{ role?: string; text?: string }>
+  classification?: MessageClassification | null
 }): boolean {
   const recentDeliverableContext = hasRecentDeliverableContext(params.history, params.userMessage)
-  const deliverableIntent = looksLikeOpenEndedDeliverableTask(params.userMessage) || recentDeliverableContext
+  const isDeliverable = params.classification ? params.classification.isDeliverableTask : looksLikeOpenEndedDeliverableTask(params.userMessage)
+  const deliverableIntent = isDeliverable || recentDeliverableContext
   const requestedArtifacts = getRequestedArtifactStatus({
     userMessage: params.userMessage,
     cwd: params.cwd,

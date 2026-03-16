@@ -5,13 +5,10 @@ import { MemorySaver } from '@langchain/langgraph'
 import { DEFAULT_HEARTBEAT_INTERVAL_SEC } from '@/lib/runtime/heartbeat-defaults'
 import { buildSessionTools } from '@/lib/server/session-tools'
 import { buildChatModel } from '@/lib/server/build-llm'
-import { loadSettings, loadAgents, loadSkills, appendUsage } from '@/lib/server/storage'
-import { estimateCost, buildExtensionDefinitionCosts } from '@/lib/server/cost'
+import { loadSettings, loadAgents, loadSkills } from '@/lib/server/storage'
 import { getExtensionManager } from '@/lib/server/extensions'
 import {
   collectCapabilityAgentContext,
-  collectCapabilityDescriptions,
-  collectCapabilityOperatingGuidance,
   listNativeCapabilities,
   runCapabilityBeforePromptBuild,
   runCapabilityHook,
@@ -21,9 +18,8 @@ import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/serve
 
 import { logExecution } from '@/lib/server/execution-log'
 import { buildCurrentDateTimePromptContext } from '@/lib/server/prompt-runtime-context'
-import { canonicalizeExtensionId, expandExtensionIds, extensionIdMatches } from '@/lib/server/tool-aliases'
-import type { Session, Message, UsageRecord, ExtensionInvocationRecord, MessageToolEvent, ExtensionPromptBuildResult } from '@/types'
-import { extractSuggestions } from '@/lib/server/suggestions'
+import { expandExtensionIds } from '@/lib/server/tool-aliases'
+import type { Session, Message } from '@/types'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
@@ -31,64 +27,63 @@ import { resolveActiveProjectContext } from '@/lib/server/project-context'
 import { resolveImagePath } from '@/lib/server/resolve-image'
 import { routeTaskIntent } from '@/lib/server/capability-router'
 import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
-import {
-  getEnabledToolPlanningView,
-  getFirstToolForCapability,
-  getToolsForCapability,
-  TOOL_CAPABILITY,
-} from '@/lib/server/tool-planning'
 import { resolveSessionToolPolicy } from '@/lib/server/tool-capability-policy'
 import { ToolLoopTracker } from '@/lib/server/tool-loop-detection'
-import { truncateToolResultText, calculateMaxToolResultChars } from '@/lib/server/chat-execution/tool-result-guard'
-import type { LoopDetectionResult } from '@/lib/server/tool-loop-detection'
 import { isCurrentThreadRecallRequest } from '@/lib/server/memory/memory-policy'
 import {
   buildSessionMemoryScopeFilter,
   resolveEffectiveSessionMemoryScopeMode,
 } from '@/lib/server/memory/session-memory-scope'
 import {
-  isBroadGoal,
-  looksLikeExternalWalletTask,
-  looksLikeBoundedExternalExecutionTask,
-  looksLikeOpenEndedDeliverableTask,
-  shouldForceRecoverableToolErrorFollowthrough,
-  shouldForceWorkspaceScopeShellFallback,
-  shouldForceExternalExecutionKickoffFollowthrough,
-  shouldForceExternalExecutionFollowthrough,
-  shouldForceDeliverableFollowthrough,
-  hasStateChangingWalletEvidence,
-  countExternalExecutionResearchSteps,
-  countDistinctExternalResearchHosts,
-  hasIncompleteDelegationWait,
-  renderToolEvidence,
-  resolveFinalStreamResponseText,
   resolveContinuationAssistantText,
   buildContinuationPrompt,
 } from '@/lib/server/chat-execution/stream-continuation'
 import type { ContinuationType } from '@/lib/server/chat-execution/stream-continuation'
-import { dedup, errorMessage, sleep } from '@/lib/shared-utils'
+import { errorMessage, sleep } from '@/lib/shared-utils'
 import { perf } from '@/lib/server/runtime/perf'
 import {
-  compactThreadRecallText,
   getExplicitRequiredToolNames,
-  getWalletApprovalBoundaryAction,
-  isWalletSimulationResult,
   pruneIncompleteToolEvents,
-  resolveSuccessfulTerminalToolBoundary,
-  shouldForceExternalServiceSummary,
-  updateStreamedToolEvents,
+  resolveExclusiveMemoryWriteTerminalAllowance,
+  shouldSkipToolSummaryForShortResponse,
 } from '@/lib/server/chat-execution/chat-streaming-utils'
 import { resolveRequestedToolPreflightResponse } from '@/lib/server/chat-execution/chat-turn-tool-routing'
-import {
-  hasOnlySuccessfulMemoryMutationToolEvents,
-  resolveToolAction,
-  shouldTerminateOnSuccessfulMemoryMutation,
-} from '@/lib/server/chat-execution/memory-mutation-tools'
-import {
-  classifyDirectMemoryIntent,
-  type DirectMemoryIntentClassifierInput,
-} from '@/lib/server/chat-execution/direct-memory-intent'
 import { LangGraphToolEventTracker } from '@/lib/server/chat-execution/tool-event-tracker'
+import { canonicalizeExtensionId } from '@/lib/server/tool-aliases'
+
+// Extracted modules
+import { ChatTurnState } from '@/lib/server/chat-execution/chat-turn-state'
+import { ContinuationLimits } from '@/lib/server/chat-execution/continuation-limits'
+import {
+  buildAgenticExecutionPolicy,
+  buildToolAvailabilityLines,
+  buildToolDisciplineLines,
+  buildToolSection,
+  buildExternalWalletExecutionBlock,
+  buildForcedExternalServiceSummary,
+  shouldForceAttachmentFollowthrough,
+  joinPromptSegments,
+  applyBeforePromptBuildResult,
+} from '@/lib/server/chat-execution/prompt-builder'
+import type { PromptMode } from '@/lib/server/chat-execution/prompt-mode'
+import { resolvePromptMode } from '@/lib/server/chat-execution/prompt-mode'
+import {
+  applyPromptBudget,
+  isOverWarningThreshold,
+  DEFAULT_PROMPT_BUDGET,
+  MINIMAL_PROMPT_BUDGET,
+} from '@/lib/server/chat-execution/prompt-budget'
+import { IterationTimers } from '@/lib/server/chat-execution/iteration-timers'
+import { processIterationEvents } from '@/lib/server/chat-execution/iteration-event-handler'
+import { evaluateContinuation } from '@/lib/server/chat-execution/continuation-evaluator'
+import { finalizeStreamResult } from '@/lib/server/chat-execution/post-stream-finalization'
+import {
+  classifyMessage,
+  isDeliverableTask as classifiedIsDeliverableTask,
+  hasTransactionalWalletIntent as classifiedHasTransactionalWalletIntent,
+  isResearchSynthesis as classifiedIsResearchSynthesis,
+  type MessageClassification,
+} from '@/lib/server/chat-execution/message-classifier'
 
 // LangGraph's streamEvents leaves dangling internal promises when the for-await
 // loop exits early (break on tool loop detection, execution boundary, etc.).
@@ -112,85 +107,43 @@ process.on('unhandledRejection', (err: unknown) => {
 // Re-export continuation functions so existing consumers don't need to change imports
 export {
   getExplicitRequiredToolNames,
-  isWalletSimulationResult,
-  looksLikeOpenEndedDeliverableTask,
   pruneIncompleteToolEvents,
+  resolveExclusiveMemoryWriteTerminalAllowance,
+  shouldSkipToolSummaryForShortResponse,
+  buildToolAvailabilityLines,
+  buildToolDisciplineLines,
+  buildToolSection,
+  buildExternalWalletExecutionBlock,
+  shouldForceAttachmentFollowthrough,
+  buildForcedExternalServiceSummary,
+}
+
+// Re-exports from stream-continuation and chat-streaming-utils
+export {
+  looksLikeOpenEndedDeliverableTask,
   shouldForceExternalExecutionKickoffFollowthrough,
   shouldForceRecoverableToolErrorFollowthrough,
   shouldForceExternalExecutionFollowthrough,
   shouldForceDeliverableFollowthrough,
-  shouldForceExternalServiceSummary,
-  resolveSuccessfulTerminalToolBoundary,
-  shouldTerminateOnSuccessfulMemoryMutation,
   resolveFinalStreamResponseText,
   resolveContinuationAssistantText,
-}
+} from '@/lib/server/chat-execution/stream-continuation'
 
-export async function resolveExclusiveMemoryWriteTerminalAllowance(params: {
-  sessionId: string
-  agentId?: string | null
-  message: string
-  classifyMemoryIntent?: (input: DirectMemoryIntentClassifierInput) => Promise<Awaited<ReturnType<typeof classifyDirectMemoryIntent>>>
-}): Promise<boolean> {
-  try {
-    const classifier = params.classifyMemoryIntent || classifyDirectMemoryIntent
-    const directMemoryIntent = await classifier({
-      sessionId: params.sessionId,
-      agentId: params.agentId || null,
-      message: params.message,
-      currentResponse: '',
-      currentError: null,
-      toolEvents: [],
-    })
-    return (directMemoryIntent?.action === 'store' || directMemoryIntent?.action === 'update')
-      && directMemoryIntent.exclusiveCompletion === true
-  } catch {
-    return false
-  }
-}
+export {
+  isWalletSimulationResult,
+  resolveSuccessfulTerminalToolBoundary,
+  shouldForceExternalServiceSummary,
+} from '@/lib/server/chat-execution/chat-streaming-utils'
 
-const TOOL_SUMMARY_SHORT_RESPONSE_EXEMPT_TOOLS = new Set([
-  'use_skill',
-])
+export {
+  shouldTerminateOnSuccessfulMemoryMutation,
+} from '@/lib/server/chat-execution/memory-mutation-tools'
 
-export function shouldSkipToolSummaryForShortResponse(params: {
-  fullText: string
-  toolEvents: MessageToolEvent[]
-  isConnectorSession?: boolean
-}): boolean {
-  if (params.isConnectorSession) return false
-  if (!params.fullText.trim()) return false
-  if (!Array.isArray(params.toolEvents) || params.toolEvents.length === 0) return false
-  const toolNames = Array.from(new Set(
-    params.toolEvents
-      .map((event) => canonicalizeExtensionId(event.name) || event.name)
-      .filter((name): name is string => typeof name === 'string' && name.trim().length > 0),
-  ))
-  if (toolNames.length === 0) return false
-  // Skill runtime tools load guidance into context rather than producing external
-  // evidence that needs a forced synthesis pass. A short exact answer after those
-  // calls can already be the correct completion.
-  return toolNames.every((toolName) => TOOL_SUMMARY_SHORT_RESPONSE_EXEMPT_TOOLS.has(toolName))
-}
+export {
+  classifyMessage,
+  type MessageClassification,
+} from '@/lib/server/chat-execution/message-classifier'
 
-/** Extract a breadcrumb title from notable tool completions (task/schedule/agent creation). */
-interface StreamAgentChatOpts {
-  session: Session
-  message: string
-  imagePath?: string
-  imageUrl?: string
-  attachedFiles?: string[]
-  apiKey: string | null
-  systemPrompt?: string
-  extraSystemContext?: string[]
-  write: (data: string) => void
-  history: Message[]
-  fallbackCredentialIds?: string[]
-  signal?: AbortSignal
-}
-
-// LangGraph uses this internal configurable key to bypass subgraph lookup when
-// resolving state from a namespaced checkpoint. It is not exported publicly in
 const CONTEXT_WARNING_OVERHEAD_TOKENS = 192
 
 /** Extract HTTP status code and Retry-After from provider error objects (OpenAI SDK, etc.) */
@@ -209,389 +162,21 @@ function extractProviderErrorInfo(err: unknown): { statusCode: number; retryAfte
   return { statusCode, retryAfterMs }
 }
 
-function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { delegationEnabled?: boolean }): string[] {
-  const lines = collectCapabilityDescriptions(enabledExtensions)
-
-  // Context tools are available to any session with extensions
-  if (enabledExtensions.length > 0) {
-    lines.push('- I can monitor my own context usage (`context_status`) and compact my conversation history (`context_summarize`) when I\'m running low on space.')
-    if (opts?.delegationEnabled) {
-      lines.push('- I can delegate tasks to other agents (`delegate_to_agent`) based on their strengths and availability.')
-    }
-  }
-  return lines
-}
-
-function buildExactToolNameList(enabledExtensions: string[]): string[] {
-  const planning = getEnabledToolPlanningView(enabledExtensions)
-  const extensionToolNames = getExtensionManager()
-    .getTools(enabledExtensions)
-    .map(({ tool }) => tool.name)
-  const combined = [
-    ...planning.displayToolIds,
-    ...planning.entries.map((entry) => entry.toolName),
-    ...extensionToolNames,
-  ]
-  return dedup(combined.filter((toolName) => typeof toolName === 'string' && toolName.trim()))
-    .map((toolName) => toolName.trim())
-    .sort()
-}
-
-export function buildToolAvailabilityLines(enabledExtensions: string[]): string[] {
-  const toolNames = buildExactToolNameList(enabledExtensions)
-  if (toolNames.length === 0) return []
-
-  return [
-    'Tool names are case-sensitive. Call tools exactly as listed.',
-    ...toolNames.map((toolName) => `- \`${toolName}\``),
-  ]
-}
-
-export function buildToolDisciplineLines(enabledExtensions: string[]): string[] {
-  const planning = getEnabledToolPlanningView(enabledExtensions)
-  const uniqueTools = buildExactToolNameList(enabledExtensions)
-  if (uniqueTools.length === 0) return []
-  const walletTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.walletInspect)
-  const httpTools = getToolsForCapability(enabledExtensions, 'network.http')
-
-  const lines = [
-    `Enabled tools in this session: ${uniqueTools.map((toolId) => `\`${toolId}\``).join(', ')}.`,
-    'Only call tools from this enabled list or tools explicitly returned by the runtime.',
-    'Treat enabled tools as available now. Do not ask the user for permission before routine use of an enabled tool.',
-    'If the request clearly maps to an enabled tool, try that tool before telling the user to do it themselves.',
-    'Only talk about approvals when a tool result explicitly returns an approval boundary for a concrete state-changing action.',
-  ]
-
-  const directPlatformTools = uniqueTools.filter((toolId) => toolId.startsWith('manage_') && toolId !== 'manage_platform')
-  if (directPlatformTools.length > 0 && !uniqueTools.includes('manage_platform')) {
-    lines.push(`Use direct platform tools exactly as named (${directPlatformTools.map((toolId) => `\`${toolId}\``).join(', ')}). Do not substitute \`manage_platform\` unless it is explicitly enabled.`)
-  }
-
-  lines.push(...planning.disciplineGuidance)
-
-  const researchSearchTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.researchSearch)
-  const researchFetchTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.researchFetch)
-  const browserCaptureTools = getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserCapture)
-
-  if ((researchSearchTools.length || researchFetchTools.length) && browserCaptureTools.length) {
-    const researchLabel = [...researchSearchTools, ...researchFetchTools].map((toolName) => `\`${toolName}\``).join('/')
-    lines.push(`Use ${researchLabel} for text/sources and \`${browserCaptureTools[0]}\` for screenshots. For research+screenshot tasks, gather sources first, then capture.`)
-  }
-
-  if (researchSearchTools.length) {
-    lines.push(`For current events or live developments, use \`${researchSearchTools[0]}\` before answering from memory.`)
-  }
-
-  const alternateResearchTools = Array.from(new Set([
-    ...(researchSearchTools.length || researchFetchTools.length ? [...researchSearchTools, ...researchFetchTools] : []),
-    ...httpTools,
-    ...(uniqueTools.includes('shell') ? ['shell'] : []),
-    ...(uniqueTools.includes('browser') ? ['browser'] : []),
-  ]))
-  if (alternateResearchTools.length >= 2) {
-    lines.push(`If one research path is blocked, try another (${alternateResearchTools.map((toolName) => `\`${toolName}\``).join(', ')}) before giving up.`)
-  }
-
-  if (walletTools.length && (uniqueTools.includes('browser') || httpTools.length > 0)) {
-    lines.push(`For wallet/trading tasks, inspect the wallet first with \`${walletTools[0]}\`. Use a bounded loop: verify, attempt one reversible step, then execute or state the blocker.`)
-  }
-
-  if (uniqueTools.includes('manage_secrets')) {
-    lines.push('Store secrets (passwords, API keys, tokens) with `manage_secrets` — never echo raw values in assistant text.')
-  }
-
-  return lines
-}
-
-const OPEN_ENDED_REVISION_BLOCK = [
-  '## Revision Loop',
-  'For open-ended deliverable work, do a real two-pass loop before declaring success: create the draft artifacts, critique them against the objective, then modify at least one artifact based on that critique.',
-  'A critique by itself does not count as iteration. Iteration requires an actual changed artifact.',
-  'When resuming in an existing workspace, inspect the current files first, then update them. Do not assume you lost access to the workspace without an explicit tool attempt.',
-  'If `files` is available, use it with explicit actions and paths to inspect and revise the artifacts.',
-].join('\n')
-
-function getEnabledDisplayTool(enabledExtensions: string[], canonicalExtensionId: string): string | null {
-  return getEnabledToolPlanningView(enabledExtensions).displayToolIds.find((toolId) => toolId === canonicalExtensionId) || null
-}
-
-export function shouldForceAttachmentFollowthrough(params: {
-  userMessage: string
-  enabledExtensions: string[]
-  hasToolCalls: boolean
-  hasAttachmentContext: boolean
-}): boolean {
-  if (!params.hasAttachmentContext) return false
-  if (params.hasToolCalls) return false
-  const decision = routeTaskIntent(params.userMessage, params.enabledExtensions, null)
-  if (decision.intent !== 'research' && decision.intent !== 'browsing') return false
-  return decision.preferredTools.some((toolName) => extensionIdMatches(params.enabledExtensions, toolName))
-}
-
-export function buildExternalWalletExecutionBlock(enabledExtensions: string[]): string {
-  const hasExecutionContext = Boolean(
-    getFirstToolForCapability(enabledExtensions, TOOL_CAPABILITY.walletInspect)
-    || getFirstToolForCapability(enabledExtensions, 'network.http')
-    || getEnabledDisplayTool(enabledExtensions, 'browser')
-    || getEnabledDisplayTool(enabledExtensions, 'manage_capabilities'),
-  )
-  if (!hasExecutionContext) return ''
-  const lines = [
-    '## External Service Execution',
-    'Define a stop condition before exploring: either complete one concrete reversible action, or identify the exact blocker with evidence.',
-    'A prose sentence saying approval is needed is not enough. When the next step is a wallet signature or transaction, trigger the actual wallet approval request through the tool.',
-    'After one or two discovery bursts, stop exploring and summarize the blocker if execution still depends on a missing capability such as injected wallet signing, external credentials, or unavailable approvals.',
-    'Do not mutate already confirmed identifiers unless newer tool evidence proves the earlier value was wrong.',
-    'Never claim success on a trading or dApp task unless you either completed the reversible step with tool evidence or clearly stated the final missing step.',
-  ]
-  return lines.join('\n')
-}
-
-async function buildForcedExternalServiceSummary(params: {
-  llm: { invoke: (messages: HumanMessage[]) => Promise<{ content: unknown }> }
-  userMessage: string
-  fullText: string
-  toolEvents: MessageToolEvent[]
-}): Promise<string | null> {
-  const prompt = [
-    'You are finishing an interrupted external-service tool run.',
-    'Do not call tools. Do not continue browsing.',
-    'Based only on the objective, partial assistant text, and tool evidence below, produce a concise final status with exactly these headings:',
-    'Last reversible step',
-    'Exact blocker',
-    'Safest next action',
-    '',
-    `Objective:\n${params.userMessage}`,
-    '',
-    `Partial assistant text:\n${params.fullText || '(none)'}`,
-    '',
-    `Tool evidence:\n${renderToolEvidence(params.toolEvents) || '(none)'}`,
-  ].join('\n')
-
-  try {
-    const response = await Promise.race([
-      params.llm.invoke([new HumanMessage(prompt)]),
-      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('forced-summary-timeout')), 10_000)),
-    ])
-    if (typeof response.content === 'string') return response.content.trim() || null
-    if (Array.isArray(response.content)) {
-      const text = response.content
-        .map((block: Record<string, unknown>) => (typeof block.text === 'string' ? block.text : ''))
-        .join('')
-        .trim()
-      return text || null
-    }
-    return null
-  } catch {
-    return null
-  }
-}
-
-
-function buildExactStructureBlock(userMessage: string): string {
-  const exactBulletMatch = userMessage.match(/\bexactly\s+(\d+)\s+bullet points?\b/i)
-  if (!exactBulletMatch) return ''
-  const bulletCount = exactBulletMatch[1]
-  return [
-    '## Exact Structural Constraints',
-    `The user required exactly ${bulletCount} bullet points.`,
-    'Treat that as a hard file-wide constraint unless the user explicitly says later sections get their own separate bullets.',
-    'If the file also needs titled sections such as Owners or Risks, use short prose under those headings instead of adding more bullet lines.',
-  ].join('\n')
-}
-
-const GOAL_DECOMPOSITION_BLOCK = [
-  '## Goal Decomposition',
-  'When you receive a broad, open-ended goal:',
-  '1. Break it into 3-7 concrete, sequentially-executable subtasks before taking action.',
-  '2. If manage_tasks is available, use it only for durable tracking: multi-turn work, delegation, explicit backlog requests, or work you expect to resume later. Do not create a task for every micro-step.',
-  'Single-step instructions are not broad goals. For direct actions like storing a memory, answering a recall question, editing one file, or sending one message, execute the relevant tool immediately instead of creating tasks or delegating.',
-  '3. Present the plan as a short checklist or numbered list in plain language. If durable tracking is unnecessary, keep it inline instead of creating tasks.',
-  '4. Execute the first substantive subtask immediately — do not stop after planning.',
-  '5. Update only the durable tasks you actually created; otherwise just continue executing and report progress plainly.',
-].join('\n')
-
-function buildAgenticExecutionPolicy(opts: {
-  enabledExtensions: string[]
-  loopMode: 'bounded' | 'ongoing'
-  heartbeatPrompt: string
-  heartbeatIntervalSec: number
-  allowSilentReplies?: boolean
-  isDirectConnectorSession?: boolean
-  delegationEnabled?: boolean
-  userMessage?: string
-  history?: Message[]
-  hasAttachmentContext?: boolean
-  responseStyle?: 'concise' | 'normal' | 'detailed' | null
-  responseMaxChars?: number | null
-}) {
-  const hasTooling = opts.enabledExtensions.length > 0
-  const extensionLines = buildExtensionCapabilityLines(opts.enabledExtensions, { delegationEnabled: opts.delegationEnabled })
-  const toolDisciplineLines = buildToolDisciplineLines(opts.enabledExtensions)
-  const hasMemoryTools = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'memory')
-
-  const parts: string[] = []
-
-  // Core execution philosophy
-  parts.push(
-    '## How I Work',
-    hasTooling
-      ? 'I take initiative — plan briefly, execute tools, evaluate, iterate until done. Never stop at advice when action is implied.'
-      : 'No tools enabled. Be explicit about what tool access is needed.',
-    'IMPORTANT: If information was already mentioned in THIS conversation, answer from context — do NOT call memory tools or web search to look it up again. Only use memory tools to recall info from PREVIOUS conversations not in the current thread.',
-    'If a skill applies to the task, follow its recommended approach first. Skill-specific commands are faster and more reliable than generic web search. Minimize tool calls — combine steps where possible.',
-    'If a task explicitly names an enabled tool, use that tool before declaring success. A prose request is not a substitute for `ask_human`, and browser work is not a substitute for `email` delivery.',
-    'When `ask_human` is enabled, collect required human input through the tool instead of asking for it only in plain assistant text.',
-    'Do not narrate routine tool calls. Just call the tool and report the outcome. Only narrate when the step is complex, sensitive, or the user needs to understand what is happening.',
-    'Do not repeat the same tool call with identical arguments. If a tool returns an error or empty result, try a different approach instead of retrying the same call.',
-    'A single browser or web timeout is not final. Retry once with a corrected target or use another enabled acquisition path before concluding.',
-    opts.loopMode === 'ongoing'
-      ? 'Loop: ONGOING — keep iterating until done, blocked, or limits reached.'
-      : 'Loop: BOUNDED — execute multiple steps but finish within recursion budget.',
-  )
-
-  if (hasMemoryTools) {
-    parts.push(
-      '## Immediate Memory Routes',
-      'If the user asks you to remember, store, or correct a durable fact, call `memory_store` or `memory_update` immediately before any planning, delegation, task creation, or agent management.',
-      'If the user asks about prior work, decisions, dates, people, preferences, or todos from earlier conversations, start with `memory_search`. Use `memory_get` only when you need one targeted follow-up read.',
-      'Do not use `manage_tasks`, `manage_agents`, or `delegate` as a substitute for a direct memory write or recall step.',
-    )
-    if (opts.isDirectConnectorSession) {
-      parts.push(
-        'For direct connector chats, when storing a standing sender preference such as preferred name or reply medium, include structured `metadata.connectorPreference` fields so runtime can reuse them without reparsing prose.',
-        'Use fields like `preferredDisplayName` and `preferredReplyMedium:"voice_note"` when they are relevant.',
-      )
-    }
-  }
-  if (hasTooling) {
-    parts.push(
-      '## Skill Runtime',
-      'When the skill runtime section lists a fitting reusable workflow, use `use_skill` to select it before falling back to generic exploration.',
-      'Prefer `use_skill` action `run` for executable skills and `use_skill` action `load` only when the skill is guidance-only.',
-    )
-  }
-  if (opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_skills')) {
-    parts.push(
-      '## Skill Resolution',
-      'When you are blocked on a missing capability, binary, or environment setup, call `manage_skills` before repeating generic exploration.',
-      'Use `manage_skills` action `recommend_for_task` or `status` to find a fitting local skill. If a fitting skill needs installation, request the explicit install approval through `manage_skills` and stop retrying the same blocker.',
-      'Do not silently install skills during autonomous runs. Installation is explicit and approval-gated.',
-    )
-  }
-  if (opts.hasAttachmentContext) {
-    parts.push(
-      '## Attachments',
-      'User attachments (images, files, PDFs) are visible in this thread. Inspect attachment content before claiming it is unavailable. Extract identifiers from attachments and use enabled tools to continue.',
-      'If an attachment is already present inline, inspect that attachment directly. Do not open /api/uploads, localhost, or file:// copies of the same attachment in the browser just to view it.',
-    )
-  }
-
-  // Tool-specific operating guidance (native capabilities first, then extensions)
-  const guidanceLines = collectCapabilityOperatingGuidance(opts.enabledExtensions)
-  if (guidanceLines.length) parts.push(...guidanceLines)
-
-  // Response behavior
-  parts.push(
-    '## Response Rules',
-    opts.allowSilentReplies
-      ? 'NO_MESSAGE: use this only when no reply is actually needed. Do not use it for greetings, direct questions, or when the user is clearly opening a conversation.'
-      : 'For direct user chats, always send a visible reply. Never answer with control tokens like NO_MESSAGE or HEARTBEAT_OK unless this is an explicit heartbeat poll.',
-    'Execute by default — only confirm on high-risk actions.',
-    'If a tool errors, retry or explain the blocker. Never claim success without evidence.',
-    'When assessing the platform, repo, runtime, or implementation status, inspect the relevant files, logs, or state first. Do not claim a feature is missing, empty, or implemented unless you actually observed evidence for that claim in this run.',
-    'If the user explicitly asks for one exact literal final response, token, phrase, or single line, treat that as a hard output contract. After the work succeeds, reply with exactly that literal and nothing else.',
-    'Keep responses concise. Bullet points over prose. After file operations, confirm the result briefly (path and status) without echoing the full file contents.',
-    'Do not end every reply with a question. Only ask when a specific missing detail blocks progress. When a task is done, state the result and stop.',
-    opts.responseStyle === 'concise'
-      ? `IMPORTANT: Be extremely concise.${opts.responseMaxChars ? ` Keep responses under ${opts.responseMaxChars} characters.` : ' Target under 500 characters.'} Lead with the answer, skip preamble.`
-      : opts.responseStyle === 'detailed'
-        ? 'Provide thorough, detailed explanations when helpful.'
-        : '',
-    `Heartbeat: if message is "${opts.heartbeatPrompt}", reply "HEARTBEAT_OK" unless you have a progress update.`,
-  )
-
-  if (toolDisciplineLines.length) parts.push('## Tool Discipline', ...toolDisciplineLines)
-  if (extensionLines.length) parts.push('What I can do:\n' + extensionLines.join('\n'))
-  if (opts.userMessage && isBroadGoal(opts.userMessage)) parts.push(GOAL_DECOMPOSITION_BLOCK)
-  if (opts.userMessage && looksLikeExternalWalletTask(opts.userMessage)) {
-    const externalExecutionBlock = buildExternalWalletExecutionBlock(opts.enabledExtensions)
-    if (externalExecutionBlock) parts.push(externalExecutionBlock)
-  }
-  if (opts.userMessage && looksLikeOpenEndedDeliverableTask(opts.userMessage) && opts.enabledExtensions.some((toolId) => toolId === 'files' || toolId === 'edit_file')) {
-    parts.push(OPEN_ENDED_REVISION_BLOCK)
-  }
-  if (opts.userMessage) {
-    const exactStructureBlock = buildExactStructureBlock(opts.userMessage)
-    if (exactStructureBlock) parts.push(exactStructureBlock)
-  }
-  if (opts.userMessage && isCurrentThreadRecallRequest(opts.userMessage)) {
-    parts.push(buildCurrentThreadRecallBlock(opts.history || []))
-  }
-
-  return parts.filter(Boolean).join('\n')
-}
-
-function buildCurrentThreadRecallBlock(history: Message[]): string {
-  const recentUserFacts = history
-    .filter((entry) => entry.role === 'user' && typeof entry.text === 'string' && entry.text.trim())
-    .slice(-3)
-  const relevant = history
-    .filter((entry) => (entry.role === 'user' || entry.role === 'assistant') && typeof entry.text === 'string' && entry.text.trim())
-    .slice(-6)
-  const lines = [
-    '## Current Thread Recall',
-    'The user is asking about information from this same conversation.',
-    'Treat the current chat history as the authoritative source for this request.',
-    'Do NOT call memory tools, web search, or session-history tools unless the user explicitly asks you to verify outside the current thread.',
-    'Answer directly from the existing conversation with the exact values already stated.',
-    'Prefer the user\'s own earlier words and facts over assistant summaries, persona defaults, soul/config values, or generic background context.',
-    'If the answer is present in the recent thread context below, do not say the information is missing, unknown, or from a first exchange.',
-  ]
-  if (recentUserFacts.length > 0) {
-    lines.push('Recent user-provided facts to trust first:')
-    for (const message of recentUserFacts) {
-      const snippet = compactThreadRecallText(message.text || '')
-      if (!snippet) continue
-      lines.push(`- user: ${snippet}`)
-    }
-    lines.push('These user messages override tool traces, failed tool attempts, persona defaults, and generic background context.')
-  }
-  if (relevant.length > 0) {
-    lines.push('Recent thread context:')
-    for (const message of relevant) {
-      const snippet = compactThreadRecallText(message.text || '')
-      if (!snippet) continue
-      lines.push(`- ${message.role}: ${snippet}`)
-    }
-  }
-  return lines.join('\n')
-}
-
-function joinPromptSegments(...segments: Array<string | null | undefined>): string {
-  return segments
-    .map((segment) => (typeof segment === 'string' ? segment.trim() : ''))
-    .filter(Boolean)
-    .join('\n\n')
-}
-
-function applyBeforePromptBuildResult(
-  basePrompt: string,
-  hookResult: ExtensionPromptBuildResult | null | undefined,
-): string {
-  if (!hookResult) return basePrompt
-
-  const baseSystemPrompt = typeof hookResult.systemPrompt === 'string' && hookResult.systemPrompt.trim()
-    ? hookResult.systemPrompt.trim()
-    : basePrompt
-
-  const systemPromptWithContext = joinPromptSegments(
-    hookResult.prependSystemContext,
-    baseSystemPrompt,
-    hookResult.appendSystemContext,
-  ) || baseSystemPrompt
-
-  return joinPromptSegments(hookResult.prependContext, systemPromptWithContext) || systemPromptWithContext
+/** Extract a breadcrumb title from notable tool completions (task/schedule/agent creation). */
+interface StreamAgentChatOpts {
+  session: Session
+  message: string
+  imagePath?: string
+  imageUrl?: string
+  attachedFiles?: string[]
+  apiKey: string | null
+  systemPrompt?: string
+  extraSystemContext?: string[]
+  write: (data: string) => void
+  history: Message[]
+  fallbackCredentialIds?: string[]
+  signal?: AbortSignal
+  promptMode?: PromptMode
 }
 
 export interface StreamAgentChatResult {
@@ -601,7 +186,7 @@ export interface StreamAgentChatResult {
    *  Use this for connector delivery so intermediate planning text isn't sent. */
   finalResponse: string
   /** Tool events emitted during the streamed run. */
-  toolEvents: MessageToolEvent[]
+  toolEvents: import('@/types').MessageToolEvent[]
 }
 
 type LangChainContentPart =
@@ -624,6 +209,8 @@ export async function streamAgentChat(opts: StreamAgentChatOpts): Promise<Stream
 async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAgentChatResult> {
   const startTs = Date.now()
   const { session, message, imagePath, imageUrl, attachedFiles, apiKey, systemPrompt, extraSystemContext, write, history, fallbackCredentialIds, signal } = opts
+  const promptMode: PromptMode = opts.promptMode ?? resolvePromptMode(session)
+  const isMinimalPrompt = promptMode === 'minimal'
   const isConnectorSession = isDirectConnectorSession(session)
   const rawExtensions = getEnabledCapabilityIds(session)
   const hasShellCapability = rawExtensions.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
@@ -687,6 +274,19 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     return Math.max(0, Math.min(3600, Math.trunc(parsed)))
   })()
 
+  // -------------------------------------------------------------------------
+  // Start message classification in the background (LLM-based, ~200-800ms)
+  // -------------------------------------------------------------------------
+  const classificationPromise = classifyMessage({
+    sessionId: session.id,
+    agentId: session.agentId,
+    message,
+    history,
+  }).catch(() => null as MessageClassification | null)
+
+  // -------------------------------------------------------------------------
+  // System prompt assembly (stays inline — many async calls + local state)
+  // -------------------------------------------------------------------------
   const promptParts: string[] = []
   const hasProvidedSystemPrompt = typeof systemPrompt === 'string' && systemPrompt.trim().length > 0
   const currentThreadRecallRequest = isCurrentThreadRecallRequest(message)
@@ -727,36 +327,47 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     agentResponseStyle = agent?.responseStyle || null
     agentResponseMaxChars = agent?.responseMaxChars || null
     if (!hasProvidedSystemPrompt) {
-      // Identity block — make sure the agent knows who it is
-      const identityLines = [`## My Identity`, `My name is ${agent?.name || 'Agent'}.`]
-      if (agent?.description) identityLines.push(agent.description)
-      identityLines.push('I should always refer to myself by this name. I am not "Assistant" — I have my own name and identity.')
-      promptParts.push(identityLines.join(' '))
-      const continuityBlock = buildIdentityContinuityContext(session, agent)
-      if (continuityBlock) promptParts.push(continuityBlock)
-      if (agent?.soul) promptParts.push(agent.soul)
+      if (isMinimalPrompt) {
+        // Minimal mode: name only, no description, no "not Assistant" pep talk
+        promptParts.push(`## My Identity\nMy name is ${agent?.name || 'Agent'}.`)
+      } else {
+        const identityLines = [`## My Identity`, `My name is ${agent?.name || 'Agent'}.`]
+        if (agent?.description) identityLines.push(agent.description)
+        identityLines.push('I should always refer to myself by this name. I am not "Assistant" — I have my own name and identity.')
+        promptParts.push(identityLines.join(' '))
+      }
+      // Identity continuity — full mode only
+      if (!isMinimalPrompt) {
+        const continuityBlock = buildIdentityContinuityContext(session, agent)
+        if (continuityBlock) promptParts.push(continuityBlock)
+      }
+      // Soul — truncated to 300 chars in minimal mode
+      if (agent?.soul) {
+        promptParts.push(isMinimalPrompt ? agent.soul.slice(0, 300) : agent.soul)
+      }
       if (agent?.systemPrompt) promptParts.push(agent.systemPrompt)
-      try {
-        const allSkills = loadSkills()
-        const runtimeSkills = resolveRuntimeSkills({
-          cwd: session.cwd,
-          enabledExtensions: sessionExtensions,
-          agentId: agent?.id || null,
-          sessionId: session.id,
-          userId: session.user,
-          agentSkillIds: agent?.skillIds || [],
-          storedSkills: allSkills,
-          selectedSkillId: session.skillRuntimeState?.selectedSkillId || null,
-        })
-        promptParts.push(...buildRuntimeSkillPromptBlocks(runtimeSkills))
-      } catch { /* non-critical */ }
+      // Skills — full mode only
+      if (!isMinimalPrompt) {
+        try {
+          const allSkills = loadSkills()
+          const runtimeSkills = resolveRuntimeSkills({
+            cwd: session.cwd,
+            enabledExtensions: sessionExtensions,
+            agentId: agent?.id || null,
+            sessionId: session.id,
+            userId: session.user,
+            agentSkillIds: agent?.skillIds || [],
+            storedSkills: allSkills,
+            selectedSkillId: session.skillRuntimeState?.selectedSkillId || null,
+          })
+          promptParts.push(...buildRuntimeSkillPromptBlocks(runtimeSkills))
+        } catch { /* non-critical */ }
+      }
     }
   }
 
-  // (conciseness and action-orientation are covered in the execution policy below)
-
-  // Thinking level guidance (applies to all providers via system prompt)
-  if (agentThinkingLevel) {
+  // Thinking level guidance — full mode only
+  if (!isMinimalPrompt && agentThinkingLevel) {
     const thinkingGuidance: Record<string, string> = {
       minimal: 'Be direct and concise. Skip extended analysis.',
       low: 'Keep reasoning brief. Focus on key conclusions.',
@@ -766,32 +377,29 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     promptParts.push(`## Reasoning Depth\n${thinkingGuidance[agentThinkingLevel]}`)
   }
 
-  // Inject workspace context files only for agents with heartbeat enabled
-  // (these files provide goals and autonomous operating context)
-  if (!hasProvidedSystemPrompt && agentHeartbeatEnabled) {
+  // Workspace context — full mode only
+  if (!isMinimalPrompt && !hasProvidedSystemPrompt && agentHeartbeatEnabled) {
     try {
       const { buildWorkspaceContext } = await import('@/lib/server/workspace-context')
       const wsCtx = buildWorkspaceContext({ cwd: session.cwd })
       if (wsCtx.block) promptParts.push(wsCtx.block)
-    } catch {
-      // Workspace context is non-critical
+    } catch { /* non-critical */ }
+  }
+
+  // Agent awareness — full mode only
+  if (!isMinimalPrompt) {
+    const hasDelegation = sessionExtensions.some(p => p === 'delegate' || p === 'spawn_subagent')
+    if (hasDelegation && session.agentId) {
+      try {
+        const { buildAgentAwarenessBlock } = await import('@/lib/server/agents/agent-registry')
+        const awarenessBlock = buildAgentAwarenessBlock(session.agentId)
+        if (awarenessBlock) promptParts.push(awarenessBlock)
+      } catch { /* non-critical */ }
     }
   }
 
-  // Inject agent awareness only if agent has delegation capabilities
-  const hasDelegation = sessionExtensions.some(p => p === 'delegate' || p === 'spawn_subagent')
-  if (hasDelegation && session.agentId) {
-    try {
-      const { buildAgentAwarenessBlock } = await import('@/lib/server/agents/agent-registry')
-      const awarenessBlock = buildAgentAwarenessBlock(session.agentId)
-      if (awarenessBlock) promptParts.push(awarenessBlock)
-    } catch {
-      // If agent registry fails, continue without blocking the run.
-    }
-  }
-
-  // Inject situational awareness block (active tasks, schedules, failures, mission)
-  if (session.agentId) {
+  // Situational awareness — full mode only
+  if (!isMinimalPrompt && session.agentId) {
     try {
       const { buildSituationalAwarenessBlock } = await import(
         '@/lib/server/chat-execution/situational-awareness'
@@ -802,11 +410,10 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         missionId: session.missionId || null,
       })
       if (saBlock) promptParts.push(saBlock)
-    } catch {
-      // Non-critical — continue without situational awareness
-    }
+    } catch { /* non-critical */ }
   }
 
+  // Extra system context — always included (caller-provided context is always relevant)
   if (Array.isArray(extraSystemContext)) {
     for (const block of extraSystemContext) {
       if (typeof block !== 'string') continue
@@ -816,7 +423,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     }
   }
 
-  // Collect dynamic context from enabled native capabilities and extensions.
+  // Capability agent context — always included (extensions need their context)
   try {
     const extensionContextParts = await collectCapabilityAgentContext(session, sessionExtensions, message, history)
     promptParts.push(...extensionContextParts)
@@ -824,7 +431,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     console.error('[stream-agent-chat] Capability context injection failed:', err instanceof Error ? err.message : String(err))
   }
 
-  if (!hasProvidedSystemPrompt && activeProjectContext.projectId) {
+  // Project context — full mode only
+  if (!isMinimalPrompt && !hasProvidedSystemPrompt && activeProjectContext.projectId) {
     const projectLines = ['## Current Project']
     if (activeProjectContext.project?.name) {
       projectLines.push(`Active project: ${activeProjectContext.project.name}.`)
@@ -861,16 +469,15 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     promptParts.push(projectLines.join('\n'))
   }
 
-  // Tell the LLM about available tools/extensions and their access status
-  {
+  // Tool & Extension Access audit — full mode only
+  if (!isMinimalPrompt) {
     const agentEnabledSet = new Set(sessionExtensions)
-    const { getExtensionManager } = await import('@/lib/server/extensions')
-    const allExtensions = [...listNativeCapabilities(), ...getExtensionManager().listExtensions()]
+    const { getExtensionManager: getEM } = await import('@/lib/server/extensions')
+    const allExtensions = [...listNativeCapabilities(), ...getEM().listExtensions()]
     const mcpDisabled = agentMcpDisabledTools ?? []
 
-    // Categorize native tools and extensions
-    const globallyDisabled: string[] = [] // Disabled site-wide by admin
-    const enabledButNoAccess: string[] = [] // Enabled globally but agent doesn't have access
+    const globallyDisabled: string[] = []
+    const enabledButNoAccess: string[] = []
     for (const p of allExtensions) {
       if (!p.enabled) {
         globallyDisabled.push(`${p.name} (${p.filename})`)
@@ -894,7 +501,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     }
   }
 
-  if (settings.suggestionsEnabled === true) {
+  // Follow-up suggestions — full mode only
+  if (!isMinimalPrompt && settings.suggestionsEnabled === true) {
     promptParts.push(
       [
         '## Follow-up Suggestions',
@@ -905,6 +513,9 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       ].join('\n'),
     )
   }
+
+  // Await classification before building the agentic execution policy
+  const classification = await classificationPromise
 
   promptParts.push(
     buildAgenticExecutionPolicy({
@@ -920,12 +531,13 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       hasAttachmentContext,
       responseStyle: agentResponseStyle,
       responseMaxChars: agentResponseMaxChars,
+      mode: promptMode,
+      classification,
     }),
   )
 
-  // Proactive memory recall: inject relevant memories into context before LLM invocation
-  // Skips heartbeat polls, very short messages, and thread-recall requests (which use chat history instead)
-  if (session.agentId && !currentThreadRecallRequest && message.length > 12) {
+  // Proactive memory recall — full mode only
+  if (!isMinimalPrompt && session.agentId && !currentThreadRecallRequest && message.length > 12) {
     try {
       const agents = loadAgents()
       const agentForMemory = agents[session.agentId]
@@ -941,12 +553,22 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
           promptParts.push(`## Recalled Context\nRelevant memories from previous interactions:\n${recalledLines.join('\n')}`)
         }
       }
-    } catch {
-      // Proactive memory recall is non-critical
-    }
+    } catch { /* non-critical */ }
   }
 
-  let prompt = promptParts.join('\n\n')
+  // Apply prompt budget
+  const budget = isMinimalPrompt ? MINIMAL_PROMPT_BUDGET : DEFAULT_PROMPT_BUDGET
+  const budgetResult = applyPromptBudget(promptParts, budget)
+  if (budgetResult.truncated) {
+    console.warn(`[stream-agent-chat] Prompt truncated: ${budgetResult.originalChars} chars → ${budget.maxTotalChars} chars (mode=${promptMode})`)
+  } else if (isOverWarningThreshold(budgetResult.originalChars, budget)) {
+    console.warn(`[stream-agent-chat] Prompt near budget: ${budgetResult.originalChars}/${budget.maxTotalChars} chars (mode=${promptMode})`)
+  }
+  let prompt = budgetResult.prompt
+
+  // -------------------------------------------------------------------------
+  // Agent + tool setup
+  // -------------------------------------------------------------------------
   const runId = `${session.id}:${startTs}`
   const loopTracker = new ToolLoopTracker({
     ...(typeof settings.toolLoopFrequencyWarn === 'number' && { toolFrequencyWarn: settings.toolLoopFrequencyWarn }),
@@ -974,7 +596,6 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       }
       const data = buf.toString('base64')
       const ext = filePath.split('.').pop()?.toLowerCase() || 'png'
-      // Detect actual MIME from magic bytes (fall back to extension-based)
       let mimeType = ext === 'jpg' ? 'image/jpeg' : `image/${ext}`
       if (buf[0] === 0xFF && buf[1] === 0xD8) mimeType = 'image/jpeg'
       else if (buf[0] === 0x89 && buf[1] === 0x50) mimeType = 'image/png'
@@ -992,7 +613,6 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         const result = await pdfParse(buf)
         const pdfText = (result.text || '').trim()
         if (!pdfText) return `[Attached PDF: ${name} — no extractable text]`
-        // Truncate very large PDFs to avoid token limits
         const maxChars = 100_000
         const truncated = pdfText.length > maxChars ? pdfText.slice(0, maxChars) + '\n\n[... truncated]' : pdfText
         return `[Attached PDF: ${name} (${result.numpages} pages)]\n\n${truncated}`
@@ -1044,7 +664,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     return parts
   }
 
-  // Apply context-clear boundary: slice from most recent context-clear marker
+  // Apply context-clear boundary
   let contextStart = 0
   for (let i = history.length - 1; i >= 0; i--) {
     if (history[i].kind === 'context-clear') {
@@ -1053,13 +673,9 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     }
   }
   const postClearHistory = history.slice(contextStart)
-
-  // Hard cap: only send the most recent 30 messages to the LLM
   const recentHistory = postClearHistory.slice(-30)
 
-  // Auto-compaction: only trigger if the messages we'll actually send exceed context limits.
-  // The .slice(-30) hard cap already prevents context overflow for long conversations,
-  // so this only fires for sessions with very large individual messages.
+  // Auto-compaction
   let effectiveHistory = recentHistory
   try {
     const {
@@ -1108,11 +724,9 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         (result.summaryAdded ? ' (LLM summary)' : ' (sliding window fallback)'),
       )
     }
-  } catch {
-    // Context manager failure — continue with recent history
-  }
+  } catch { /* non-critical */ }
 
-  // Context state awareness: let the agent know when messages have been dropped
+  // Context state awareness
   const droppedByWindow = postClearHistory.length - recentHistory.length
   const droppedByCompaction = recentHistory.length - effectiveHistory.length
   if (droppedByWindow > 0 || droppedByCompaction > 0) {
@@ -1166,7 +780,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   )
   prompt = applyBeforePromptBuildResult(prompt, promptHookResult)
 
-  // Context degradation warning: prepend warning to system prompt when nearing limits
+  // Context degradation warning
   try {
     const {
       getContextDegradationWarning,
@@ -1194,9 +808,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     if (warning) {
       prompt = joinPromptSegments(warning, prompt)
     }
-  } catch {
-    // Warning failure is non-critical
-  }
+  } catch { /* non-critical */ }
 
   await runCapabilityHook(
     'llmInput',
@@ -1259,13 +871,13 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       }
       return { warning: preview.message }
     },
-    onToolCallWarning: ({ toolName, message }) => {
+    onToolCallWarning: ({ toolName, message: warnMessage }) => {
       write(`data: ${JSON.stringify({
         t: 'status',
         text: JSON.stringify({
           toolWarning: toolName,
           severity: 'warning',
-          message,
+          message: warnMessage,
           phase: 'before_tool_call',
         }),
       })}\n\n`)
@@ -1273,12 +885,6 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   })
   endToolBuildPerf({ toolCount: tools.length })
 
-  // Use a fresh in-memory checkpointer instead of the SQLite one.  We manage
-  // conversation history externally via langchainMessages — each iteration
-  // receives full history, so no cross-iteration checkpoint state is needed.
-  // MemorySaver avoids the SQLite serde round-trip that dropped tool_call IDs
-  // or ToolMessages, causing OpenAI to reject with "tool_calls must be
-  // followed by tool messages" errors.
   const agent = createReactAgent({
     llm,
     tools,
@@ -1287,20 +893,18 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   })
   let pendingGraphMessages = [...langchainMessages]
 
-  let fullText = ''
-  let lastSegment = ''
-  let lastSettledSegment = ''
-  let hasToolCalls = false
-  let needsTextSeparator = false
-  let totalInputTokens = 0
-  let totalOutputTokens = 0
-  let accumulatedThinking = ''
-  const extensionInvocations: ExtensionInvocationRecord[] = []
-  const streamedToolEvents: MessageToolEvent[] = []
-  let currentToolInputTokens = 0
-  const boundedExternalExecutionTask = looksLikeBoundedExternalExecutionTask(message)
+  // -------------------------------------------------------------------------
+  // Init turn state and limits
+  // -------------------------------------------------------------------------
+  const state = new ChatTurnState()
+  const limits = new ContinuationLimits(isConnectorSession)
   const routingDecision = routeTaskIntent(message, sessionExtensions, null)
-  const likelyResearchSynthesisTask = routingDecision.intent === 'research' || routingDecision.intent === 'browsing'
+  const explicitRequiredToolNames = getExplicitRequiredToolNames(message, sessionExtensions)
+
+  const boundedExternalExecutionTask = classifiedHasTransactionalWalletIntent(classification, message)
+  const likelyResearchSynthesisTask = classifiedIsResearchSynthesis(classification, routingDecision.intent)
+  const shouldEnforceEarlyRequiredToolKickoff = explicitRequiredToolNames.length > 0
+    && classifiedIsDeliverableTask(classification, message)
 
   await runCapabilityHook('beforeAgentStart', { session, message }, { enabledIds: sessionExtensions })
 
@@ -1319,126 +923,30 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       }, runtime.ongoingLoopMaxRuntimeMs)
     : null
 
-  const MAX_AUTO_CONTINUES = 3
-  const MAX_TRANSIENT_RETRIES = 3
-  const MAX_REQUIRED_TOOL_CONTINUES = 2
-  const MAX_MEMORY_WRITE_FOLLOWTHROUGHS = 2
-  let MAX_EXECUTION_FOLLOWTHROUGHS = 1
-  const MAX_EXECUTION_KICKOFF_FOLLOWTHROUGHS = 1
-  let MAX_ATTACHMENT_FOLLOWTHROUGHS = 1
-  let MAX_DELIVERABLE_FOLLOWTHROUGHS = 2
-  let MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS = 2
-  const MAX_TOOL_ERROR_FOLLOWTHROUGHS = 2
-  let MAX_TOOL_SUMMARY_RETRIES = 2
-
-  // Connector sessions (WhatsApp, Discord, etc.) don't need aggressive
-  // follow-ups — short replies are normal for chat platforms.
-  if (isConnectorSession) {
-    MAX_DELIVERABLE_FOLLOWTHROUGHS = 0
-    MAX_EXECUTION_FOLLOWTHROUGHS = 0
-    MAX_ATTACHMENT_FOLLOWTHROUGHS = 0
-    MAX_TOOL_SUMMARY_RETRIES = 1
-    MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS = 1
-  }
-  const REQUIRED_TOOL_KICKOFF_TIMEOUT_MS = runtime.requiredToolKickoffMs
-  let autoContinueCount = 0
-  let transientRetryCount = 0
-  let pendingRetryAfterMs: number | null = null
-  let requiredToolContinueCount = 0
-  let memoryWriteFollowthroughCount = 0
-  let executionFollowthroughCount = 0
-  let executionKickoffFollowthroughCount = 0
-  let attachmentFollowthroughCount = 0
-  let deliverableFollowthroughCount = 0
-  let unfinishedToolFollowthroughCount = 0
-  let toolErrorFollowthroughCount = 0
-  let toolSummaryRetryCount = 0
-  const explicitRequiredToolNames = getExplicitRequiredToolNames(message, sessionExtensions)
-  const shouldEnforceEarlyRequiredToolKickoff = explicitRequiredToolNames.length > 0
-    && looksLikeOpenEndedDeliverableTask(message)
-  const usedToolNames = new Set<string>()
-  let loopDetectionTriggered: LoopDetectionResult | null = null
-  let terminalToolBoundary: 'memory_write' | 'durable_wait' | 'context_compaction' | null = null
-  let terminalToolResponse = ''
-  let memoryWriteTerminalAllowed: boolean | null = null
-
+  // -------------------------------------------------------------------------
+  // Main iteration loop
+  // -------------------------------------------------------------------------
   try {
-  const maxIterations = MAX_AUTO_CONTINUES + MAX_TRANSIENT_RETRIES + MAX_REQUIRED_TOOL_CONTINUES + MAX_MEMORY_WRITE_FOLLOWTHROUGHS + MAX_EXECUTION_KICKOFF_FOLLOWTHROUGHS + MAX_EXECUTION_FOLLOWTHROUGHS + MAX_DELIVERABLE_FOLLOWTHROUGHS + MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS + MAX_TOOL_ERROR_FOLLOWTHROUGHS + MAX_TOOL_SUMMARY_RETRIES
+    const maxIterations = limits.maxIterations
     for (let iteration = 0; iteration <= maxIterations; iteration++) {
       let shouldContinue: ContinuationType = false
       let requiredToolReminderNames: string[] = []
-      let waitingForToolResult = false
-      let idleTimedOut = false
-      let reachedExecutionBoundary = false
-      let executionFollowthroughReason: 'research_limit' | 'post_simulation' | null = null
-      let idleTimer: ReturnType<typeof setTimeout> | null = null
-      let requiredToolKickoffTimer: ReturnType<typeof setTimeout> | null = null
-      let requiredToolKickoffTimedOut = false
-      let iterationText = ''
-      const iterationStartState: {
-        fullText: string
-        lastSegment: string
-        lastSettledSegment: string
-        needsTextSeparator: boolean
-        accumulatedThinking: string
-        hasToolCalls: boolean
-        toolEventCount: number
-      } = {
-        fullText,
-        lastSegment,
-        lastSettledSegment,
-        needsTextSeparator,
-        accumulatedThinking,
-        hasToolCalls,
-        toolEventCount: streamedToolEvents.length,
-      }
 
-      // Fresh per-iteration controller so an internal LangGraph abort doesn't poison subsequent iterations.
-      // Linked to the parent so client disconnect / timeout still propagates.
+      const iterationStartState = state.snapshot()
+
+      // Fresh per-iteration controller
       const iterationController = new AbortController()
       const onParentAbort = () => iterationController.abort()
       if (abortController.signal.aborted) iterationController.abort()
       else abortController.signal.addEventListener('abort', onParentAbort)
 
-      const clearIdleWatchdog = () => {
-        if (idleTimer) {
-          clearTimeout(idleTimer)
-          idleTimer = null
-        }
-      }
+      const timers = new IterationTimers(iterationController, {
+        streamIdleStallMs: runtime.streamIdleStallMs,
+        requiredToolKickoffMs: runtime.requiredToolKickoffMs,
+        shouldEnforceEarlyRequiredToolKickoff,
+      })
 
-      const clearRequiredToolKickoff = () => {
-        if (requiredToolKickoffTimer) {
-          clearTimeout(requiredToolKickoffTimer)
-          requiredToolKickoffTimer = null
-        }
-      }
-
-      const armIdleWatchdog = () => {
-        clearIdleWatchdog()
-        if (waitingForToolResult || iterationController.signal.aborted) return
-        idleTimer = setTimeout(() => {
-          idleTimedOut = true
-          iterationController.abort()
-        }, runtime.streamIdleStallMs)
-      }
-
-      const armRequiredToolKickoff = () => {
-        clearRequiredToolKickoff()
-        if (!shouldEnforceEarlyRequiredToolKickoff) return
-        if (iteration > 0 || waitingForToolResult || hasToolCalls || iterationController.signal.aborted) return
-        requiredToolKickoffTimer = setTimeout(() => {
-          if (waitingForToolResult || hasToolCalls || iterationController.signal.aborted) return
-          requiredToolKickoffTimedOut = true
-          iterationController.abort()
-        }, REQUIRED_TOOL_KICKOFF_TIMEOUT_MS)
-      }
-
-      // Only track tool events emitted by the LangGraph tool node itself.
-      // Internal wrapper/invoke events do not carry the same metadata and would
-      // otherwise look like duplicate tool calls.
       const toolEventTracker = new LangGraphToolEventTracker()
-      const toolPerfEnds = new Map<string, (extra?: Record<string, unknown>) => number>()
       const iterationInputMessages = pendingGraphMessages
       const eventStream = agent.streamEvents(
         { messages: iterationInputMessages },
@@ -1452,334 +960,73 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         },
       )
 
+      let outcome: Awaited<ReturnType<typeof processIterationEvents>> | null = null
+
       try {
-        armIdleWatchdog()
-        armRequiredToolKickoff()
+        timers.armIdleWatchdog(false)
+        timers.armRequiredToolKickoff({
+          iteration,
+          waitingForToolResult: false,
+          hasToolCalls: state.hasToolCalls,
+        })
 
-        for await (const event of eventStream) {
-          const kind = event.event
-
-          if (kind === 'on_chat_model_stream') {
-            armIdleWatchdog()
-            const chunk = event.data?.chunk
-            if (chunk?.content) {
-              // content can be string or array of content blocks
-              if (Array.isArray(chunk.content)) {
-                for (const block of chunk.content) {
-                  // Anthropic extended thinking blocks
-                  if (block.type === 'thinking' && block.thinking) {
-                    accumulatedThinking += block.thinking
-                    write(`data: ${JSON.stringify({ t: 'thinking', text: block.thinking })}\n\n`)
-                  // [[thinking]] prefix convention
-                  } else if (typeof block.text === 'string' && block.text.startsWith('[[thinking]]')) {
-                    accumulatedThinking += block.text.slice(12)
-                    write(`data: ${JSON.stringify({ t: 'thinking', text: block.text.slice(12) })}\n\n`)
-                  } else if (block.text) {
-                    if (needsTextSeparator && fullText.length > 0) {
-                      fullText += '\n\n'
-                      iterationText += '\n\n'
-                      write(`data: ${JSON.stringify({ t: 'd', text: '\n\n' })}\n\n`)
-                      needsTextSeparator = false
-                    }
-                    fullText += block.text
-                    iterationText += block.text
-                    lastSegment += block.text
-                    write(`data: ${JSON.stringify({ t: 'd', text: block.text })}\n\n`)
-                  }
-                }
-              } else {
-                const text = typeof chunk.content === 'string' ? chunk.content : ''
-                if (text) {
-                  if (needsTextSeparator && fullText.length > 0) {
-                    fullText += '\n\n'
-                    iterationText += '\n\n'
-                    write(`data: ${JSON.stringify({ t: 'd', text: '\n\n' })}\n\n`)
-                    needsTextSeparator = false
-                  }
-                  fullText += text
-                  iterationText += text
-                  lastSegment += text
-                  write(`data: ${JSON.stringify({ t: 'd', text })}\n\n`)
-                }
-              }
-            }
-          } else if (kind === 'on_llm_end') {
-            armIdleWatchdog()
-            // Track token usage from LLM responses — check all known LangChain event shapes
-            const output = event.data?.output
-            const usage = output?.llmOutput?.tokenUsage
-              || output?.llmOutput?.usage
-              || output?.usage_metadata
-              || output?.response_metadata?.usage
-              || output?.response_metadata?.tokenUsage
-            if (usage) {
-              totalInputTokens += usage.promptTokens || usage.input_tokens || usage.prompt_tokens || 0
-              totalOutputTokens += usage.completionTokens || usage.output_tokens || usage.completion_tokens || 0
-            }
-          } else if (kind === 'on_tool_start') {
-            if (!toolEventTracker.acceptStart(event)) continue
-            const toolName = event.name || 'unknown'
-            const input = event.data?.input
-            const inputStr = typeof input === 'string' ? input : JSON.stringify(input)
-            toolPerfEnds.set(event.run_id, perf.start('tool-call', toolName, { sessionId: session.id }))
-
-            clearIdleWatchdog()
-            clearRequiredToolKickoff()
-            waitingForToolResult = true
-            hasToolCalls = true
-            needsTextSeparator = true
-            const settledSegment = extractSuggestions(lastSegment).clean.trim()
-            if (settledSegment) lastSettledSegment = settledSegment
-            lastSegment = ''
-            usedToolNames.add(canonicalizeExtensionId(toolName) || toolName)
-            // Shell-based HTTP (curl/wget/gh) satisfies research tool requirements —
-            // don't force the agent to also use web_search when shell already fetched the data.
-            if ((canonicalizeExtensionId(toolName) || toolName) === 'shell' && inputStr) {
-              const cmdMatch = /curl|wget|http|gh\s+(issue|pr|api|repo|release|search|run)/.test(inputStr)
-              if (cmdMatch) usedToolNames.add('web')
-            }
-            // Estimate input tokens for extension invocation tracking
-            currentToolInputTokens = Math.ceil((inputStr?.length || 0) / 4)
-            logExecution(session.id, 'tool_call', `${toolName} invoked`, {
-              agentId: session.agentId,
-              detail: { toolName, input: inputStr?.slice(0, 4000) },
-            })
-            write(`data: ${JSON.stringify({
-              t: 'tool_call',
-              toolName,
-              toolInput: inputStr,
-              toolCallId: event.run_id,
-            })}\n\n`)
-            updateStreamedToolEvents(streamedToolEvents, {
-              type: 'call',
-              name: toolName,
-              input: inputStr,
-              toolCallId: event.run_id,
-            })
-          } else if (kind === 'on_tool_end') {
-            if (!toolEventTracker.complete(event.run_id)) continue
-            const endToolPerf = toolPerfEnds.get(event.run_id)
-            toolPerfEnds.delete(event.run_id)
-
-            waitingForToolResult = toolEventTracker.pendingCount > 0
-            if (!waitingForToolResult) armIdleWatchdog()
-            const toolName = event.name || 'unknown'
-            const output = event.data?.output
-            const rawOutputStr = typeof output === 'string'
-              ? output
-              : output?.content
-                ? String(output.content)
-                : JSON.stringify(output)
-            // Apply tool result size guard to prevent context window blowout
-            const { getContextWindowSize } = await import('@/lib/server/context-manager')
-            const maxResultChars = calculateMaxToolResultChars(getContextWindowSize(session.provider, session.model))
-            const outputStr = truncateToolResultText(rawOutputStr, maxResultChars)
-            logExecution(session.id, 'tool_result', `${toolName} returned`, {
-              agentId: session.agentId,
-              detail: { toolName, output: outputStr?.slice(0, 4000), error: /^(Error:|error:)/i.test((outputStr || '').trim()) || undefined },
-            })
-            // Enriched file_op logging for file-mutating tools
-            if (['write_file', 'edit_file', 'copy_file', 'move_file', 'delete_file'].includes(toolName)) {
-              const inputData = event.data?.input
-              const inputObj = typeof inputData === 'object' ? inputData : {}
-              logExecution(session.id, 'file_op', `${toolName}: ${inputObj?.filePath || inputObj?.sourcePath || 'unknown'}`, {
-                agentId: session.agentId,
-                detail: { toolName, filePath: inputObj?.filePath, sourcePath: inputObj?.sourcePath, destinationPath: inputObj?.destinationPath, success: !/^Error/i.test((outputStr || '').trim()) },
-              })
-            }
-            // Enriched commit logging for git operations
-            if (toolName === 'execute_command' && outputStr) {
-              const commitMatch = outputStr.match(/\[[\w/-]+\s+([a-f0-9]{7,40})\]/)
-              if (commitMatch) {
-                logExecution(session.id, 'commit', `git commit ${commitMatch[1]}`, {
-                  agentId: session.agentId,
-                  detail: { commitId: commitMatch[1], outputPreview: outputStr.slice(0, 500) },
-                })
-              }
-            }
-            // Track extension invocation token estimates
-            const extensionId = toolToExtensionMap[toolName] || '_unknown'
-            extensionInvocations.push({
-              extensionId,
-              toolName,
-              inputTokens: currentToolInputTokens,
-              outputTokens: Math.ceil((outputStr?.length || 0) / 4),
-            })
-            currentToolInputTokens = 0
-
-            // --- Tool loop detection ---
-            const loopResult = loopTracker.record(toolName, event.data?.input, output)
-            if (loopResult) {
-              logExecution(session.id, 'loop_detection', loopResult.message, {
-                agentId: session.agentId,
-                detail: { detector: loopResult.detector, severity: loopResult.severity, toolName },
-              })
-              if (loopResult.severity === 'critical') {
-                loopDetectionTriggered = loopResult
-                write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ loopDetection: loopResult.detector, severity: 'critical', message: loopResult.message }) })}\n\n`)
-                break
-              }
-              if (loopResult.severity === 'warning') {
-                write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ loopDetection: loopResult.detector, severity: 'warning', message: loopResult.message }) })}\n\n`)
-              }
-            }
-
-            endToolPerf?.({ outputLen: outputStr?.length || 0 })
-            write(`data: ${JSON.stringify({
-              t: 'tool_result',
-              toolName,
-              toolOutput: outputStr?.slice(0, 2000),
-              toolCallId: event.run_id,
-            })}\n\n`)
-            updateStreamedToolEvents(streamedToolEvents, {
-              type: 'result',
-              name: toolName,
-              output: outputStr,
-              toolCallId: event.run_id,
-            })
-            const toolBoundary = resolveSuccessfulTerminalToolBoundary({
-              toolName,
-              toolInput: event.data?.input,
-              toolOutput: outputStr || '',
-              allowMemoryWriteTerminal: terminalToolBoundary === 'memory_write' ? memoryWriteTerminalAllowed !== false : undefined,
-            })
-            if (toolBoundary) {
-              if (toolBoundary.kind === 'memory_write') {
-                if (memoryWriteTerminalAllowed === null) {
-                  memoryWriteTerminalAllowed = await resolveExclusiveMemoryWriteTerminalAllowance({
-                    sessionId: session.id,
-                    agentId: session.agentId || null,
-                    message,
-                  })
-                }
-                if (!memoryWriteTerminalAllowed) {
-                  logExecution(session.id, 'decision', 'Successful memory write treated as intermediate evidence; continuing the turn.', {
-                    agentId: session.agentId,
-                    detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind },
-                  })
-                  continue
-                }
-                const naturalResponse = (toolBoundary.responseText || '').trim() || 'I\'ll remember that.'
-                fullText = naturalResponse
-                iterationText = naturalResponse
-                lastSegment = naturalResponse
-                lastSettledSegment = naturalResponse
-                needsTextSeparator = false
-                terminalToolBoundary = toolBoundary.kind
-                terminalToolResponse = naturalResponse
-                logExecution(session.id, 'decision', 'Successful memory write completed; finalizing with a single acknowledgement.', {
-                  agentId: session.agentId,
-                  detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind, responseText: naturalResponse },
-                })
-                write(`data: ${JSON.stringify({ t: 'r', text: naturalResponse })}\n\n`)
-                write(`data: ${JSON.stringify({
-                  t: 'status',
-                  text: JSON.stringify({ terminalToolResult: toolBoundary.kind }),
-                })}\n\n`)
-                break
-              } else {
-                terminalToolBoundary = toolBoundary.kind
-                terminalToolResponse = ''
-                logExecution(session.id, 'decision', `Terminal tool boundary reached: ${toolBoundary.kind}.`, {
-                  agentId: session.agentId,
-                  detail: { toolName, action: resolveToolAction(event.data?.input) || null, boundary: toolBoundary.kind },
-                })
-                write(`data: ${JSON.stringify({
-                  t: 'status',
-                  text: JSON.stringify({ terminalToolResult: toolBoundary.kind }),
-                })}\n\n`)
-                break
-              }
-            }
-            if (boundedExternalExecutionTask && getWalletApprovalBoundaryAction(outputStr || '')) {
-              reachedExecutionBoundary = true
-              write(`data: ${JSON.stringify({
-                t: 'status',
-                text: JSON.stringify({ executionBoundary: 'wallet_approval' }),
-              })}\n\n`)
-              break
-            }
-            if (
-              boundedExternalExecutionTask
-              && ['http_request', 'web', 'web_search', 'web_fetch', 'browser'].includes(toolName)
-              && !hasStateChangingWalletEvidence(streamedToolEvents)
-              && countExternalExecutionResearchSteps(streamedToolEvents) >= 5
-              && countDistinctExternalResearchHosts(streamedToolEvents) >= 3
-            ) {
-              executionFollowthroughReason = 'research_limit'
-              write(`data: ${JSON.stringify({
-                t: 'status',
-                text: JSON.stringify({ executionBoundary: 'research_limit' }),
-              })}\n\n`)
-              break
-            }
-            if (
-              boundedExternalExecutionTask
-              && !hasStateChangingWalletEvidence(streamedToolEvents)
-              && isWalletSimulationResult(toolName, outputStr || '')
-            ) {
-              executionFollowthroughReason = 'post_simulation'
-              write(`data: ${JSON.stringify({
-                t: 'status',
-                text: JSON.stringify({ executionBoundary: 'post_simulation' }),
-              })}\n\n`)
-              break
-            }
-          }
-        }
+        outcome = await processIterationEvents({
+          eventStream,
+          state,
+          timers,
+          loopTracker,
+          toolEventTracker,
+          session,
+          message,
+          write,
+          sessionExtensions,
+          boundedExternalExecutionTask,
+          toolToExtensionMap,
+          iterationController,
+        })
       } catch (innerErr: unknown) {
         const errName = innerErr instanceof Error ? innerErr.constructor.name : ''
-        const errMsg = idleTimedOut
+        const errMsg = timers.idleTimedOut
           ? `Model stream stalled without emitting text or tool results for ${Math.trunc(runtime.streamIdleStallMs / 1000)} seconds.`
-          : requiredToolKickoffTimedOut
-            ? `The turn did not start the required workspace tool step within ${Math.trunc(REQUIRED_TOOL_KICKOFF_TIMEOUT_MS / 1000)} seconds.`
+          : timers.requiredToolKickoffTimedOut
+            ? `The turn did not start the required workspace tool step within ${Math.trunc(runtime.requiredToolKickoffMs / 1000)} seconds.`
           : errorMessage(innerErr)
         const errStack = innerErr instanceof Error ? innerErr.stack?.slice(0, 500) : undefined
 
-        // Classify the error:
-        // 1. GraphRecursionError — explicit or wrapped as abort (LangGraph aborts internally on limit)
-        // 2. Transient abort/timeout — LLM API failure, not from client disconnect
         const isRecursionError = errName === 'GraphRecursionError'
           || /recursion limit|maximum recursion/i.test(errMsg)
         const { statusCode, retryAfterMs: extractedRetryAfterMs } = extractProviderErrorInfo(innerErr)
         const isTransientProviderError = !isRecursionError && (
           [429, 500, 502, 503, 504].includes(statusCode)
           || /^(InternalServerError|RateLimitError|APIConnectionError|APIConnectionTimeoutError)$/i.test(errName)
-          // Fallback: still check message for providers that don't set .status
           || /internal server error|too many requests|rate limit|service unavailable|bad gateway|gateway timeout|overloaded/i.test(errMsg)
         )
-        const isTransientAbort = (!isRecursionError && idleTimedOut)
+        const isTransientAbort = (!isRecursionError && timers.idleTimedOut)
           || (!isRecursionError
           && /abort|timed?\s*out|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(errMsg)
           && !abortController.signal.aborted)
           || (isTransientProviderError && !abortController.signal.aborted)
 
-        // Log diagnostic details for every error so we can trace root causes
         console.error(`[stream-agent-chat] Error in streamEvents iteration=${iteration}`, {
           errName, errMsg, errStack,
           statusCode, retryAfterMs: extractedRetryAfterMs,
           isRecursionError, isTransientAbort,
-          hasToolCalls, fullTextLen: fullText.length,
+          hasToolCalls: state.hasToolCalls, fullTextLen: state.fullText.length,
           parentAborted: abortController.signal.aborted,
         })
 
-        if (requiredToolKickoffTimedOut && requiredToolContinueCount < MAX_REQUIRED_TOOL_CONTINUES && !abortController.signal.aborted) {
-          const hadPartialOutput = iterationText.length > 0 || streamedToolEvents.length > iterationStartState.toolEventCount
-          fullText = iterationStartState.fullText
-          lastSegment = iterationStartState.lastSegment
-          lastSettledSegment = iterationStartState.lastSettledSegment
-          needsTextSeparator = iterationStartState.needsTextSeparator
-          accumulatedThinking = iterationStartState.accumulatedThinking
-          hasToolCalls = iterationStartState.hasToolCalls
-          streamedToolEvents.length = iterationStartState.toolEventCount
+        if (timers.requiredToolKickoffTimedOut && limits.canContinue('required_tool') && !abortController.signal.aborted) {
+          const hadPartialOutput = state.fullText.length > iterationStartState.fullText.length || state.streamedToolEvents.length > iterationStartState.toolEventCount
+          state.restore(iterationStartState)
           requiredToolReminderNames = explicitRequiredToolNames.filter((toolName) => {
             const canonical = canonicalizeExtensionId(toolName) || toolName
-            return !usedToolNames.has(toolName) && !usedToolNames.has(canonical)
+            return !state.usedToolNames.has(toolName) && !state.usedToolNames.has(canonical)
           })
           if (requiredToolReminderNames.length === 0) requiredToolReminderNames = [...explicitRequiredToolNames]
           shouldContinue = 'required_tool'
-          requiredToolContinueCount++
-          logExecution(session.id, 'decision', `Required tool kickoff timed out, forcing tool reminder (${requiredToolContinueCount}/${MAX_REQUIRED_TOOL_CONTINUES})`, {
+          limits.increment('required_tool')
+          const { count, max } = limits.getStatus('required_tool')
+          logExecution(session.id, 'decision', `Required tool kickoff timed out, forcing tool reminder (${count}/${max})`, {
             agentId: session.agentId,
             detail: { errName, errMsg, hadPartialOutput, requiredTools: requiredToolReminderNames },
           })
@@ -1790,368 +1037,74 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
             t: 'status',
             text: JSON.stringify({
               requiredToolsPending: requiredToolReminderNames,
-              reminderCount: requiredToolContinueCount,
-              maxReminders: MAX_REQUIRED_TOOL_CONTINUES,
+              reminderCount: count,
+              maxReminders: max,
               reason: 'tool_kickoff_timeout',
             }),
           })}\n\n`)
-        } else if (isRecursionError && autoContinueCount < MAX_AUTO_CONTINUES && !abortController.signal.aborted) {
+        } else if (isRecursionError && limits.canContinue('recursion') && !abortController.signal.aborted) {
           shouldContinue = 'recursion'
-          autoContinueCount++
-          logExecution(session.id, 'decision', `Recursion limit hit, auto-continuing (${autoContinueCount}/${MAX_AUTO_CONTINUES})`, {
+          const count = limits.increment('recursion')
+          const { max } = limits.getStatus('recursion')
+          logExecution(session.id, 'decision', `Recursion limit hit, auto-continuing (${count}/${max})`, {
             agentId: session.agentId,
             detail: { errName, errMsg },
           })
-          write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ autoContinue: autoContinueCount, maxContinues: MAX_AUTO_CONTINUES }) })}\n\n`)
-        } else if (isTransientAbort && transientRetryCount < MAX_TRANSIENT_RETRIES && !abortController.signal.aborted) {
-          // Reset client-side accumulated state — partial text/tool events from the
-          // failed iteration can't be un-sent, so tell the client to clear them.
-          const hadPartialOutput = iterationText.length > 0 || streamedToolEvents.length > iterationStartState.toolEventCount
-          fullText = iterationStartState.fullText
-          lastSegment = iterationStartState.lastSegment
-          lastSettledSegment = iterationStartState.lastSettledSegment
-          needsTextSeparator = iterationStartState.needsTextSeparator
-          accumulatedThinking = iterationStartState.accumulatedThinking
-          hasToolCalls = iterationStartState.hasToolCalls
-          streamedToolEvents.length = iterationStartState.toolEventCount
+          write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ autoContinue: count, maxContinues: max }) })}\n\n`)
+        } else if (isTransientAbort && limits.canContinue('transient') && !abortController.signal.aborted) {
+          const hadPartialOutput = state.fullText.length > iterationStartState.fullText.length || state.streamedToolEvents.length > iterationStartState.toolEventCount
+          state.restore(iterationStartState)
           shouldContinue = 'transient'
-          transientRetryCount++
-          pendingRetryAfterMs = extractedRetryAfterMs
-          logExecution(session.id, 'decision', `Transient error, retrying (${transientRetryCount}/${MAX_TRANSIENT_RETRIES}): ${errMsg}`, {
+          const count = limits.increment('transient')
+          const { max } = limits.getStatus('transient')
+          logExecution(session.id, 'decision', `Transient error, retrying (${count}/${max}): ${errMsg}`, {
             agentId: session.agentId,
             detail: { errName, errMsg, statusCode, retryAfterMs: extractedRetryAfterMs, hadPartialOutput },
           })
           if (hadPartialOutput) {
             write(`data: ${JSON.stringify({ t: 'reset', text: iterationStartState.fullText })}\n\n`)
           }
-          write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ transientRetry: transientRetryCount, maxRetries: MAX_TRANSIENT_RETRIES, error: errMsg }) })}\n\n`)
+          write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ transientRetry: count, maxRetries: max, error: errMsg }) })}\n\n`)
         } else {
-          // Non-retryable error or exhausted retries — rethrow to outer catch
           throw innerErr
         }
       } finally {
-        clearIdleWatchdog()
-        clearRequiredToolKickoff()
+        timers.clearAll()
         abortController.signal.removeEventListener('abort', onParentAbort)
       }
 
-      if (reachedExecutionBoundary) break
+      if (outcome?.reachedExecutionBoundary) break
 
-      if (terminalToolBoundary) {
-        const completedToolEvents = pruneIncompleteToolEvents(streamedToolEvents)
-        streamedToolEvents.length = 0
-        streamedToolEvents.push(...completedToolEvents)
+      if (state.terminalToolBoundary) {
+        const completedToolEvents = pruneIncompleteToolEvents(state.streamedToolEvents)
+        state.streamedToolEvents.length = 0
+        state.streamedToolEvents.push(...completedToolEvents)
         break
       }
 
-      if (!shouldContinue
-        && toolEventTracker.pendingCount > 0
-        && !abortController.signal.aborted) {
-        if (looksLikeOpenEndedDeliverableTask(message) && deliverableFollowthroughCount < MAX_DELIVERABLE_FOLLOWTHROUGHS) {
-          shouldContinue = 'deliverable_followthrough'
-          deliverableFollowthroughCount++
-          write(`data: ${JSON.stringify({
-            t: 'status',
-            text: JSON.stringify({
-              deliverableFollowthrough: deliverableFollowthroughCount,
-              maxFollowthroughs: MAX_DELIVERABLE_FOLLOWTHROUGHS,
-              reason: 'unfinished_tool_calls',
-              pendingToolCallIds: toolEventTracker.listPendingRunIds(),
-            }),
-          })}\n\n`)
-        } else if (unfinishedToolFollowthroughCount < MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS) {
-          shouldContinue = 'unfinished_tool_followthrough'
-          unfinishedToolFollowthroughCount++
-          write(`data: ${JSON.stringify({
-            t: 'status',
-            text: JSON.stringify({
-              unfinishedToolFollowthrough: unfinishedToolFollowthroughCount,
-              maxFollowthroughs: MAX_UNFINISHED_TOOL_FOLLOWTHROUGHS,
-              pendingToolCallIds: toolEventTracker.listPendingRunIds(),
-            }),
-          })}\n\n`)
-        }
-      }
-
-      // Tool loop detection: critical severity stops further tool calls.
-      // However, if tools already produced results but the model has no/trivial text,
-      // we attempt a tool_summary continuation instead of just erroring out.
-      if (loopDetectionTriggered) {
-        const skipToolSummaryForShortResponse = shouldSkipToolSummaryForShortResponse({
-          fullText,
-          toolEvents: streamedToolEvents,
+      // Evaluate continuation (only if error handling didn't already set shouldContinue)
+      if (!shouldContinue && outcome) {
+        const decision = evaluateContinuation({
+          state,
+          limits,
+          toolEventTracker,
+          message,
+          sessionExtensions,
           isConnectorSession,
-        })
-        const loopTextIsTrivial = !fullText.trim() || (
-          !skipToolSummaryForShortResponse
-          && fullText.trim().length < 150
-          && streamedToolEvents.length >= 2
-        )
-        if (loopTextIsTrivial && streamedToolEvents.length > 0 && toolSummaryRetryCount < MAX_TOOL_SUMMARY_RETRIES) {
-          // Override: let the tool_summary check below handle it instead of breaking
-          loopDetectionTriggered = null
-        } else {
-          write(`data: ${JSON.stringify({ t: 'err', text: loopDetectionTriggered.message })}\n\n`)
-          break
-        }
-      }
-
-      if (
-        executionFollowthroughReason
-        && !shouldContinue
-        && executionFollowthroughCount < MAX_EXECUTION_FOLLOWTHROUGHS
-      ) {
-        shouldContinue = 'execution_followthrough'
-        executionFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            externalExecutionFollowthrough: executionFollowthroughCount,
-            maxFollowthroughs: MAX_EXECUTION_FOLLOWTHROUGHS,
-            reason: executionFollowthroughReason,
-          }),
-        })}\n\n`)
-      }
-
-      if (!shouldContinue && explicitRequiredToolNames.length > 0 && requiredToolContinueCount < MAX_REQUIRED_TOOL_CONTINUES) {
-        // Canonicalize required tool names before comparing — tool planning uses
-        // alias names (e.g. web_search) while LangGraph emits canonical names (e.g. web).
-        requiredToolReminderNames = explicitRequiredToolNames.filter((toolName) => {
-          const canonical = canonicalizeExtensionId(toolName) || toolName
-          return !usedToolNames.has(toolName) && !usedToolNames.has(canonical)
-        })
-        if (requiredToolReminderNames.length > 0) {
-          shouldContinue = 'required_tool'
-          requiredToolContinueCount++
-          write(`data: ${JSON.stringify({
-            t: 'status',
-            text: JSON.stringify({
-              requiredToolsPending: requiredToolReminderNames,
-              reminderCount: requiredToolContinueCount,
-              maxReminders: MAX_REQUIRED_TOOL_CONTINUES,
-            }),
-          })}\n\n`)
-        }
-      }
-
-      if (!shouldContinue
-        && !fullText.trim()
-        && hasOnlySuccessfulMemoryMutationToolEvents(streamedToolEvents)
-        && memoryWriteFollowthroughCount < MAX_MEMORY_WRITE_FOLLOWTHROUGHS
-      ) {
-        shouldContinue = 'memory_write_followthrough'
-        memoryWriteFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            memoryWriteFollowthrough: memoryWriteFollowthroughCount,
-            maxFollowthroughs: MAX_MEMORY_WRITE_FOLLOWTHROUGHS,
-            reason: 'empty_reply_after_memory_write',
-          }),
-        })}\n\n`)
-      }
-
-      if (!shouldContinue
-        && attachmentFollowthroughCount < MAX_ATTACHMENT_FOLLOWTHROUGHS
-        && shouldForceAttachmentFollowthrough({
-          userMessage: message,
-          enabledExtensions: sessionExtensions,
-          hasToolCalls,
-          hasAttachmentContext,
-        })) {
-        shouldContinue = 'attachment_followthrough'
-        attachmentFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            attachmentFollowthrough: attachmentFollowthroughCount,
-            maxFollowthroughs: MAX_ATTACHMENT_FOLLOWTHROUGHS,
-          }),
-        })}\n\n`)
-      }
-
-      if (!shouldContinue
-        && executionKickoffFollowthroughCount < MAX_EXECUTION_KICKOFF_FOLLOWTHROUGHS
-        && shouldForceExternalExecutionKickoffFollowthrough({
-          userMessage: message,
-          finalResponse: resolveFinalStreamResponseText({
-            fullText,
-            lastSegment,
-            lastSettledSegment,
-            hasToolCalls,
-            toolEvents: streamedToolEvents,
-          }),
-          hasToolCalls,
-          toolEvents: streamedToolEvents,
-        })) {
-        shouldContinue = 'execution_kickoff_followthrough'
-        executionKickoffFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            externalExecutionKickoff: executionKickoffFollowthroughCount,
-            maxFollowthroughs: MAX_EXECUTION_KICKOFF_FOLLOWTHROUGHS,
-          }),
-        })}\n\n`)
-      }
-
-      if (!shouldContinue
-        && executionFollowthroughCount < MAX_EXECUTION_FOLLOWTHROUGHS
-        && shouldForceExternalExecutionFollowthrough({
-          userMessage: message,
-          finalResponse: resolveFinalStreamResponseText({
-            fullText,
-            lastSegment,
-            lastSettledSegment,
-            hasToolCalls,
-            toolEvents: streamedToolEvents,
-          }),
-          hasToolCalls,
-          toolEvents: streamedToolEvents,
-        })) {
-        shouldContinue = 'execution_followthrough'
-        executionFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            externalExecutionFollowthrough: executionFollowthroughCount,
-            maxFollowthroughs: MAX_EXECUTION_FOLLOWTHROUGHS,
-          }),
-        })}\n\n`)
-      }
-
-      if (!shouldContinue
-        && deliverableFollowthroughCount < MAX_DELIVERABLE_FOLLOWTHROUGHS
-        && shouldForceDeliverableFollowthrough({
-          userMessage: message,
-          finalResponse: resolveFinalStreamResponseText({
-            fullText,
-            lastSegment,
-            lastSettledSegment,
-            hasToolCalls,
-            toolEvents: streamedToolEvents,
-          }),
-          hasToolCalls,
-          toolEvents: streamedToolEvents,
-          cwd: session.cwd,
           history,
-        })) {
-        shouldContinue = 'deliverable_followthrough'
-        deliverableFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            deliverableFollowthrough: deliverableFollowthroughCount,
-            maxFollowthroughs: MAX_DELIVERABLE_FOLLOWTHROUGHS,
-          }),
-        })}\n\n`)
-      }
-
-      if (
-        !shouldContinue
-        && requiredToolContinueCount < MAX_REQUIRED_TOOL_CONTINUES
-        && shouldForceWorkspaceScopeShellFallback({
-          userMessage: message,
-          finalResponse: resolveFinalStreamResponseText({
-            fullText,
-            lastSegment,
-            lastSettledSegment,
-            hasToolCalls,
-            toolEvents: streamedToolEvents,
-          }),
-          toolEvents: streamedToolEvents,
-          enabledExtensions: sessionExtensions,
+          session,
+          write,
+          explicitRequiredToolNames,
+          hasAttachmentContext,
+          executionFollowthroughReason: outcome.executionFollowthroughReason,
+          likelyResearchSynthesisTask,
+          abortControllerAborted: abortController.signal.aborted,
+          classification,
         })
-      ) {
-        shouldContinue = 'required_tool'
-        requiredToolReminderNames = ['shell']
-        requiredToolContinueCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            requiredToolsPending: requiredToolReminderNames,
-            reminderCount: requiredToolContinueCount,
-            maxReminders: MAX_REQUIRED_TOOL_CONTINUES,
-            reason: 'workspace_scope_shell_fallback',
-          }),
-        })}\n\n`)
-      }
-
-      if (
-        !shouldContinue
-        && hasIncompleteDelegationWait(streamedToolEvents)
-      ) {
-        shouldContinue = 'unfinished_tool_followthrough'
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({ unfinishedDelegation: true }),
-        })}\n\n`)
-      }
-
-      if (
-        !shouldContinue
-        && toolErrorFollowthroughCount < MAX_TOOL_ERROR_FOLLOWTHROUGHS
-        && shouldForceRecoverableToolErrorFollowthrough({
-          userMessage: message,
-          finalResponse: resolveFinalStreamResponseText({
-            fullText,
-            lastSegment,
-            lastSettledSegment,
-            hasToolCalls,
-            toolEvents: streamedToolEvents,
-          }),
-          hasToolCalls,
-          toolEvents: streamedToolEvents,
-        })
-      ) {
-        shouldContinue = 'tool_error_followthrough'
-        toolErrorFollowthroughCount++
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({
-            toolErrorRecovery: toolErrorFollowthroughCount,
-            maxFollowthroughs: MAX_TOOL_ERROR_FOLLOWTHROUGHS,
-          }),
-        })}\n\n`)
-      }
-
-      // Generic fallback: tools were called but the model produced no substantive text.
-      // Triggers when: (a) text is empty, or (b) text is trivially short (< 150 chars)
-      // and multiple tools ran — the agent likely emitted a "I'll do X" preamble but
-      // never synthesized the tool outputs into a real response.
-      const skipToolSummaryForShortResponse = shouldSkipToolSummaryForShortResponse({
-        fullText,
-        toolEvents: streamedToolEvents,
-        isConnectorSession,
-      })
-      const textIsTrivial = !fullText.trim() || (
-        !skipToolSummaryForShortResponse
-        && !isConnectorSession && fullText.trim().length < 150
-        && (
-          streamedToolEvents.length >= 2
-          || likelyResearchSynthesisTask
-          || looksLikeOpenEndedDeliverableTask(message)
-        )
-      )
-      if (
-        !shouldContinue
-        && hasToolCalls
-        && textIsTrivial
-        && streamedToolEvents.length > 0
-        && !skipToolSummaryForShortResponse
-        && toolSummaryRetryCount < MAX_TOOL_SUMMARY_RETRIES
-      ) {
-        shouldContinue = 'tool_summary'
-        toolSummaryRetryCount++
-        logExecution(session.id, 'decision', `Tools called but response text is trivial (${fullText.trim().length} chars) — forcing summary continuation`, {
-          agentId: session.agentId,
-          detail: { toolEventCount: streamedToolEvents.length, toolSummaryRetryCount, textLength: fullText.trim().length },
-        })
-        const summaryReason = !fullText.trim() ? 'empty_response_after_tools' : 'trivial_preamble_after_tools'
-        write(`data: ${JSON.stringify({
-          t: 'status',
-          text: JSON.stringify({ toolSummary: toolSummaryRetryCount, reason: summaryReason }),
-        })}\n\n`)
+        shouldContinue = decision.type
+        if (decision.requiredToolReminderNames.length > 0) {
+          requiredToolReminderNames = decision.requiredToolReminderNames
+        }
       }
 
       if (!shouldContinue) break
@@ -2159,15 +1112,15 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       const continuationAssistantText = shouldContinue === 'memory_write_followthrough'
         ? ''
         : resolveContinuationAssistantText({
-            iterationText,
-            lastSegment,
+            iterationText: outcome?.iterationText ?? '',
+            lastSegment: state.lastSegment,
           })
 
       const continuationPrompt = buildContinuationPrompt({
         type: shouldContinue,
         message,
-        fullText,
-        toolEvents: streamedToolEvents,
+        fullText: state.fullText,
+        toolEvents: state.streamedToolEvents,
         requiredToolReminderNames,
         cwd: session.cwd,
       })
@@ -2179,21 +1132,14 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
           langchainMessages.push(assistantMessage)
           continuationMessages.push(assistantMessage)
         }
-        const settledSegment = extractSuggestions(lastSegment).clean.trim()
-        if (settledSegment) lastSettledSegment = settledSegment
+        state.settleSegment()
         const promptMessage = new HumanMessage({ content: continuationPrompt })
         langchainMessages.push(promptMessage)
         continuationMessages.push(promptMessage)
-        // Provide full conversation history since the agent has no checkpointer
-        // and each iteration starts with only the messages we explicitly pass.
         pendingGraphMessages = [...langchainMessages]
-        lastSegment = ''
       } else if (shouldContinue === 'transient') {
-        // Exponential backoff before retrying transient errors; respect Retry-After if present
-        const backoffMs = pendingRetryAfterMs
-          ? Math.min(pendingRetryAfterMs, 60_000)
-          : Math.min(3000 * Math.pow(2, transientRetryCount - 1) + Math.random() * 2000, 30_000)
-        pendingRetryAfterMs = null
+        const { count } = limits.getStatus('transient')
+        const backoffMs = Math.min(3000 * Math.pow(2, count - 1) + Math.random() * 2000, 30_000)
         await sleep(backoffMs)
       }
     }
@@ -2221,151 +1167,24 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     if (signal) signal.removeEventListener('abort', abortFromSignal)
   }
 
-  const emitLlmOutputHook = async (response: string) => {
-    const total = totalInputTokens + totalOutputTokens
-    await runCapabilityHook(
-      'llmOutput',
-      {
-        session,
-        runId,
-        provider: session.provider,
-        model: session.model,
-        assistantTexts: response ? [response] : [],
-        response,
-        usage: total > 0
-          ? {
-              input: totalInputTokens,
-              output: totalOutputTokens,
-              total,
-              estimatedCost: estimateCost(session.model, totalInputTokens, totalOutputTokens),
-            }
-          : undefined,
-      },
-      { enabledIds: sessionExtensions },
-    )
-  }
-
-  // Skip post-stream work if the client disconnected mid-stream
-  if (signal?.aborted) {
-    let finalResponse = resolveFinalStreamResponseText({
-      fullText,
-      lastSegment,
-      lastSettledSegment,
-      hasToolCalls,
-      toolEvents: streamedToolEvents,
-    })
-    if (shouldForceExternalServiceSummary({
-      userMessage: message,
-      finalResponse,
-      hasToolCalls,
-      toolEventCount: streamedToolEvents.length,
-    })) {
-      const forcedSummary = await buildForcedExternalServiceSummary({
-        llm,
-        userMessage: message,
-        fullText,
-        toolEvents: streamedToolEvents,
-      })
-      if (forcedSummary) {
-        fullText = fullText.trim() ? `${fullText.trim()}\n\n${forcedSummary}` : forcedSummary
-        finalResponse = forcedSummary
-      }
-    }
-    await emitLlmOutputHook(finalResponse)
-    await cleanup()
-    return { fullText, finalResponse, toolEvents: streamedToolEvents }
-  }
-
-  // Extract LLM-generated suggestions from the response and strip the tag
-  const extracted = extractSuggestions(fullText)
-  fullText = extracted.clean
-  if (!fullText.trim() && terminalToolResponse) fullText = terminalToolResponse
-  if (extracted.suggestions) {
-    write(`data: ${JSON.stringify({ t: 'md', text: JSON.stringify({ suggestions: extracted.suggestions }) })}\n\n`)
-  }
-
-  // Emit full thinking text as metadata so the client can persist it
-  if (accumulatedThinking) {
-    write(`data: ${JSON.stringify({ t: 'md', text: JSON.stringify({ thinking: accumulatedThinking }) })}\n\n`)
-  }
-
-  // Track cost — fall back to character-count estimation when providers
-  // don't surface token counts through LangChain's on_llm_end event.
-  if (totalInputTokens === 0 && totalOutputTokens === 0 && fullText) {
-    const historyText = history.map((m) => m.text || '').join('')
-    totalInputTokens = Math.ceil((message.length + historyText.length + prompt.length) / 4)
-    totalOutputTokens = Math.ceil(fullText.length / 4)
-  }
-  const totalTokens = totalInputTokens + totalOutputTokens
-  if (totalTokens > 0) {
-    const cost = estimateCost(session.model, totalInputTokens, totalOutputTokens)
-    const extensionDefinitionCosts = buildExtensionDefinitionCosts(tools, toolToExtensionMap)
-    const usageRecord: UsageRecord = {
-      sessionId: session.id,
-      messageIndex: history.length,
-      model: session.model,
-      provider: session.provider,
-      inputTokens: totalInputTokens,
-      outputTokens: totalOutputTokens,
-      totalTokens,
-      estimatedCost: cost,
-      timestamp: Date.now(),
-      durationMs: Date.now() - startTs,
-      extensionDefinitionCosts,
-      extensionInvocations: extensionInvocations.length > 0 ? extensionInvocations : undefined,
-    }
-    appendUsage(session.id, usageRecord)
-    // Send usage metadata to client
-    write(`data: ${JSON.stringify({
-      t: 'md',
-      text: JSON.stringify({ usage: { inputTokens: totalInputTokens, outputTokens: totalOutputTokens, totalTokens, estimatedCost: cost } }),
-    })}\n\n`)
-  }
-
-  // If tools were called, finalResponse is the text from the last LLM turn only.
-  // Fall back to fullText if the last segment is empty (e.g. agent ended on a tool call
-  // with no summary text).
-  // Strip suggestions tag from lastSegment too (connector delivery)
-  let finalResponse = resolveFinalStreamResponseText({
-    fullText,
-    lastSegment,
-    lastSettledSegment,
-    hasToolCalls,
-    toolEvents: streamedToolEvents,
+  // -------------------------------------------------------------------------
+  // Finalization
+  // -------------------------------------------------------------------------
+  return finalizeStreamResult({
+    state,
+    session,
+    message,
+    write,
+    llm,
+    prompt,
+    tools,
+    toolToExtensionMap,
+    history,
+    sessionExtensions,
+    startTs,
+    signal,
+    cleanup,
+    runId,
+    classification,
   })
-  if (shouldForceExternalServiceSummary({
-    userMessage: message,
-    finalResponse,
-    hasToolCalls,
-    toolEventCount: streamedToolEvents.length,
-  })) {
-    const forcedSummary = await buildForcedExternalServiceSummary({
-      llm,
-      userMessage: message,
-      fullText,
-      toolEvents: streamedToolEvents,
-    })
-    if (forcedSummary) {
-      fullText = fullText.trim() ? `${fullText.trim()}\n\n${forcedSummary}` : forcedSummary
-      finalResponse = forcedSummary
-    }
-  }
-
-  await emitLlmOutputHook(finalResponse)
-
-  await runCapabilityHook('afterAgentComplete', { session, response: fullText }, { enabledIds: sessionExtensions })
-
-  // OpenClaw auto-sync: push memory if enabled
-  try {
-    const { loadSyncConfig, pushMemoryToOpenClaw } = await import('@/lib/server/openclaw/sync')
-    const syncConfig = loadSyncConfig()
-    if (syncConfig.autoSyncMemory) {
-      pushMemoryToOpenClaw(session.agentId || undefined)
-    }
-  } catch { /* OpenClaw sync not available — ignore */ }
-
-  // Clean up browser and other session resources
-  await cleanup()
-
-  return { fullText, finalResponse, toolEvents: streamedToolEvents }
 }

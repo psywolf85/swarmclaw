@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import crypto from 'node:crypto'
 import { DATA_DIR } from '../data-dir'
@@ -17,13 +18,13 @@ export interface OpenClawSyncConfig {
 export function resolveOpenClawWorkspace(): string {
   const settings = loadSettings() as AppSettings
   if (settings.openclawWorkspacePath) {
-    const resolved = settings.openclawWorkspacePath.replace(/^~/, process.env.HOME || '')
+    const resolved = settings.openclawWorkspacePath.replace(/^~/, os.homedir())
     if (fs.existsSync(resolved)) return resolved
   }
-  const home = process.env.HOME || process.env.USERPROFILE || ''
+  const home = os.homedir()
   const override = process.env.OPENCLAW_STATE_DIR?.trim() || process.env.CLAWDBOT_STATE_DIR?.trim()
   if (override) {
-    const resolved = path.resolve(override.replace(/^~/, home))
+    const resolved = path.resolve(override.replace(/^~/, os.homedir()))
     if (fs.existsSync(resolved)) return resolved
   }
   const newDir = path.join(home, '.openclaw')
