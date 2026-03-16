@@ -5,11 +5,9 @@ import { streamOpenAiChat } from './openai'
 import { streamOllamaChat } from './ollama'
 import { streamAnthropicChat } from './anthropic'
 import { streamOpenClawChat } from './openclaw'
-import { errorMessage } from '../shared-utils'
-import { sleep, jitteredBackoff } from '@/lib/shared-utils'
+import { errorMessage, sleep, jitteredBackoff } from '@/lib/shared-utils'
+import { classifyProviderError } from './error-classification'
 import type { ProviderInfo, ProviderConfig as CustomProviderConfig, ProviderType } from '../../types'
-
-const RETRYABLE_STATUS_CODES = [401, 429, 500, 502, 503]
 
 export interface ProviderHandler {
   streamChat: (opts: StreamChatOptions) => Promise<string>
@@ -426,26 +424,19 @@ export async function streamChatWithFailover(
       return result // success
     } catch (err: unknown) {
       lastError = err
-      const errObj = err as Record<string, unknown>
-      const statusCode = (typeof errObj?.status === 'number' ? errObj.status : typeof errObj?.statusCode === 'number' ? errObj.statusCode : 0) as number
+      const classified = classifyProviderError(err)
       const errMessage = errorMessage(err)
-      const isRetryable = RETRYABLE_STATUS_CODES.includes(statusCode)
-        || errMessage?.includes('rate limit')
-        || errMessage?.includes('Rate limit')
-        || errMessage?.includes('429')
-        || errMessage?.includes('401')
+      if (!classified.retryable && classified.reason !== 'auth') throw err
+      if (classified.reason === 'auth_permanent') throw err
 
-      if (isRetryable && i < credentialIds.length - 1) {
-        console.log(`[failover] Credential ${credId} failed (${statusCode || errMessage}), trying fallback...`)
-        // Send a metadata event to inform the client
+      if (i < credentialIds.length - 1) {
+        console.log(`[failover] Credential ${credId} failed (${classified.reason}: ${errMessage?.slice(0, 80)}), trying fallback...`)
         opts.write(`data: ${JSON.stringify({
           t: 'md',
           text: JSON.stringify({ failover: { from: credId, reason: errMessage?.slice(0, 100) } }),
         })}\n\n`)
-        // Exponential backoff for rate-limit / server errors (skip for auth rotation)
-        if (statusCode !== 401) {
-          const delay = jitteredBackoff(500, i, 8000)
-          await sleep(delay)
+        if (classified.reason !== 'auth') {
+          await sleep(classified.suggestedBackoffMs || jitteredBackoff(500, i, 8000))
         }
         continue
       }
