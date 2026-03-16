@@ -1,6 +1,6 @@
 import { StateCreator } from 'zustand'
 import type { AppState } from '../use-app-store'
-import type { AppView, FleetFilter } from '../../types'
+import type { Agent, AppView, FleetFilter } from '../../types'
 import { safeStorageGet, safeStorageSet } from '@/lib/app/safe-storage'
 
 export interface UiSlice {
@@ -83,18 +83,22 @@ export interface UiSlice {
   setEditingProjectId: (id: string | null) => void
   activeProjectFilter: string | null
   setActiveProjectFilter: (id: string | null) => void
+  projectDetailTab: 'overview' | 'work' | 'operations' | 'activity'
+  setProjectDetailTab: (tab: 'overview' | 'work' | 'operations' | 'activity') => void
   showTrash: boolean
   setShowTrash: (show: boolean) => void
   inspectorOpen: boolean
   setInspectorOpen: (open: boolean) => void
-  inspectorTab: 'overview' | 'files' | 'skills' | 'automations' | 'advanced'
-  setInspectorTab: (tab: 'overview' | 'files' | 'skills' | 'automations' | 'advanced') => void
+  inspectorTab: 'dashboard' | 'config' | 'files'
+  setInspectorTab: (tab: 'dashboard' | 'config' | 'files') => void
   fleetFilter: FleetFilter
   setFleetFilter: (filter: FleetFilter) => void
   chatFilter: 'all' | 'active' | 'recent'
   setChatFilter: (filter: 'all' | 'active' | 'recent') => void
   walletPanelAgentId: string | null
   setWalletPanelAgentId: (id: string | null) => void
+  agentPrefill: Partial<Agent> | null
+  setAgentPrefill: (prefill: Partial<Agent> | null) => void
 }
 
 export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get) => ({
@@ -176,17 +180,21 @@ export const createUiSlice: StateCreator<AppState, [], [], UiSlice> = (set, get)
   editingProjectId: null,
   setEditingProjectId: (id) => set({ editingProjectId: id }),
   activeProjectFilter: null,
-  setActiveProjectFilter: (id) => set({ activeProjectFilter: id }),
+  setActiveProjectFilter: (id) => set({ activeProjectFilter: id, projectDetailTab: 'overview' }),
+  projectDetailTab: 'overview' as const,
+  setProjectDetailTab: (tab) => set({ projectDetailTab: tab }),
   showTrash: false,
   setShowTrash: (show) => set({ showTrash: show }),
   inspectorOpen: false,
   setInspectorOpen: (open) => set({ inspectorOpen: open }),
-  inspectorTab: 'overview',
+  inspectorTab: 'dashboard',
   setInspectorTab: (tab) => set({ inspectorTab: tab }),
   fleetFilter: (safeStorageGet('sc_fleet_filter') as FleetFilter) || 'all',
   setFleetFilter: (filter) => { safeStorageSet('sc_fleet_filter', filter); set({ fleetFilter: filter }) },
   chatFilter: 'all' as const,
   setChatFilter: (filter) => set({ chatFilter: filter }),
   walletPanelAgentId: null,
-  setWalletPanelAgentId: (id) => set({ walletPanelAgentId: id })
+  setWalletPanelAgentId: (id) => set({ walletPanelAgentId: id }),
+  agentPrefill: null,
+  setAgentPrefill: (prefill) => set({ agentPrefill: prefill })
 })
