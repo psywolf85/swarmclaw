@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { relativeDate, STATUS_STYLES } from '../project-utils'
-import type { Agent, BoardTask, Mission, Project } from '@/types'
+import type { Agent, BoardTask, Mission } from '@/types'
 
 type SortKey = 'status' | 'updated' | 'agent'
 type StatusFilter = 'all' | 'backlog' | 'queued' | 'running' | 'completed' | 'failed'
@@ -14,11 +14,10 @@ const STATUS_PRIORITY: Record<string, number> = {
 }
 
 interface WorkTabProps {
-  project: Project
   missions: Mission[]
 }
 
-export function WorkTab({ project, missions }: WorkTabProps) {
+export function WorkTab({ missions }: WorkTabProps) {
   const tasks = useAppStore((s) => s.tasks) as Record<string, BoardTask>
   const agents = useAppStore((s) => s.agents) as Record<string, Agent>
   const activeProjectFilter = useAppStore((s) => s.activeProjectFilter)
@@ -87,9 +86,6 @@ export function WorkTab({ project, missions }: WorkTabProps) {
     }
     return counts
   }, [missions])
-
-  // Suppress unused warning — project prop is part of the public interface
-  void project
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-6 space-y-4">

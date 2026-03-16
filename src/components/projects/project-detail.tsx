@@ -110,7 +110,7 @@ export function ProjectDetail() {
           <OverviewTab project={project} missions={projectMissions} />
         )}
         {activeTab === 'work' && (
-          <WorkTab project={project} missions={projectMissions} />
+          <WorkTab missions={projectMissions} />
         )}
         {activeTab === 'operations' && (
           <OperationsTab project={project} />
