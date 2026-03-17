@@ -141,7 +141,7 @@ export default function UsagePage() {
 
   useEffect(() => { loadTaskMetrics() }, [loadTaskMetrics])
 
-  useWs('usage', loadData, 30_000)
+  useWs('usage', loadData, 60_000)
   useWs('tasks', loadTaskMetrics, 15_000)
 
   const completionRate = computeCompletionRate(tasks)

@@ -21,6 +21,7 @@ export type ContinuationType =
   | 'memory_write_followthrough'
   | 'recursion'
   | 'transient'
+  | 'context_overflow'
   | 'required_tool'
   | 'attachment_followthrough'
   | 'execution_kickoff_followthrough'
@@ -382,6 +383,24 @@ export function renderToolEvidence(events: MessageToolEvent[]): string {
       event.output ? `Output: ${event.output.slice(0, 1200)}` : '',
     ].filter(Boolean).join('\n'))
     .join('\n\n')
+}
+
+// ---------------------------------------------------------------------------
+// Tool usage summary for loop recovery
+// ---------------------------------------------------------------------------
+
+function buildToolUsageSummary(toolEvents: MessageToolEvent[]): string {
+  const counts = new Map<string, number>()
+  for (const event of toolEvents) {
+    const name = event.name || 'unknown'
+    counts.set(name, (counts.get(name) || 0) + 1)
+  }
+  if (counts.size === 0) return ''
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 8)
+    .map(([name, count]) => `${name}(${count})`)
+    .join(', ')
 }
 
 // ---------------------------------------------------------------------------
@@ -791,8 +810,11 @@ export function buildContinuationPrompt(params: {
 
     case 'coordinator_synthesis':
       return [
-        'Your delegated subtasks have completed. Synthesize the results from all workers into a single coherent response.',
-        'Address the user\'s original request directly. Do not repeat raw tool outputs — summarize, combine, and present the findings clearly.',
+        'Your delegated subtasks have completed. Evaluate the results:',
+        '1. Review each worker\'s output for completeness and quality',
+        '2. Identify any gaps — if critical information is missing, consider re-delegating',
+        '3. Synthesize the results into a single coherent response that directly addresses the user\'s request',
+        'Do not repeat raw tool outputs — summarize, combine, and present the findings clearly.',
         params.fullText.trim() ? `Your partial response so far: "${params.fullText.trim().slice(0, 300)}"` : '',
       ].filter(Boolean).join('\n')
 
@@ -808,17 +830,24 @@ export function buildContinuationPrompt(params: {
       const hint = freqTool
         ? getToolFrequencyHint(freqTool, params.sessionExtensions ?? [])
         : 'Prioritize the most important remaining steps and try to accomplish more per tool call.'
+      const toolSummary = buildToolUsageSummary(params.toolEvents)
       return [
         '[Tool Frequency Limit Recovery]',
+        `Original request: "${params.message.slice(0, 300)}"`,
         freqTool
-          ? `You reached the per-tool call frequency limit for "${freqTool}". Your tool counters have been reset.`
-          : 'You reached the per-tool call frequency limit. Your tool counters have been reset.',
-        'Continue from where you left off — do not repeat completed work.',
+          ? `You reached the per-tool call limit for "${freqTool}". Your counters have been reset ONE FINAL TIME.`
+          : 'You reached the per-tool call frequency limit. Your counters have been reset ONE FINAL TIME.',
+        toolSummary ? `Tools used so far: ${toolSummary}` : '',
+        '',
+        'CRITICAL: Do NOT repeat the same approach. Either:',
+        '1. Try a fundamentally different strategy to accomplish the goal',
+        '2. Deliver your partial results and explain what remains',
+        `You MUST NOT call ${freqTool ? `"${freqTool}"` : 'the same tool'} more than 10 more times.`,
         hint,
-        'You have a limited number of these resets, so prioritize the most important remaining steps.',
-      ].join('\n')
+      ].filter(Boolean).join('\n')
     }
 
+    case 'context_overflow':
     case 'transient':
     case false:
       return null

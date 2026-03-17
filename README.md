@@ -190,6 +190,22 @@ The building blocks are the same: **agents, tools, memory, delegation, schedules
 
 ## Release Notes
 
+### v1.1.8 Highlights
+
+- **Agent live status**: real-time `/agents/:id/status` endpoint exposes goal, progress, and plan steps; org chart detail panel consumes it via `useAgentLiveStatus` hook.
+- **Learned skills lifecycle**: promote, dismiss, and delete learned skills via `/learned-skills/:id`; `/skill-review-counts` provides badge counts for the skills workspace.
+- **Gemini CLI provider**: Google Gemini CLI joins the provider roster alongside claude-cli and codex-cli, with shared CLI utilities factored into `cli-utils.ts`.
+- **Peer query & team context tools**: new session tools let agents query peers and access team context during conversations.
+- **Team resolution**: dedicated `team-resolution.ts` module resolves agent teams for delegation routing.
+- **Org chart activity feed**: timeline feed component and delegation bubble visualization for the org chart view.
+- **Skills workspace improvements**: expanded skills management UI with review-ready badges.
+- **Cost trend chart**: new dashboard component for cost visualization.
+- **Streaming fix**: text no longer gets stuck on the thinking indicator.
+- **Delegation normalization**: `delegationEnabled` now derived from agent role, removed from starter kit templates.
+- **Chat execution refinements**: improved continuation limits, post-stream finalization, and stream continuation.
+- **Memory and storage improvements**: memory tier management, consolidation enhancements, and storage cache updates.
+- **WebSocket and provider health**: improved WS client handling, delegation edge state, and provider health monitoring.
+
 ### v1.1.7 Highlights
 
 - **Projects page redesign**: tabbed navigation (Overview, Work, Operations, Activity) with health grid, sortable task list, and timeline feed.

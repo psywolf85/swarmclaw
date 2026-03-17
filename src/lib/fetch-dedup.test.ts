@@ -22,15 +22,19 @@ describe('dedupedFetch', () => {
       return new Promise<Response>((resolve) => {
         setTimeout(() => resolve(new Response('ok', { status: 200 })), delay)
       })
-    }) as typeof fetch
+    }) as unknown as typeof fetch
   }
 
-  it('GET request: returns same promise for concurrent identical URLs', async () => {
+  it('GET request: deduplicates concurrent identical URLs and both bodies are consumable', async () => {
     mockFetch(50)
     const p1 = dedupedFetch('http://test/a')
     const p2 = dedupedFetch('http://test/a')
-    assert.equal(p1, p2)
-    await p1
+    // Cloned responses are different promise references
+    const [r1, r2] = await Promise.all([p1, p2])
+    // Both callers can independently consume the body
+    assert.equal(await r1.text(), 'ok')
+    assert.equal(await r2.text(), 'ok')
+    // Only one actual fetch was made
     assert.equal(callCount, 1)
   })
 

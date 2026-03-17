@@ -46,7 +46,7 @@ describe('ToolLoopTracker', () => {
   })
 
   it('detects ping-pong between two tools', () => {
-    const tracker = new ToolLoopTracker({ pingPongWarn: 2, pingPongCritical: 4 })
+    const tracker = new ToolLoopTracker({ pingPongWarn: 2, pingPongCritical: 4, repeatWarn: 100, repeatCritical: 100, pollWarn: 100, pollCritical: 100 })
     // Simulate A-B-A-B with identical outputs
     for (let i = 0; i < 2; i++) {
       tracker.record('web_search', { query: 'find it' }, 'no results found')
@@ -111,6 +111,49 @@ describe('ToolLoopTracker', () => {
     assert.ok(preview)
     assert.equal(preview?.severity, 'warning')
     assert.equal(preview?.detector, 'tool_frequency')
+  })
+
+  it('detects output stagnation when many calls produce identical output', () => {
+    const tracker = new ToolLoopTracker({ repeatWarn: 100, repeatCritical: 100, toolFrequencyWarn: 100, toolFrequencyCritical: 100 })
+    for (let i = 0; i < 7; i++) {
+      assert.equal(tracker.record(`tool_${i}`, { input: `arg_${i}` }, 'Connection refused'), null)
+    }
+    const result = tracker.record('tool_7', { input: 'arg_7' }, 'Connection refused')
+    assert.ok(result)
+    assert.equal(result.detector, 'output_stagnation')
+    assert.equal(result.severity, 'critical')
+  })
+
+  it('detects output stagnation warning when 6 of 8 calls match', () => {
+    const tracker = new ToolLoopTracker({ repeatWarn: 100, repeatCritical: 100, toolFrequencyWarn: 100, toolFrequencyCritical: 100 })
+    for (let i = 0; i < 6; i++) {
+      tracker.record(`tool_${i}`, { input: `arg_${i}` }, 'same error output')
+    }
+    tracker.record('tool_6', { input: 'arg_6' }, 'different output A')
+    const result = tracker.record('tool_7', { input: 'arg_7' }, 'different output B')
+    assert.ok(result)
+    assert.equal(result.detector, 'output_stagnation')
+    assert.equal(result.severity, 'warning')
+  })
+
+  it('detects error convergence when most calls return errors', () => {
+    const tracker = new ToolLoopTracker({ repeatWarn: 100, repeatCritical: 100, toolFrequencyWarn: 100, toolFrequencyCritical: 100 })
+    tracker.record('shell', { cmd: 'test1' }, 'ok result')
+    for (let i = 0; i < 5; i++) {
+      tracker.record(`tool_${i}`, { input: `arg_${i}` }, `Error: ECONNREFUSED ${i}`)
+    }
+    const result = tracker.record('tool_5', { input: 'arg_5' }, 'Error: timeout on request')
+    if (result) {
+      assert.equal(result.detector, 'error_convergence')
+    }
+  })
+
+  it('does not fire stagnation for varied outputs', () => {
+    const tracker = new ToolLoopTracker({ repeatWarn: 100, repeatCritical: 100, toolFrequencyWarn: 100, toolFrequencyCritical: 100 })
+    for (let i = 0; i < 10; i++) {
+      const result = tracker.record(`tool_${i}`, { input: `arg_${i}` }, `unique result ${i}`)
+      assert.equal(result, null)
+    }
   })
 })
 

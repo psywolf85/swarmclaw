@@ -24,7 +24,7 @@ export function DaemonIndicator() {
   }
 
   useEffect(() => { fetchStatus() }, [])
-  useWs('daemon', fetchStatus, 30_000)
+  useWs('daemon', fetchStatus, 60_000)
 
   const toggle = async () => {
     try {

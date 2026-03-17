@@ -1,49 +1,22 @@
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
 import { spawn } from 'child_process'
 import type { StreamChatOptions } from './index'
 import { log } from '../server/logger'
 import { loadRuntimeSettings } from '@/lib/server/runtime/runtime-settings'
-
-function findOpencode(): string {
-  const locations = [
-    path.join(os.homedir(), '.local/bin/opencode'),
-    '/usr/local/bin/opencode',
-    '/opt/homebrew/bin/opencode',
-  ]
-  // Check nvm paths
-  const nvmDir = process.env.NVM_DIR || path.join(os.homedir(), '.nvm')
-  try {
-    const versions = fs.readdirSync(path.join(nvmDir, 'versions/node'))
-    for (const v of versions) {
-      locations.push(path.join(nvmDir, 'versions/node', v, 'bin/opencode'))
-    }
-  } catch { /* nvm not installed */ }
-  for (const loc of locations) {
-    if (fs.existsSync(loc)) {
-      log.info('opencode-cli', `Found opencode at: ${loc}`)
-      return loc
-    }
-  }
-  log.warn('opencode-cli', 'opencode binary not found in known locations, falling back to PATH')
-  return 'opencode'
-}
-
-const OPENCODE = findOpencode()
-
-function extractSessionId(raw: unknown): string | null {
-  if (!raw) return null
-  const text = String(raw).trim()
-  return text ? text : null
-}
+import { resolveCliBinary, buildCliEnv, probeCliAuth, attachAbortHandler } from './cli-utils'
 
 /**
  * OpenCode CLI provider — spawns `opencode run <message> --format json` for non-interactive usage.
  * Tracks `session.opencodeSessionId` from streamed JSON events to support multi-turn continuity.
  */
-export function streamOpenCodeCliChat({ session, message, imagePath, systemPrompt, write, active }: StreamChatOptions): Promise<string> {
+export function streamOpenCodeCliChat({ session, message, imagePath, systemPrompt, write, active, signal }: StreamChatOptions): Promise<string> {
   const processTimeoutMs = loadRuntimeSettings().cliProcessTimeoutMs
+  const binary = resolveCliBinary('opencode')
+  if (!binary) {
+    const msg = 'OpenCode CLI not found. Install it and ensure it is on your PATH.'
+    write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
+    return Promise.resolve('')
+  }
+
   const cwd = session.cwd || process.cwd()
   const promptParts: string[] = []
   if (systemPrompt && !session.opencodeSessionId) {
@@ -52,14 +25,19 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
   promptParts.push(message)
   const prompt = promptParts.join('\n\n')
 
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    TERM: 'dumb',
-    NO_COLOR: '1',
-  }
+  const env = buildCliEnv()
+
   // Set model via env if specified
   if (session.model) {
     env.OPENCODE_MODEL = session.model
+  }
+
+  // Auth probe
+  const auth = probeCliAuth(binary, 'opencode', env, cwd)
+  if (!auth.authenticated) {
+    log.error('opencode-cli', auth.errorMessage || 'Auth failed')
+    write(`data: ${JSON.stringify({ t: 'err', text: auth.errorMessage || 'OpenCode CLI is not authenticated.' })}\n\n`)
+    return Promise.resolve('')
   }
 
   const args = ['run', prompt, '--format', 'json']
@@ -67,7 +45,7 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
   if (session.model) args.push('--model', session.model)
   if (imagePath) args.push('--file', imagePath)
 
-  log.info('opencode-cli', `Spawning: ${OPENCODE}`, {
+  log.info('opencode-cli', `Spawning: ${binary}`, {
     args: args.map((a, i) => {
       if (i === 1) return `(${prompt.length} chars)`
       if (a.length > 120) return `${a.slice(0, 120)}...`
@@ -79,7 +57,7 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
     resumeSessionId: session.opencodeSessionId || null,
   })
 
-  const proc = spawn(OPENCODE, args, {
+  const proc = spawn(binary, args, {
     cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -88,6 +66,7 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
 
   log.info('opencode-cli', `Process spawned: pid=${proc.pid}`)
   active.set(session.id, proc)
+  attachAbortHandler(proc, signal)
 
   let fullResponse = ''
   let stderrText = ''
@@ -105,21 +84,24 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
       const trimmed = line.trim()
       if (!trimmed) continue
       try {
-        const ev = JSON.parse(trimmed) as any
+        const ev = JSON.parse(trimmed) as Record<string, unknown>
         eventCount += 1
-        const discoveredSessionId = extractSessionId(ev?.sessionID ?? ev?.sessionId)
-        if (discoveredSessionId) session.opencodeSessionId = discoveredSessionId
+        const sid = typeof ev.sessionID === 'string' ? ev.sessionID.trim()
+          : typeof ev.sessionId === 'string' ? ev.sessionId.trim()
+            : null
+        if (sid) session.opencodeSessionId = sid
 
-        if (ev?.type === 'text' && typeof ev?.part?.text === 'string') {
-          fullResponse += ev.part.text
-          write(`data: ${JSON.stringify({ t: 'd', text: ev.part.text })}\n\n`)
+        if (ev.type === 'text' && typeof (ev.part as Record<string, unknown>)?.text === 'string') {
+          const partText = (ev.part as Record<string, unknown>).text as string
+          fullResponse += partText
+          write(`data: ${JSON.stringify({ t: 'd', text: partText })}\n\n`)
           continue
         }
 
-        if (ev?.type === 'error') {
-          const msg = typeof ev?.error === 'string'
+        if (ev.type === 'error') {
+          const msg = typeof ev.error === 'string'
             ? ev.error
-            : typeof ev?.message === 'string'
+            : typeof ev.message === 'string'
               ? ev.message
               : 'Unknown OpenCode event error'
           eventErrors.push(msg)
@@ -142,13 +124,13 @@ export function streamOpenCodeCliChat({ session, message, imagePath, systemPromp
   })
 
   return new Promise((resolve) => {
-    proc.on('close', (code, signal) => {
-      log.info('opencode-cli', `Process closed: code=${code} signal=${signal} events=${eventCount} response=${fullResponse.length}chars`)
+    proc.on('close', (code, sig) => {
+      log.info('opencode-cli', `Process closed: code=${code} signal=${sig} events=${eventCount} response=${fullResponse.length}chars`)
       active.delete(session.id)
       if ((code ?? 0) !== 0 && !fullResponse.trim() && eventErrors.length === 0) {
         const msg = stderrText.trim()
-          ? `OpenCode CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${stderrText.trim().slice(0, 1200)}`
-          : `OpenCode CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''} and returned no output.`
+          ? `OpenCode CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}: ${stderrText.trim().slice(0, 1200)}`
+          : `OpenCode CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''} and returned no output.`
         write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
       }
       resolve(fullResponse.trim())

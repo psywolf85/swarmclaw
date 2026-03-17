@@ -3,7 +3,7 @@ import type { GoalContract, Message, MessageToolEvent, Session } from '@/types'
 import { mergeGoalContracts, parseGoalContractFromText, parseMainLoopPlan, parseMainLoopReview } from '@/lib/server/agents/autonomy-contract'
 import { assessAutonomyRun } from '@/lib/server/autonomy/supervisor-reflection'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
-import { loadSessions, loadSettings, loadPersistedMainLoopState, upsertPersistedMainLoopState, deletePersistedMainLoopState } from '@/lib/server/storage'
+import { loadAgents, loadSessions, loadSettings, loadPersistedMainLoopState, upsertPersistedMainLoopState, deletePersistedMainLoopState } from '@/lib/server/storage'
 import { buildMissionHeartbeatPrompt as buildMissionHeartbeatPromptFromMission, getMissionForSession } from '@/lib/server/missions/mission-service'
 
 const LEGACY_META_LINE_RE = /\[(?:MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]\s*(\{[^\n]*\})?/i
@@ -12,7 +12,7 @@ const MAX_PENDING_EVENTS = 16
 const MAX_TIMELINE_ITEMS = 40
 const MAX_WORKING_MEMORY_NOTES = 12
 const DEFAULT_FOLLOWUP_DELAY_MS = 1500
-const DEFAULT_MAX_FOLLOWUP_CHAIN = 3
+const DEFAULT_MAX_FOLLOWUP_CHAIN = 6
 const MAX_LIFETIME_ITERATIONS = 200
 
 export interface MainLoopState {
@@ -21,6 +21,7 @@ export interface MainLoopState {
   summary: string | null
   nextAction: string | null
   planSteps: string[]
+  completedPlanSteps: string[]
   currentPlanStep: string | null
   reviewNote: string | null
   reviewConfidence: number | null
@@ -138,6 +139,7 @@ function defaultState(): MainLoopState {
     summary: null,
     nextAction: null,
     planSteps: [],
+    completedPlanSteps: [],
     currentPlanStep: null,
     reviewNote: null,
     reviewConfidence: null,
@@ -323,6 +325,7 @@ function normalizeState(input?: Partial<MainLoopState> | null): MainLoopState {
     if (typeof input.summary === 'string' || input.summary === null) next.summary = input.summary
     if (typeof input.nextAction === 'string' || input.nextAction === null) next.nextAction = input.nextAction
     if (Array.isArray(input.planSteps)) next.planSteps = [...input.planSteps]
+    if (Array.isArray(input.completedPlanSteps)) next.completedPlanSteps = [...input.completedPlanSteps]
     if (typeof input.currentPlanStep === 'string' || input.currentPlanStep === null) next.currentPlanStep = input.currentPlanStep
     if (typeof input.reviewNote === 'string' || input.reviewNote === null) next.reviewNote = input.reviewNote
     if (typeof input.reviewConfidence === 'number' || typeof input.reviewConfidence === 'string' || input.reviewConfidence === null) {
@@ -667,9 +670,14 @@ function summarizeSkillBlocker(blocker: MainLoopState['skillBlocker']): string {
   return lines.filter(Boolean).join('\n')
 }
 
-function extractWaitSignal(text: string, toolEvents: MessageToolEvent[]): boolean {
-  const haystack = `${text}\n${toolEvents.map((event) => `${event.name} ${event.input || ''} ${event.output || ''}`).join('\n')}`
-  return /\b(wait for|waiting for|approval|human reply|mailbox|watch job|pending approval)\b/i.test(haystack)
+function extractWaitSignal(text: string): boolean {
+  // Only scan agent response text — tool outputs cause false positives
+  // (e.g. "wait for the build to finish" in a build tool output)
+  const haystack = text || ''
+  // Strong signals: explicit external-wait phrases
+  if (/\b(pending approval|human reply|waiting for.*\b(user|human|approval|external input|review|sign-?off))\b/i.test(haystack)) return true
+  if (/\b(watch job|mailbox)\b/i.test(haystack)) return true
+  return false
 }
 
 function hasSuccessfulChatDelivery(toolEvents: MessageToolEvent[]): boolean {
@@ -681,13 +689,22 @@ function hasSuccessfulChatDelivery(toolEvents: MessageToolEvent[]): boolean {
   ))
 }
 
-function followupLimit(): number {
+function followupLimit(sessionId?: string): number {
   const settings = loadSettings()
-  const raw = settings.maxFollowupChain
+  let raw: unknown = settings.maxFollowupChain
+  if (sessionId) {
+    const sessions = loadSessions()
+    const session = sessions[sessionId]
+    if (session?.agentId) {
+      const agents = loadAgents()
+      const agent = agents[String(session.agentId)]
+      if (typeof agent?.maxFollowupChain === 'number') raw = agent.maxFollowupChain
+    }
+  }
   const parsed = typeof raw === 'number'
     ? raw
     : typeof raw === 'string'
-      ? Number.parseInt(raw, 10)
+      ? Number.parseInt(raw as string, 10)
       : Number.NaN
   if (!Number.isFinite(parsed)) return DEFAULT_MAX_FOLLOWUP_CHAIN
   return Math.max(0, Math.min(12, Math.trunc(parsed)))
@@ -735,8 +752,12 @@ export function buildMainLoopHeartbeatPrompt(session: unknown, fallbackPrompt: s
     ? mergeGoalContracts(state.goalContract, latestExternalGoal.goalContract)
     : state.goalContract
 
+  const completedSet = new Set(state.completedPlanSteps.map((s) => s.toLowerCase()))
   const planLines = state.planSteps.length > 0
-    ? state.planSteps.slice(0, 5).map((step, index) => `${index + 1}. ${step}`).join('\n')
+    ? state.planSteps.slice(0, 8).map((step, index) => {
+      const isDone = completedSet.has(step.toLowerCase())
+      return `${index + 1}. ${isDone ? '[DONE] ' : ''}${step}`
+    }).join('\n')
     : ''
   const boundedFallbackPrompt = cleanMultiline(fallbackPrompt, 500)
   const boundedSummary = cleanMultiline(state.summary, 500)
@@ -761,7 +782,7 @@ export function buildMainLoopHeartbeatPrompt(session: unknown, fallbackPrompt: s
     'Do not infer or repeat old tasks from prior heartbeats.',
     'Prefer taking the single highest-value next step over restating the plan. Do not repeat completed work.',
     'If you revise the plan, emit exactly one line like:',
-    '[MAIN_LOOP_PLAN]{"steps":["step 1","step 2"],"current_step":"step 1"}',
+    '[MAIN_LOOP_PLAN]{"steps":["step 1","step 2"],"current_step":"step 1","completed_steps":["step 0"]}',
     'After acting, emit exactly one review line like:',
     '[MAIN_LOOP_REVIEW]{"note":"what changed","confidence":0.72,"needs_replan":false}',
     'If you are actively progressing or you changed the plan, also emit [AGENT_HEARTBEAT_META] with goal/status/next_action.',
@@ -899,6 +920,10 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
 
   if (plan?.steps?.length) state.planSteps = plan.steps
   if (plan?.current_step) state.currentPlanStep = plan.current_step
+  if (plan?.completed_steps?.length) {
+    const merged = new Set([...state.completedPlanSteps, ...plan.completed_steps])
+    state.completedPlanSteps = [...merged].slice(0, 16)
+  }
   if (plan) state.lastPlannedAt = nowTs
 
   if (review?.note) state.reviewNote = review.note
@@ -929,7 +954,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
   state.missionTokens += Math.max(0, Math.trunc((input.inputTokens || 0) + (input.outputTokens || 0)))
   state.missionCostUsd += Math.max(0, Number(input.estimatedCost || 0))
   const cleanedResult = persistedText.trim()
-  const waitingForExternal = extractWaitSignal(resultText, toolEvents)
+  const waitingForExternal = extractWaitSignal(resultText)
   const gotTerminalAck = /^HEARTBEAT_OK$/i.test(cleanedResult) || /^NO_MESSAGE$/i.test(cleanedResult)
   const successfulChatDelivery = isDirectUserChat && !input.error && hasSuccessfulChatDelivery(toolEvents)
   const selectedSkillNote = summarizeUseSkillToolEvent(toolEvents)
@@ -986,7 +1011,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
   }
 
   const needsReplan = review?.needs_replan === true || ((review?.confidence ?? 1) < 0.45)
-  const limit = followupLimit()
+  const limit = followupLimit(input.sessionId)
 
   if (mission) {
     state.goal = cleanMultiline(mission.objective, 900)
@@ -1021,6 +1046,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
       state.nextAction = null
       state.currentPlanStep = null
       state.planSteps = []
+      state.completedPlanSteps = []
       state.paused = false
     }
   } else if (!input.internal) {
@@ -1039,7 +1065,7 @@ export function handleMainLoopRunResult(input: HandleMainLoopRunResultInput): Ma
       persistState(input.sessionId, capClamped)
       return null
     }
-    const shouldContinue = !!supervisorPrompt || needsReplan || state.status === 'progress' || (!!state.nextAction && toolNames.length > 0)
+    const shouldContinue = !!supervisorPrompt || needsReplan || state.status === 'progress' || !!state.nextAction
     if (shouldContinue && state.followupChainCount < limit) {
       state.followupChainCount += 1
       const message = supervisorPrompt

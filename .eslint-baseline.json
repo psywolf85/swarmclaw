@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "generatedAt": "2026-03-17T01:10:18.981Z",
-  "totalIssues": 450,
-  "uniqueIssues": 156,
+  "generatedAt": "2026-03-17T14:05:10.881Z",
+  "totalIssues": 442,
+  "uniqueIssues": 153,
   "issues": [
     {
       "filePath": "bin/worker-cmd.js",
@@ -488,24 +488,10 @@
       "count": 2
     },
     {
-      "filePath": "src/lib/providers/codex-cli.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 2
-    },
-    {
       "filePath": "src/lib/providers/openai.ts",
       "ruleId": "@typescript-eslint/ban-ts-comment",
       "severity": 2,
       "message": "Use \"@ts-expect-error\" instead of \"@ts-ignore\", as \"@ts-ignore\" will do nothing if the following line is error-free.",
-      "count": 1
-    },
-    {
-      "filePath": "src/lib/providers/opencode-cli.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
       "count": 1
     },
     {
@@ -663,13 +649,6 @@
       "count": 1
     },
     {
-      "filePath": "src/lib/server/embeddings.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 3
-    },
-    {
       "filePath": "src/lib/server/evm-swap.ts",
       "ruleId": "@typescript-eslint/no-unused-vars",
       "severity": 1,
@@ -744,7 +723,7 @@
       "ruleId": "@typescript-eslint/no-require-imports",
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
-      "count": 3
+      "count": 2
     },
     {
       "filePath": "src/lib/server/protocols/protocol-foreach.ts",
@@ -779,7 +758,7 @@
       "ruleId": "@typescript-eslint/no-require-imports",
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
-      "count": 4
+      "count": 3
     },
     {
       "filePath": "src/lib/server/protocols/protocol-step-processors.ts",

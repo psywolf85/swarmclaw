@@ -29,7 +29,7 @@ import { onNextIdleWindow } from '@/lib/server/runtime/idle-window'
 const SUCCESS_EVIDENCE_THRESHOLD = 2
 const FAILURE_EVIDENCE_THRESHOLD = 2
 const DEMOTION_FAILURE_THRESHOLD = 2
-const REVIEW_READY_SUCCESS_THRESHOLD = 3
+const REVIEW_READY_SUCCESS_THRESHOLD = 2
 const MAX_USER_MESSAGE_CHARS = 800
 
 const SUCCESS_STOPWORDS = new Set([

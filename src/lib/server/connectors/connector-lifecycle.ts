@@ -110,7 +110,7 @@ export async function startConnector(connectorId: string): Promise<void> {
   const pending = locks.get(connectorId)
   if (pending) {
     await Promise.race([pending, sleep(15_000)]).catch(() => {})
-    locks.delete(connectorId)
+    if (locks.get(connectorId) === pending) locks.delete(connectorId)
   }
 
   const op = withTimeout(_startConnectorImpl(connectorId), 30_000, 'Connector start timed out')

@@ -14,6 +14,7 @@ import {
   active,
 } from '@/lib/server/storage'
 import { getProvider } from '@/lib/providers'
+import { CONTEXT_OVERFLOW_RE } from '@/lib/providers/error-classification'
 import { estimateCost, checkAgentBudgetLimits } from '@/lib/server/cost'
 import { log } from '@/lib/server/logger'
 import { logExecution } from '@/lib/server/execution-log'
@@ -1160,6 +1161,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
           text: streamingPartialText,
           time: Date.now(),
           streaming: true,
+          runId: lifecycleRunId,
           thinking: thinkingText || undefined,
           toolEvents: persistedToolEvents.length ? persistedToolEvents : undefined,
         },
@@ -1393,7 +1395,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
         })
         fullResponse = result.finalResponse || result.fullText
       } else {
-        const directHistorySnapshot = isAutoRunNoHistory
+        let directHistorySnapshot = isAutoRunNoHistory
           ? (heartbeatLightContext ? [] : getSessionMessages(sessionId).slice(-6))
           : applyContextClearBoundary(getSessionMessages(sessionId))
         responseCacheInput = {
@@ -1441,7 +1443,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
             },
             { enabledIds: extensionsForRun },
           )
-          fullResponse = await provider.handler.streamChat({
+          const doStreamChat = () => provider.handler.streamChat({
             session: sessionForRun,
             message: effectiveMessage,
             imagePath: resolvedImagePath,
@@ -1458,6 +1460,22 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
             onUsage: (u) => { directUsage.inputTokens = u.inputTokens; directUsage.outputTokens = u.outputTokens; directUsage.received = true },
             signal: abortController.signal,
           })
+          try {
+            fullResponse = await doStreamChat()
+          } catch (streamErr: unknown) {
+            // On context overflow, reduce history and retry once
+            const streamErrMsg = toErrorMessage(streamErr)
+            const streamStatus = (streamErr as Record<string, unknown>)?.status
+            if (typeof streamStatus === 'number' && streamStatus === 400 && CONTEXT_OVERFLOW_RE.test(streamErrMsg)) {
+              log.warn('chat-run', `Context overflow in direct path, reducing history and retrying`, {
+                sessionId, error: streamErrMsg, historyLen: directHistorySnapshot.length,
+              })
+              directHistorySnapshot = directHistorySnapshot.slice(-10)
+              fullResponse = await doStreamChat()
+            } else {
+              throw streamErr
+            }
+          }
           await runCapabilityHook(
             'llmOutput',
             {
@@ -1489,7 +1507,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
       endLlmPerf({ error: true })
       errorMessage = toErrorMessage(err)
       const failureText = errorMessage || 'Run failed.'
-      markProviderFailure(providerType, failureText)
+      markProviderFailure(providerType, failureText, sessionForRun.credentialId)
       emit({ t: 'err', text: failureText })
       log.error('chat-run', `Run failed for session ${sessionId}`, {
         runId,
@@ -1509,7 +1527,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
   await partialPersistChain.catch(() => {})
 
   if (!errorMessage) {
-    markProviderSuccess(providerType)
+    markProviderSuccess(providerType, sessionForRun.credentialId)
   }
 
   // Record usage for the direct (non-tools) streamChat path.
@@ -1742,7 +1760,7 @@ export async function executeSessionChatTurn(input: ExecuteChatTurnInput): Promi
           now: nowTs,
         })) {
           persistedResponseForHooks = nextAssistantMessage.text
-        } else if (previous?.streaming || shouldReplaceRecentAssistantMessage({
+        } else if ((previous?.streaming && previous?.runId === lifecycleRunId) || shouldReplaceRecentAssistantMessage({
           previous,
           nextToolEvents,
           nextKind,

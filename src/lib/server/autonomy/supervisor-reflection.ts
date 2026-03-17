@@ -29,6 +29,10 @@ import {
   type NormalizedSupervisorSettings,
 } from '@/lib/autonomy/supervisor-settings'
 import { notifyOrchestrators } from '@/lib/server/runtime/orchestrator-events'
+import { log } from '@/lib/server/logger'
+import { logExecution } from '@/lib/server/execution-log'
+import { logActivity } from '@/lib/server/storage'
+import { createNotification } from '@/lib/server/create-notification'
 
 const MAIN_LOOP_META_LINE_RE = /\[(?:MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]\s*(\{[^\n]*\})?/i
 const DEFAULT_TRANSCRIPT_MESSAGES = 12
@@ -272,6 +276,35 @@ export function assessAutonomyRun(input: {
       details: stripped || null,
       autoAction: 'replan',
     }))
+  }
+
+  // Output diversity check — catches "different inputs, same output" stall pattern
+  if (
+    !input.error
+    && toolEvents.length >= 6
+    && !incidents.some((i) => i.kind === 'no_progress')
+  ) {
+    const outputHashes = new Set<string>()
+    for (const event of toolEvents) {
+      const output = String(event?.output || '').trim()
+      if (output) {
+        outputHashes.add(crypto.createHash('sha1').update(output.slice(0, 500)).digest('hex').slice(0, 12))
+      }
+    }
+    if (outputHashes.size <= 2) {
+      incidents.push(buildIncident({
+        runId: input.runId,
+        sessionId: input.sessionId,
+        taskId: input.taskId || null,
+        agentId: input.agentId || null,
+        source: input.source,
+        kind: 'no_progress',
+        severity: 'medium',
+        summary: `Output stagnation: ${toolEvents.length} tool calls produced only ${outputHashes.size} distinct output(s). The agent appears stuck.`,
+        details: stripped || null,
+        autoAction: 'replan',
+      }))
+    }
   }
 
   if (budgetUsd && Number.isFinite(budgetUsd) && budgetUsd > 0) {
@@ -895,7 +928,33 @@ function persistIncidents(incidents: Array<Omit<SupervisorIncident, 'id' | 'crea
   }
   saveSupervisorIncidents(store)
   for (const incident of created) {
-    notifyOrchestrators(`Incident [${incident.severity}]: ${(incident.summary || '').slice(0, 100)}`, `incident:${incident.id || incident.kind}`)
+    const sid = incident.sessionId || ''
+    const summary = (incident.summary || '').slice(0, 100)
+    log.warn('supervisor', 'Incident', { kind: incident.kind, severity: incident.severity, summary })
+    logExecution(sid, 'supervisor_incident', summary, {
+      detail: { kind: incident.kind, severity: incident.severity, incidentId: incident.id },
+    })
+
+    if (incident.severity === 'high' || incident.severity === 'medium') {
+      logActivity({
+        entityType: 'agent',
+        entityId: incident.agentId || sid,
+        action: 'incident',
+        actor: 'system',
+        summary: `Supervisor incident [${incident.severity}]: ${summary}`,
+      })
+      createNotification({
+        type: incident.severity === 'high' ? 'error' : 'warning',
+        title: `Supervisor: ${incident.kind}`,
+        message: summary,
+        entityType: 'agent',
+        entityId: incident.agentId || sid,
+        dedupKey: `supervisor_incident:${incident.id || incident.kind}`,
+      })
+    }
+
+    log.info('supervisor', 'Notifying orchestrators', { text: summary })
+    notifyOrchestrators(`Incident [${incident.severity}]: ${summary}`, `incident:${incident.id || incident.kind}`)
   }
   return created
 }
@@ -1022,5 +1081,77 @@ export async function observeAutonomyRunOutcome(
   const reflections = loadRunReflections()
   reflections[reflection.id] = reflection
   saveRunReflections(reflections)
+
+  // Quality degradation alert — if recent quality trend drops below 0.5
+  if (typeof reflection.qualityScore === 'number' && input.agentId) {
+    checkQualityDegradation(input.agentId).catch(() => {})
+  }
+
   return { incidents, reflection }
+}
+
+// ---------------------------------------------------------------------------
+// Quality trend monitoring
+// ---------------------------------------------------------------------------
+
+const QUALITY_DEGRADATION_THRESHOLD = 0.5
+const QUALITY_TREND_WINDOW = 5
+
+export function getAgentQualityTrend(agentId: string, windowDays = 14): {
+  scores: Array<{ date: string; avg: number; count: number }>
+  recentAvg: number | null
+  recentCount: number
+} {
+  const cutoff = Date.now() - windowDays * 24 * 3600_000
+  const reflections = Object.values(loadRunReflections())
+    .filter((r) => r.agentId === agentId && r.createdAt >= cutoff && r.qualityScore !== null)
+    .sort((a, b) => a.createdAt - b.createdAt)
+
+  // Bucket by day
+  const buckets = new Map<string, number[]>()
+  for (const r of reflections) {
+    const day = new Date(r.createdAt).toISOString().slice(0, 10)
+    const bucket = buckets.get(day) || []
+    bucket.push(r.qualityScore!)
+    buckets.set(day, bucket)
+  }
+
+  const scores = Array.from(buckets.entries()).map(([date, values]) => ({
+    date,
+    avg: values.reduce((s, v) => s + v, 0) / values.length,
+    count: values.length,
+  }))
+
+  // Rolling average over last N runs
+  const recentScores = reflections
+    .slice(-QUALITY_TREND_WINDOW)
+    .map((r) => r.qualityScore!)
+  const recentAvg = recentScores.length > 0
+    ? recentScores.reduce((s, v) => s + v, 0) / recentScores.length
+    : null
+  return { scores, recentAvg, recentCount: recentScores.length }
+}
+
+async function checkQualityDegradation(agentId: string): Promise<void> {
+  const { recentAvg, recentCount } = getAgentQualityTrend(agentId, 14)
+  if (recentAvg === null || recentCount < QUALITY_TREND_WINDOW) return
+  if (recentAvg >= QUALITY_DEGRADATION_THRESHOLD) return
+
+  try {
+    const { upsertStoredItem } = await import('@/lib/server/storage')
+    const id = genId()
+    upsertStoredItem('notifications', id, {
+      id,
+      type: 'warning',
+      title: 'Agent quality degradation',
+      message: `Agent ${agentId} quality score has dropped to ${recentAvg.toFixed(2)} avg over the last ${recentCount} runs. Review recent reflections and consider adjusting the agent's configuration.`,
+      agentId,
+      createdAt: Date.now(),
+      read: false,
+    })
+    const { notify } = await import('@/lib/server/ws-hub')
+    notify('notifications')
+  } catch {
+    // Non-critical — notification is best-effort
+  }
 }

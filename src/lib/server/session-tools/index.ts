@@ -39,6 +39,8 @@ import { buildHumanLoopTools } from './human-loop'
 import { buildGoogleWorkspaceTools } from './google-workspace'
 import { buildSkillRuntimeTools } from './skill-runtime'
 import { buildConnectorTools } from './connector'
+import { buildPeerQueryTools } from './peer-query'
+import { buildTeamContextTools } from './team-context'
 import './connector'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { enforceFileAccessPolicy } from './file-access-policy'
@@ -196,6 +198,8 @@ export async function buildSessionTools(cwd: string, enabledExtensions: string[]
       ['use_skill', buildSkillRuntimeTools],
       ['mailbox', buildMailboxTools],
       ['ask_human', buildHumanLoopTools],
+      ['peer_query', buildPeerQueryTools],
+      ['team_context', buildTeamContextTools],
     ]
 
     for (const [extensionId, builder] of nativeBuilders) {

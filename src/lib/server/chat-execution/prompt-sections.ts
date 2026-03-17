@@ -11,6 +11,7 @@ import type { ActiveProjectContext } from '@/lib/server/project-context'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
 import { loadSkills, loadAgents } from '@/lib/server/storage'
 import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/server/skills/runtime-skill-resolver'
+import { resolveTeam } from '@/lib/server/agents/team-resolution'
 
 // ---------------------------------------------------------------------------
 // Identity: agent name, description, continuity, soul, systemPrompt, skills
@@ -359,6 +360,14 @@ export function buildCoordinatorSection(
   lines.push('- **Do directly:** Quick file reads, listing directories, checking configs, simple web lookups to inform your delegation plan')
   lines.push('- **Anti-pattern:** Writing multiple files, running build commands, or doing extended research yourself when you have specialist workers available')
 
+  lines.push('')
+  lines.push('### Delegation Brief Template')
+  lines.push('When delegating via `spawn_subagent`, structure your objective clearly:')
+  lines.push('- **Objective:** What the worker should accomplish (one sentence)')
+  lines.push('- **Acceptance criteria:** How you will know the work is done correctly')
+  lines.push('- **Context:** Relevant background the worker needs (file paths, prior findings)')
+  lines.push('- **Expected output:** What format or deliverable you expect back')
+
   return lines.join('\n')
 }
 
@@ -404,4 +413,75 @@ export function buildCredentialAwarenessSection(
   lines.push('Do NOT report a credential blocker without first checking and requesting.')
 
   return lines.join('\n')
+}
+
+// ---------------------------------------------------------------------------
+// CLI Delegation Context — condensed context for CLI backends
+// ---------------------------------------------------------------------------
+
+const DELEGATION_CONTEXT_BUDGET = 2000
+
+/**
+ * Assemble condensed context for CLI delegation backends.
+ * Budget-capped to ~2000 chars so it doesn't overwhelm the CLI tool's context.
+ */
+export function buildCliDelegationContext(opts: {
+  agent?: Agent | null
+  session?: Session | null
+  task?: string
+  projectName?: string | null
+  projectDescription?: string | null
+}): string {
+  const parts: string[] = []
+  let budget = DELEGATION_CONTEXT_BUDGET
+
+  const append = (line: string) => {
+    if (budget - line.length < 0) return false
+    parts.push(line)
+    budget -= line.length + 1
+    return true
+  }
+
+  // Agent identity
+  if (opts.agent) {
+    const name = opts.agent.name || 'Agent'
+    const desc = opts.agent.description ? ` — ${opts.agent.description.slice(0, 150)}` : ''
+    append(`You are ${name}${desc}.`)
+  }
+
+  // Project context
+  if (opts.projectName) {
+    const projDesc = opts.projectDescription ? `: ${opts.projectDescription.slice(0, 200)}` : ''
+    append(`Project: ${opts.projectName}${projDesc}`)
+  }
+
+  // Current task
+  if (opts.task) {
+    append(`Task: ${opts.task.slice(0, 300)}`)
+  }
+
+  // Working directory
+  if (opts.session?.cwd) {
+    append(`Working directory: ${opts.session.cwd}`)
+  }
+
+  // Team roster summary
+  if (opts.agent?.id) {
+    try {
+      const agents = loadAgents() as Record<string, Agent>
+      const team = resolveTeam(opts.agent.id, agents)
+      if (team.mode === 'team') {
+        const teammates = [
+          ...(team.coordinator ? [`${team.coordinator.name} (coordinator)`] : []),
+          ...team.peers.map((p) => p.name),
+          ...team.directReports.map((r) => r.name),
+        ].slice(0, 8)
+        if (teammates.length > 0) {
+          append(`Team: ${teammates.join(', ')}`)
+        }
+      }
+    } catch { /* non-critical */ }
+  }
+
+  return parts.join('\n')
 }

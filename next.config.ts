@@ -58,9 +58,10 @@ const nextConfig: NextConfig = {
     root: PROJECT_ROOT,
   },
   experimental: {
-    // Disable Turbopack persistent cache — concurrent HMR writes cause
-    // "Another write batch or compaction is already active" errors
     turbopackFileSystemCacheForDev: false,
+    // Limit build workers to 1 inside Docker to avoid SQLITE_BUSY contention
+    // when multiple workers collect page data concurrently.
+    ...(process.env.SWARMCLAW_BUILD_MODE ? { cpus: 1 } : {}),
   },
   env: {
     NEXT_PUBLIC_GIT_SHA: getGitSha(),

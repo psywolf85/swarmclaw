@@ -48,13 +48,16 @@ const MAX_TOOL_ERROR_FOLLOWTHROUGH = 2
 const MAX_TOOL_SUMMARY = 2
 
 /** Max coordinator synthesis continuations */
-const MAX_COORDINATOR_SYNTHESIS = 2
+const MAX_COORDINATOR_SYNTHESIS = 3
 
 /** Max coordinator delegation nudge (once is enough — don't nag) */
 const MAX_COORDINATOR_DELEGATION_NUDGE = 1
 
 /** Max loop recovery continuations (tool_frequency limit resets) */
 const MAX_LOOP_RECOVERY = 2
+
+/** Max context overflow retries (emergency context reduction) */
+const MAX_CONTEXT_OVERFLOW = 2
 
 // ---------------------------------------------------------------------------
 
@@ -79,6 +82,7 @@ export class ContinuationLimits {
     this.limits = {
       recursion: { count: 0, max: MAX_RECURSION },
       transient: { count: 0, max: MAX_TRANSIENT },
+      context_overflow: { count: 0, max: MAX_CONTEXT_OVERFLOW },
       required_tool: { count: 0, max: MAX_REQUIRED_TOOL },
       memory_write_followthrough: { count: 0, max: MAX_MEMORY_WRITE_FOLLOWTHROUGH },
       execution_followthrough: { count: 0, max: maxExecutionFollowthroughs },

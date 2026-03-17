@@ -1,32 +1,22 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { spawn, spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import type { StreamChatOptions } from './index'
 import { log } from '../server/logger'
 import { loadRuntimeSettings } from '@/lib/server/runtime/runtime-settings'
 import { getEnabledToolIds } from '@/lib/capability-selection'
-
-function findClaude(): string {
-  const locations = [
-    path.join(os.homedir(), '.local/bin/claude'),
-    '/usr/local/bin/claude',
-    '/opt/homebrew/bin/claude',
-  ]
-  for (const loc of locations) {
-    if (fs.existsSync(loc)) {
-      log.info('claude-cli', `Found claude at: ${loc}`)
-      return loc
-    }
-  }
-  log.warn('claude-cli', 'Claude binary not found in known locations, falling back to PATH')
-  return 'claude'
-}
-
-const CLAUDE = findClaude()
+import { resolveCliBinary, buildCliEnv, probeCliAuth, attachAbortHandler } from './cli-utils'
 
 export function streamClaudeCliChat({ session, message, imagePath, systemPrompt, write, active, signal }: StreamChatOptions): Promise<string> {
   const processTimeoutMs = loadRuntimeSettings().cliProcessTimeoutMs
+  const binary = resolveCliBinary('claude')
+  if (!binary) {
+    const msg = 'Claude CLI not found. Install it and ensure it is on your PATH.'
+    write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
+    return Promise.resolve('')
+  }
+
   let prompt = message
   if (imagePath) {
     prompt = `[The user has shared an image at: ${imagePath}]\n\n${message}`
@@ -63,34 +53,17 @@ export function streamClaudeCliChat({ session, message, imagePath, systemPrompt,
     args.push('--mcp-config', mcpConfigPath)
   }
 
-  const env = { ...process.env, TERM: 'dumb', NO_COLOR: '1' } as NodeJS.ProcessEnv
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith('CLAUDE')) delete (env as Record<string, unknown>)[key]
+  const env = buildCliEnv()
+
+  // Auth probe
+  const auth = probeCliAuth(binary, 'claude', env, session.cwd)
+  if (!auth.authenticated) {
+    log.error('claude-cli', auth.errorMessage || 'Auth failed')
+    write(`data: ${JSON.stringify({ t: 'err', text: auth.errorMessage || 'Claude CLI is not authenticated.' })}\n\n`)
+    return Promise.resolve('')
   }
 
-  const authProbe = spawnSync(CLAUDE, ['auth', 'status'], {
-    cwd: session.cwd,
-    env,
-    encoding: 'utf-8',
-    timeout: 8000,
-  })
-  if ((authProbe.status ?? 1) !== 0) {
-    let loggedIn = false
-    try {
-      const parsed = JSON.parse(authProbe.stdout || '{}') as { loggedIn?: boolean }
-      loggedIn = parsed.loggedIn === true
-    } catch {
-      // Ignore parse issues and surface generic auth guidance.
-    }
-    if (!loggedIn) {
-      const msg = 'Claude CLI is not authenticated. Run `claude auth login` (or `claude setup-token`) and try again.'
-      log.error('claude-cli', msg)
-      write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
-      return Promise.resolve('')
-    }
-  }
-
-  log.info('claude-cli', `Spawning: ${CLAUDE}`, {
+  log.info('claude-cli', `Spawning: ${binary}`, {
     args: args.map(a => a.length > 100 ? a.slice(0, 100) + '...' : a),
     cwd: session.cwd,
     promptLen: prompt.length,
@@ -98,7 +71,7 @@ export function streamClaudeCliChat({ session, message, imagePath, systemPrompt,
     systemPromptLen: systemPrompt?.length || 0,
   })
 
-  const proc = spawn(CLAUDE, args, {
+  const proc = spawn(binary, args, {
     cwd: session.cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -111,11 +84,7 @@ export function streamClaudeCliChat({ session, message, imagePath, systemPrompt,
   proc.stdin!.end()
 
   active.set(session.id, proc)
-
-  if (signal) {
-    if (signal.aborted) { proc.kill(); }
-    else signal.addEventListener('abort', () => { proc.kill() }, { once: true })
-  }
+  attachAbortHandler(proc, signal)
 
   let fullResponse = ''
   let buf = ''
@@ -188,14 +157,14 @@ export function streamClaudeCliChat({ session, message, imagePath, systemPrompt,
   })
 
   return new Promise((resolve) => {
-    proc.on('close', (code, signal) => {
-      log.info('claude-cli', `Process closed: code=${code} signal=${signal} events=${eventCount} response=${fullResponse.length}chars`)
+    proc.on('close', (code, sig) => {
+      log.info('claude-cli', `Process closed: code=${code} signal=${sig} events=${eventCount} response=${fullResponse.length}chars`)
       active.delete(session.id)
       if (mcpConfigPath) try { fs.unlinkSync(mcpConfigPath) } catch { /* ignore */ }
       if ((code ?? 0) !== 0 && !fullResponse.trim()) {
         const msg = stderrText.trim()
-          ? `Claude CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${stderrText.trim().slice(0, 1200)}`
-          : `Claude CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''} and returned no output.`
+          ? `Claude CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}: ${stderrText.trim().slice(0, 1200)}`
+          : `Claude CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''} and returned no output.`
         write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
       }
       resolve(fullResponse)

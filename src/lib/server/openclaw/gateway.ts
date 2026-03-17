@@ -6,7 +6,7 @@ import { loadAgents, loadCredentials, decryptKey } from '../storage'
 import { notify, notifyWithPayload } from '../ws-hub'
 import { getGatewayProfile, getGatewayProfiles, resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
 import { isAgentDisabled } from '@/lib/server/agents/agent-availability'
-import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
+import { errorMessage, hmrSingleton, jitteredBackoff } from '@/lib/shared-utils'
 import type { Agent } from '@/types'
 
 // --- Types ---
@@ -145,7 +145,6 @@ export class OpenClawGateway {
   private eventListeners = new Map<string, Set<EventHandler>>()
   private _connected = false
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null
-  private reconnectDelay = 800
   private consecutiveFailures = 0
   private shouldReconnect = false
   private wsUrl = ''
@@ -173,7 +172,6 @@ export class OpenClawGateway {
 
       this.ws = result.ws
       this._connected = true
-      this.reconnectDelay = 800
       this.consecutiveFailures = 0
       console.log('[openclaw-gateway] Connected to gateway')
 
@@ -223,14 +221,14 @@ export class OpenClawGateway {
     this.consecutiveFailures++
     // After many failures, back off to 10 minutes to avoid hammering a down server
     const maxDelay = this.consecutiveFailures >= 10 ? 600_000 : 15_000
+    const delay = jitteredBackoff(800, this.consecutiveFailures - 1, maxDelay)
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null
       if (!this.shouldReconnect) return
       this.doConnect().catch(() => {})
-    }, this.reconnectDelay)
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, maxDelay)
+    }, delay)
     if (this.consecutiveFailures === 1 || this.consecutiveFailures % 5 === 0) {
-      console.log(`[openclaw-gateway] ${this.consecutiveFailures} consecutive failure${this.consecutiveFailures > 1 ? 's' : ''}, next retry in ${Math.round(this.reconnectDelay / 1000)}s`)
+      console.log(`[openclaw-gateway] ${this.consecutiveFailures} consecutive failure${this.consecutiveFailures > 1 ? 's' : ''}, next retry in ${Math.round(delay / 1000)}s`)
     }
   }
 

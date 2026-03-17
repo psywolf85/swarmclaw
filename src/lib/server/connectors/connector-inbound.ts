@@ -92,7 +92,6 @@ import {
   acquireExternalSessionExecutionHold,
   enqueueSessionRun,
   getSessionExecutionState,
-  getSessionQueueSnapshot,
 } from '@/lib/server/runtime/session-run-manager'
 import type { ExecuteChatTurnResult } from '@/lib/server/chat-execution/chat-execution'
 
@@ -120,7 +119,7 @@ const {
   scheduledFollowupByDedupe,
   routeMessageHandlerRef,
 } = connectorRuntimeState
-const queuedAckWindowBySession = hmrSingleton<Map<string, string>>('__swarmclaw_connector_queue_ack__', () => new Map())
+
 const activeDirectConnectorSessionCounts = hmrSingleton<Map<string, number>>('__swarmclaw_connector_active_sessions__', () => new Map())
 
 function pruneTransientConnectorState(now = Date.now()): void {
@@ -532,12 +531,6 @@ export async function deliverQueuedConnectorRunResult(params: {
   await maybeSendStatusReaction(params.connector, params.msg, 'silent')
 }
 
-function queueConnectorAckToken(sessionId: string): string {
-  const execution = getSessionExecutionState(sessionId)
-  if (execution.runningRunId) return execution.runningRunId
-  const snapshot = getSessionQueueSnapshot(sessionId)
-  return snapshot.items[0]?.runId || 'busy'
-}
 
 async function enforceInboundAccessPolicy(params: {
   connector: Connector
@@ -1141,15 +1134,8 @@ If media sending fails, report the exact error and retry with a corrected path/t
       }
     })
 
-    const ackToken = queueConnectorAckToken(session.id)
-    const previousAckToken = queuedAckWindowBySession.get(session.id)
-    queuedAckWindowBySession.set(session.id, ackToken)
-    if (previousAckToken !== ackToken) {
-      return 'Queued. I will reply here as soon as the current task finishes.'
-    }
     return NO_MESSAGE_SENTINEL
   }
-  queuedAckWindowBySession.delete(session.id)
   // Store the raw user text for display (source.senderName handles attribution).
   // The formatted text with [SenderName] prefix is only used for LLM history context.
   pushSessionMessage(session, 'user', rawText || inboundText, {

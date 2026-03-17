@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
-import { spawn, spawnSync, type ChildProcess } from 'child_process'
+import { spawn, type ChildProcess } from 'child_process'
 import type { ToolBuildContext } from './context'
 import { truncate, findBinaryOnPath, MAX_OUTPUT } from './context'
 import type { Extension, ExtensionHooks } from '@/types'
@@ -8,6 +8,7 @@ import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { canonicalizeExtensionId } from '../tool-aliases'
 import { errorMessage, sleep } from '@/lib/shared-utils'
+import { buildCliEnv, probeCliAuth } from '@/lib/providers/cli-utils'
 import {
   appendDelegationCheckpoint,
   cancelDelegationJob,
@@ -569,14 +570,7 @@ async function executeDelegateAction(args: Record<string, unknown>, bctx: Delega
   })
 }
 
-function stripEnvPrefixes(input: NodeJS.ProcessEnv, prefixes: string[]): NodeJS.ProcessEnv {
-  const out: NodeJS.ProcessEnv = { ...input }
-  for (const key of Object.keys(out)) {
-    const upper = key.toUpperCase()
-    if (prefixes.some((prefix) => upper.startsWith(prefix))) delete out[key]
-  }
-  return out
-}
+// stripEnvPrefixes removed — use buildCliEnv() from cli-utils instead
 
 function parseCodexOutputText(ev: Record<string, unknown>): string | null {
   if (ev.type === 'item.content_part.delta') {
@@ -603,12 +597,13 @@ function parseCodexOutputText(ev: Record<string, unknown>): string | null {
 
 async function runCodexDelegate(binary: string, task: string, resume: boolean, resumeId: string, bctx: DelegateContext, runtime?: DelegateRuntimeState): Promise<string> {
   try {
-    const env = stripEnvPrefixes({ ...process.env, TERM: 'dumb', NO_COLOR: '1' }, ['CODEX'])
-    const authProbe = spawnSync(binary, ['login', 'status'], { cwd: bctx.cwd, env, encoding: 'utf-8', timeout: 8000 })
-    const probeText = `${authProbe.stdout || ''}\n${authProbe.stderr || ''}`.toLowerCase()
-    const loggedIn = probeText.includes('logged in')
-    if ((authProbe.status ?? 1) !== 0 || !loggedIn) {
-      return 'Error: Codex CLI is not authenticated. Run `codex login` and retry.'
+    // Build clean env — preserves user's CODEX_HOME for auth
+    const env = buildCliEnv()
+
+    // Auth probe BEFORE any temp CODEX_HOME override
+    const auth = probeCliAuth(binary, 'codex', env, bctx.cwd)
+    if (!auth.authenticated) {
+      return `Error: ${auth.errorMessage || 'Codex CLI is not authenticated. Run `codex login` and retry.'}`
     }
 
     const storedResumeId = bctx.readStoredDelegateResumeId?.('codex')
@@ -685,7 +680,14 @@ async function runCodexDelegate(binary: string, task: string, resume: boolean, r
 
 async function runOpenCodeDelegate(binary: string, task: string, resume: boolean, resumeId: string, bctx: DelegateContext, runtime?: DelegateRuntimeState): Promise<string> {
   try {
-    const env = { ...process.env, TERM: 'dumb', NO_COLOR: '1' } as NodeJS.ProcessEnv
+    const env = buildCliEnv()
+
+    // Auth probe
+    const auth = probeCliAuth(binary, 'opencode', env, bctx.cwd)
+    if (!auth.authenticated) {
+      return `Error: ${auth.errorMessage || 'OpenCode CLI is not authenticated.'}`
+    }
+
     const storedResumeId = bctx.readStoredDelegateResumeId?.('opencode')
     const resumeIdToUse = resumeId?.trim() || (resume ? storedResumeId : null)
 
@@ -762,7 +764,14 @@ async function runOpenCodeDelegate(binary: string, task: string, resume: boolean
 
 async function runGeminiDelegate(binary: string, task: string, resume: boolean, resumeId: string, bctx: DelegateContext, runtime?: DelegateRuntimeState): Promise<string> {
   try {
-    const env = { ...process.env, TERM: 'dumb', NO_COLOR: '1' } as NodeJS.ProcessEnv
+    const env = buildCliEnv()
+
+    // Auth probe
+    const auth = probeCliAuth(binary, 'gemini', env, bctx.cwd)
+    if (!auth.authenticated) {
+      return `Error: ${auth.errorMessage || 'Gemini CLI is not authenticated.'}`
+    }
+
     const storedResumeId = bctx.readStoredDelegateResumeId?.('gemini')
     const resumeIdToUse = resumeId?.trim() || (resume ? storedResumeId : null)
 
@@ -843,9 +852,9 @@ async function runGeminiDelegate(binary: string, task: string, resume: boolean, 
 
 async function runClaudeDelegate(binary: string, task: string, resume: boolean, resumeId: string, bctx: DelegateContext, runtime?: DelegateRuntimeState): Promise<string> {
   try {
-    const env: NodeJS.ProcessEnv = stripEnvPrefixes({ ...process.env }, ['CLAUDE'])
-    const authProbe = spawnSync(binary, ['auth', 'status'], { cwd: bctx.cwd, env, encoding: 'utf-8', timeout: 8000 })
-    if ((authProbe.status ?? 1) !== 0) return 'Error: Claude Code not authenticated.'
+    const env = buildCliEnv()
+    const auth = probeCliAuth(binary, 'claude', env, bctx.cwd)
+    if (!auth.authenticated) return `Error: ${auth.errorMessage || 'Claude Code not authenticated.'}`
 
     const storedResumeId = bctx.readStoredDelegateResumeId?.('claudeCode')
     const resumeIdToUse = resumeId?.trim() || (resume ? storedResumeId : null)

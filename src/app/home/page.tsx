@@ -13,7 +13,7 @@ import { isLocalhostBrowser, isVisibleSessionForViewer } from '@/lib/observabili
 import { getSessionLastMessage } from '@/lib/chat/session-summary'
 import { getNotificationActivityAt, getNotificationOccurrenceCount } from '@/lib/notifications/notification-utils'
 import { timeAgo, timeUntil } from '@/lib/time-format'
-import type { Agent, Session, ActivityEntry, BoardTask, AppNotification } from '@/types'
+import type { Agent, Session, BoardTask, AppNotification, ActivityEntry } from '@/types'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { HintTip } from '@/components/shared/hint-tip'
 import { MainContent } from '@/components/layout/main-content'
@@ -34,9 +34,17 @@ const ACTIVITY_ICONS: Record<ActivityEntry['action'], string> = {
   failed: 'M18 6L6 18M6 6l12 12',
   approved: 'M22 11.08V12a10 10 0 1 1-5.93-9.14',
   rejected: 'M10 15l5-5m0 5l-5-5',
+  delegated: 'M7 17l9.2-9.2M17 17V7H7',
+  queried: 'M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z',
+  spawned: 'M12 2v4m0 12v4m10-10h-4M6 12H2m15.07-5.07l-2.83 2.83M9.76 14.24l-2.83 2.83m11.14 0l-2.83-2.83M9.76 9.76L6.93 6.93',
+  timeout: 'M12 6v6l4 2M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20',
+  cancelled: 'M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20m5 5L7 17',
+  incident: 'M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0zM12 9v4m0 4h.01',
+  running: 'M12 2v4m0 12v4m10-10h-4M6 12H2',
+  claimed: 'M9 12l2 2 4-4m6 2a10 10 0 1 1-20 0 10 10 0 0 1 20 0z',
 }
 
-const ACTIVITY_COLORS: Record<ActivityEntry['action'], string> = {
+const ACTIVITY_COLORS: Record<string, string> = {
   created: 'text-emerald-400',
   updated: 'text-sky-400',
   deleted: 'text-red-400',
@@ -49,6 +57,14 @@ const ACTIVITY_COLORS: Record<ActivityEntry['action'], string> = {
   failed: 'text-red-400',
   approved: 'text-emerald-400',
   rejected: 'text-red-400',
+  delegated: 'text-purple-400',
+  queried: 'text-sky-400',
+  spawned: 'text-purple-400',
+  timeout: 'text-amber-400',
+  cancelled: 'text-gray-400',
+  incident: 'text-red-400',
+  running: 'text-blue-400',
+  claimed: 'text-emerald-400',
 }
 
 const PLATFORM_LABELS: Record<string, string> = {

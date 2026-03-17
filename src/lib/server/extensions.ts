@@ -35,7 +35,7 @@ import { createNotification } from './create-notification'
 import { notify } from './ws-hub'
 import { decryptKey, encryptKey, loadSettings, saveSettings } from './storage'
 import { buildExtensionHooks } from './extensions-approval-guidance'
-import { errorMessage } from '@/lib/shared-utils'
+import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
 
 const EXTENSIONS_DIR = path.join(DATA_DIR, 'extensions')
 const EXTENSION_WORKSPACES_DIR = path.join(EXTENSIONS_DIR, '.workspaces')
@@ -2128,13 +2128,13 @@ class ExtensionManager {
   reload() { this.loaded = false; this.load() }
 }
 
-let _manager: ExtensionManager | null = null
+const _managerHolder = hmrSingleton<{ instance: ExtensionManager | null }>('__swarmclaw_extension_manager__', () => ({ instance: null }))
 export function getExtensionManager(): ExtensionManager {
   try {
-    if (!_manager) {
-      _manager = new ExtensionManager()
+    if (!_managerHolder.instance) {
+      _managerHolder.instance = new ExtensionManager()
     }
-    return _manager
+    return _managerHolder.instance
   } catch (err: unknown) {
     log.error('extensions', 'getExtensionManager critical failure', { error: errorMessage(err) })
     throw err

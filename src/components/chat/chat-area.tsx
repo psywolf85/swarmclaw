@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useCallback, useState, useRef, useMemo } from 'react'
+import dynamic from 'next/dynamic'
 import { useAppStore } from '@/stores/use-app-store'
 import { selectActiveSessionId } from '@/stores/slices/session-slice'
 import { useWs } from '@/hooks/use-ws'
@@ -12,13 +13,15 @@ import { useMediaQuery } from '@/hooks/use-media-query'
 import { ChatHeader } from './chat-header'
 import { DevServerBar } from './dev-server-bar'
 import { MessageList } from './message-list'
-import { SessionDebugPanel } from './session-debug-panel'
 import { VoiceOverlay } from './voice-overlay'
 import { useVoiceConversation } from '@/hooks/use-voice-conversation'
 import { ChatInput } from '@/components/input/chat-input'
-import { ChatPreviewPanel } from './chat-preview-panel'
-import { InspectorPanel } from '@/components/agents/inspector-panel'
-import { HeartbeatHistoryPanel } from './heartbeat-history-panel'
+
+// Lazy-load conditional panels — only bundled when actually rendered
+const SessionDebugPanel = dynamic(() => import('./session-debug-panel').then((m) => m.SessionDebugPanel), { ssr: false })
+const ChatPreviewPanel = dynamic(() => import('./chat-preview-panel').then((m) => m.ChatPreviewPanel), { ssr: false })
+const InspectorPanel = dynamic(() => import('@/components/agents/inspector-panel').then((m) => m.InspectorPanel), { ssr: false })
+const HeartbeatHistoryPanel = dynamic(() => import('./heartbeat-history-panel').then((m) => m.HeartbeatHistoryPanel), { ssr: false })
 import { Dropdown, DropdownItem } from '@/components/shared/dropdown'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { speak } from '@/lib/tts'
@@ -68,7 +71,10 @@ export function ChatArea() {
   const setPreviewContent = useChatStore((s) => s.setPreviewContent)
   const isDesktop = useMediaQuery('(min-width: 768px)')
 
-  const agents = useAppStore((s) => s.agents)
+  const currentAgent = useAppStore((s) => {
+    const agentId = session?.agentId
+    return agentId ? s.agents[agentId] ?? null : null
+  })
   const loadAgents = useAppStore((s) => s.loadAgents)
   const setEditingAgentId = useAppStore((s) => s.setEditingAgentId)
   const setAgentSheetOpen = useAppStore((s) => s.setAgentSheetOpen)
@@ -76,7 +82,6 @@ export function ChatArea() {
   const inspectorOpen = useAppStore((s) => s.inspectorOpen)
   const sidebarOpen = useAppStore((s) => s.sidebarOpen)
   const setSidebarOpen = useAppStore((s) => s.setSidebarOpen)
-  const currentAgent = session?.agentId ? agents[session.agentId] ?? null : null
   const queuedCount = session?.queuedCount ?? 0
   const promptSuggestions = useMemo(
     () => (currentAgent ? AGENT_PROMPT_SUGGESTIONS : DIRECT_PROMPT_SUGGESTIONS),
@@ -146,7 +151,7 @@ export function ChatArea() {
     if (!preserveLocalStream) setMessages([])
     setMessagesLoading(true)
     if (!preserveLocalStream) {
-      useChatStore.setState({ streaming: false, streamingSessionId: null, streamText: '', assistantRenderId: null, toolEvents: [] })
+      useChatStore.setState({ streaming: false, streamingSessionId: null, streamSource: null, streamText: '', assistantRenderId: null, toolEvents: [] })
     }
     fetchMessagesPaginated(requestedSessionId, 100).then((data) => {
       if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
@@ -174,7 +179,7 @@ export function ChatArea() {
 
     const sessionAtLoad = useAppStore.getState().sessions[requestedSessionId]
     if (sessionAtLoad?.active) {
-      useChatStore.setState({ streaming: true, streamingSessionId: requestedSessionId, streamText: '' })
+      useChatStore.setState({ streaming: true, streamingSessionId: requestedSessionId, streamSource: 'server', streamText: '' })
     }
 
     return () => {
@@ -191,7 +196,7 @@ export function ChatArea() {
         if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
         const refreshed = useAppStore.getState().sessions[requestedSessionId]
         if (refreshed?.active) {
-          useChatStore.setState({ streaming: true, streamingSessionId: requestedSessionId, streamText: '' })
+          useChatStore.setState({ streaming: true, streamingSessionId: requestedSessionId, streamSource: 'server', streamText: '' })
         }
       }).catch((err) => console.error('Failed to refresh session:', err))
 
@@ -248,11 +253,11 @@ export function ChatArea() {
     // Fetching messages here would replace the array with new objects on every
     // WS notification, causing the full MessageList to re-render and flash.
     const chatState = useChatStore.getState()
-    if (chatState.streaming && chatState.streamingSessionId === sessionId) return
+    if (chatState.streaming && chatState.streamingSessionId === sessionId && chatState.streamSource === 'local') return
     try {
       const msgs = await fetchMessages(sessionId)
       const currentChatState = useChatStore.getState()
-      if (currentChatState.streaming && currentChatState.streamingSessionId === sessionId) return
+      if (currentChatState.streaming && currentChatState.streamingSessionId === sessionId && currentChatState.streamSource === 'local') return
       const previous = messagesRef.current
       if (messagesDiffer(msgs, previous)) {
         const newMsgs = msgs.length > previous.length ? msgs.slice(previous.length) : []
@@ -290,6 +295,7 @@ export function ChatArea() {
         useChatStore.setState({
           streaming: true,
           streamingSessionId: sessionId,
+          streamSource: 'server',
           streamPhase: 'thinking',
           streamText: '',
           thinkingStartTime: Date.now(),
@@ -313,13 +319,26 @@ export function ChatArea() {
     sessionId && (isServerActive || queuedCount > 0) ? 2000 : undefined,
   )
 
+  // Listen for stream-end signal from the server — clears streaming state
+  // when a server-only run finishes without a local SSE stream driving the UI.
+  const handleStreamEnd = useCallback(() => {
+    if (!sessionId) return
+    const state = useChatStore.getState()
+    if (state.streamSource === 'server' && state.streamingSessionId === sessionId) {
+      useChatStore.setState({ streaming: false, streamingSessionId: null, streamSource: null, streamText: '', displayText: '', streamPhase: 'thinking', streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
+      void refreshMessages()
+      void refreshSession(sessionId)
+    }
+  }, [sessionId, refreshMessages, refreshSession])
+  useWs(sessionId ? `stream-end:${sessionId}` : '', handleStreamEnd)
+
   // Keep the local typing indicator aligned with the server's active state
   useEffect(() => {
     if (!sessionId) return
     const state = useChatStore.getState()
     if (isServerActive) {
       if (!state.streaming && !state.streamText) {
-        useChatStore.setState({ streaming: true, streamingSessionId: sessionId, streamText: '' })
+        useChatStore.setState({ streaming: true, streamingSessionId: sessionId, streamSource: 'server', streamText: '' })
       }
       return
     }
@@ -330,7 +349,7 @@ export function ChatArea() {
     ) {
       // Server finished — clear all streaming state and fetch final messages
       fetchMessages(sessionId).then(setMessages).catch(() => {})
-      useChatStore.setState({ streaming: false, streamingSessionId: null, streamText: '', displayText: '', streamPhase: 'thinking', streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
+      useChatStore.setState({ streaming: false, streamingSessionId: null, streamSource: null, streamText: '', displayText: '', streamPhase: 'thinking', streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
     }
   }, [isServerActive, sessionId, setMessages])
 
@@ -606,11 +625,11 @@ export function ChatArea() {
         onConfirm={handleDelete}
         onCancel={() => setConfirmDelete(false)}
       />
-      {session.agentId && agents[session.agentId] && (
+      {session.agentId && currentAgent && (
         <ConfirmDialog
           open={confirmDeleteAgent}
           title="Delete Agent"
-          message={`Delete agent "${agents[session.agentId].name}"? This cannot be undone.`}
+          message={`Delete agent "${currentAgent.name}"? This cannot be undone.`}
           confirmLabel="Delete"
           danger
           onConfirm={async () => {

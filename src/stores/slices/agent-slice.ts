@@ -4,7 +4,7 @@ import type { Session, Agent, ExternalAgentRuntime } from '../../types'
 import { fetchAgents, bulkPatchAgents } from '../../lib/agents'
 import { api } from '@/lib/app/api-client'
 import { safeStorageRemove, safeStorageSet } from '@/lib/app/safe-storage'
-import { invalidateFingerprint } from '../set-if-changed'
+import { invalidateFingerprint, setIfChanged } from '../set-if-changed'
 import { createLoader, createInflightDeduplicator } from '../store-utils'
 
 const agentThreadDedup = createInflightDeduplicator('agentSlice_inflightLoads')
@@ -59,7 +59,7 @@ export const createAgentSlice: StateCreator<AppState, [], [], AgentSlice> = (set
   loadAgents: createLoader<AppState>(set, 'agents', () => fetchAgents()),
   updateAgentInStore: (agent) => {
     invalidateFingerprint('agents')
-    set({ agents: { ...get().agents, [agent.id]: agent } })
+    setIfChanged<AppState>(set, 'agents', { ...get().agents, [agent.id]: agent })
   },
   togglePinAgent: async (id) => {
     const agents = { ...get().agents }

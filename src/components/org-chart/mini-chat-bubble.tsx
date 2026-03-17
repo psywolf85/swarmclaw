@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
+import { useWs } from '@/hooks/use-ws'
 import { api } from '@/lib/app/api-client'
 import { fetchMessages } from '@/lib/chat/chats'
 import { streamChat } from '@/lib/chat/chat'
@@ -38,7 +39,6 @@ export function MiniChatBubble({ agent, onClose, onToolActivity }: Props) {
   const [streamText, setStreamText] = useState('')
   const [inputValue, setInputValue] = useState('')
   const [loading, setLoading] = useState(true)
-  const abortRef = useRef<AbortController | null>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -62,6 +62,21 @@ export function MiniChatBubble({ agent, onClose, onToolActivity }: Props) {
     init()
     return () => { cancelled = true }
   }, [agent.id])
+
+  // Real-time message refresh via WebSocket (mirrors main ChatArea pattern)
+  const refreshMessages = useCallback(async () => {
+    if (!sessionId || streaming) return
+    try {
+      const msgs = await fetchMessages(sessionId)
+      setMessages(msgs)
+    } catch { /* ignore */ }
+  }, [sessionId, streaming])
+
+  useWs(
+    sessionId ? `messages:${sessionId}` : '',
+    refreshMessages,
+    streaming ? 2000 : undefined,
+  )
 
   // Auto-scroll to bottom on new messages or streaming text
   useEffect(() => {
@@ -115,11 +130,12 @@ export function MiniChatBubble({ agent, onClose, onToolActivity }: Props) {
         }
         case 'done':
           // Refresh messages to get the final state
-          fetchMessages(sessionId).then((msgs) => setMessages(msgs)).catch(() => {})
+          if (sessionId) fetchMessages(sessionId).then((msgs) => setMessages(msgs)).catch(() => {})
           setStreaming(false)
           setStreamText('')
           break
         case 'err':
+          if (sessionId) fetchMessages(sessionId).then((msgs) => setMessages(msgs)).catch(() => {})
           setStreaming(false)
           setStreamText('')
           break
@@ -128,10 +144,12 @@ export function MiniChatBubble({ agent, onClose, onToolActivity }: Props) {
   }, [sessionId, inputValue, streaming, onToolActivity])
 
   const stop = useCallback(() => {
-    abortRef.current?.abort()
+    if (sessionId) {
+      api('POST', `/chats/${sessionId}/stop`).catch(() => {})
+    }
     setStreaming(false)
     setStreamText('')
-  }, [])
+  }, [sessionId])
 
   // Filter out system/heartbeat messages
   const visibleMessages = messages.filter(

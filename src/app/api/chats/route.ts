@@ -3,14 +3,13 @@ import { genId } from '@/lib/id'
 import os from 'os'
 import path from 'path'
 import { perf } from '@/lib/server/runtime/perf'
-import { loadSessions, saveSessions, deleteSession, active, loadAgents, upsertStoredItem } from '@/lib/server/storage'
+import { loadSessions, saveSessions, deleteSession, active, loadAgents } from '@/lib/server/storage'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
 import { notify } from '@/lib/server/ws-hub'
 import { getSessionQueueSnapshot, getSessionRunState } from '@/lib/server/runtime/session-run-manager'
 import { normalizeProviderEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { applyResolvedRoute, resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
 import { buildAgentDisabledMessage, isAgentDisabled } from '@/lib/server/agents/agent-availability'
-import { materializeStreamingAssistantArtifacts } from '@/lib/chat/chat-streaming-state'
 import { buildSessionListSummary } from '@/lib/chat/session-summary'
 import { normalizeCapabilitySelection } from '@/lib/capability-selection'
 import { enrichSessionWithMissionSummary } from '@/lib/server/missions/mission-service'
@@ -24,30 +23,15 @@ async function ensureDaemonIfNeeded(source: string) {
 
 export async function GET(req: Request) {
   const endPerf = perf.start('api', 'GET /api/chats')
-  try {
-    const { pruneThreadConnectorMirrors } = await import('@/lib/server/connectors/session-consolidation')
-    pruneThreadConnectorMirrors()
-  } catch (err) {
-    console.error('[api/chats] pruneThreadConnectorMirrors failed:', err)
-  }
+  // Note: pruneThreadConnectorMirrors and materializeStreamingAssistantArtifacts
+  // are handled by the daemon periodic health check, not on every list fetch.
   const sessions = loadSessions()
-  const changedSessionIds: string[] = []
   for (const id of Object.keys(sessions)) {
     const run = getSessionRunState(id)
     const queue = getSessionQueueSnapshot(id)
     sessions[id].active = active.has(id) || !!run.runningRunId
     sessions[id].queuedCount = queue.queueLength
     sessions[id].currentRunId = run.runningRunId || null
-    if (!sessions[id].active && Array.isArray(sessions[id].messages)) {
-      if (materializeStreamingAssistantArtifacts(sessions[id].messages)) changedSessionIds.push(id)
-    }
-  }
-  for (const id of changedSessionIds) {
-    const persisted = { ...sessions[id] } as Record<string, unknown>
-    delete persisted.active
-    delete persisted.queuedCount
-    delete persisted.currentRunId
-    upsertStoredItem('sessions', id, persisted)
   }
 
   const summarized = Object.fromEntries(

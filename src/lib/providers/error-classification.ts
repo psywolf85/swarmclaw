@@ -1,5 +1,9 @@
 import { errorMessage } from '@/lib/shared-utils'
 
+/** Matches known context overflow / prompt-too-long error messages across providers. */
+export const CONTEXT_OVERFLOW_RE =
+  /context.length|prompt.{0,10}too.long|too.many.tokens|token.limit|content.too.large|request.too.large|input.too.long|exceeded.{0,20}(max|context|token)|maximum.{0,20}(context|token)/i
+
 export type FailoverReason =
   | 'rate_limit'       // 429
   | 'billing'          // 402
@@ -8,6 +12,7 @@ export type FailoverReason =
   | 'overloaded'       // 500/502/503
   | 'timeout'          // ETIMEDOUT, ECONNRESET, socket hang up
   | 'model_not_found'  // 404 + "model" in message
+  | 'context_overflow' // 400 + prompt too long / context length exceeded
   | 'format'           // 400 Bad Request
   | 'unknown'
 
@@ -36,6 +41,9 @@ export function classifyProviderError(err: unknown): ClassifiedError {
 
   if (status === 404 && (msg.includes('model') || msg.includes('not found')))
     return { reason: 'model_not_found', retryable: false, shouldRotateCredential: false, suggestedBackoffMs: 0 }
+
+  if (status === 400 && CONTEXT_OVERFLOW_RE.test(msg))
+    return { reason: 'context_overflow', retryable: true, shouldRotateCredential: false, suggestedBackoffMs: 0 }
 
   if (status === 400)
     return { reason: 'format', retryable: false, shouldRotateCredential: false, suggestedBackoffMs: 0 }

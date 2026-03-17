@@ -30,6 +30,7 @@ import { buildLLM } from '@/lib/server/build-llm'
 import {
   loadAgents,
   loadChatrooms,
+  patchProtocolRun,
   upsertChatroom,
   upsertProtocolRunEvent,
 } from '@/lib/server/storage'
@@ -408,7 +409,6 @@ export function persistRun(run: ProtocolRun): ProtocolRun {
 }
 
 export function updateRun(runId: string, updater: (current: ProtocolRun) => ProtocolRun | null): ProtocolRun | null {
-  const { patchProtocolRun } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
   const updated = patchProtocolRun(runId, (current) => {
     if (!current) return null
     const normalized = normalizeProtocolRun(current)

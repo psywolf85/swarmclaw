@@ -6,6 +6,7 @@ const REVIEW_LINE_RE = /\[MAIN_LOOP_REVIEW\]\s*(\{[^\n]*\})/i
 export interface MainLoopPlanMeta {
   steps?: string[]
   current_step?: string
+  completed_steps?: string[]
 }
 
 export interface MainLoopReviewMeta {
@@ -167,10 +168,14 @@ export function parseMainLoopPlan(text: string): MainLoopPlanMeta | null {
   const currentStep = typeof parsed.current_step === 'string'
     ? cleanText(parsed.current_step, 220)
     : ''
+  const completedSteps = Array.isArray(parsed.completed_steps)
+    ? uniqueStrings(parsed.completed_steps.filter((v): v is string => typeof v === 'string')).slice(0, 8)
+    : []
   if (!steps.length && !currentStep) return null
   return {
     steps: steps.length ? steps : undefined,
     current_step: currentStep || undefined,
+    completed_steps: completedSteps.length ? completedSteps : undefined,
   }
 }
 

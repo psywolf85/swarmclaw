@@ -9,6 +9,7 @@ import { toast } from 'sonner'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import type { Agent, ChatroomRoutingRule } from '@/types'
 import { CheckIcon } from '@/components/shared/check-icon'
+import { WORKER_ONLY_PROVIDER_IDS } from '@/lib/provider-sets'
 
 function genRuleId(): string {
   return `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -285,7 +286,7 @@ export function ChatroomSheet() {
   }
 
   const agentList = Object.values(agents).filter(
-    (a: Agent) => !a.trashedAt
+    (a: Agent) => !a.trashedAt && !WORKER_ONLY_PROVIDER_IDS.has(a.provider)
   ) as Agent[]
 
   const memberAgents = agentList.filter((a) => selectedAgentIds.includes(a.id))

@@ -12,7 +12,6 @@ interface Props {
   y2: number
   active?: boolean
   direction?: EdgeDirection
-  messagePreview?: string | null
   color?: EdgeColor
   onClick?: (e: React.MouseEvent) => void
 }
@@ -41,7 +40,7 @@ const COLOR_MAP: Record<EdgeColor, { stroke: string; glow: string; dot: string; 
   },
 }
 
-export function OrgChartEdge({ x1, y1, x2, y2, active, direction, messagePreview, color = 'indigo', onClick }: Props) {
+export function OrgChartEdge({ x1, y1, x2, y2, active, direction, color = 'indigo', onClick }: Props) {
   const [hovered, setHovered] = useState(false)
 
   // Cubic bezier from parent bottom-center to child top-center
@@ -152,34 +151,6 @@ export function OrgChartEdge({ x1, y1, x2, y2, active, direction, messagePreview
           >
             View activity
           </button>
-        </foreignObject>
-      )}
-      {active && messagePreview && !hovered && (
-        <foreignObject
-          x={midX - 150}
-          y={midPtY - 14}
-          width={300}
-          height={28}
-          style={{ overflow: 'visible', pointerEvents: 'none' }}
-        >
-          <div style={{
-            fontSize: 11,
-            color: colors.text,
-            background: 'rgba(18,18,30,0.9)',
-            border: `1px solid ${colors.border}`,
-            borderRadius: 8,
-            padding: '3px 12px',
-            textAlign: 'center',
-            whiteSpace: 'nowrap',
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-            maxWidth: 300,
-            width: 'fit-content',
-            margin: '0 auto',
-            animation: 'fadeInHold 4s ease-out forwards',
-          }}>
-            {messagePreview}
-          </div>
         </foreignObject>
       )}
     </g>

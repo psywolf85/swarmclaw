@@ -7,7 +7,7 @@ import type { OrgTreeNode } from '@/lib/org-chart'
 import type { Agent } from '@/types'
 import { OrgChartNode } from './org-chart-node'
 import { OrgChartEdge } from './org-chart-edge'
-import { useDelegationEdgeState } from '@/hooks/use-delegation-edge-state'
+import { useDelegationEdgeState, useNodeDelegationBubbles } from '@/hooks/use-delegation-edge-state'
 import { OrgChartTeamRegion } from './org-chart-team-region'
 import type { ResizeDirection } from './org-chart-team-region'
 import { OrgChartToolbar } from './org-chart-toolbar'
@@ -15,6 +15,7 @@ import { OrgChartSidebar } from './org-chart-sidebar'
 import { OrgChartContextMenu } from './org-chart-context-menu'
 import { OrgChartDetailPanel } from './org-chart-detail-panel'
 import { MiniChatBubble } from './mini-chat-bubble'
+import { DelegationBubble } from './delegation-bubble'
 import { OrgChartEdgePopover } from './org-chart-edge-popover'
 import type { ContextAction } from './org-chart-context-menu'
 import { useOrgChartPanZoom } from './use-org-chart-pan-zoom'
@@ -93,6 +94,10 @@ export function OrgChartView() {
 
   // Live delegation edge state
   const edgeLiveMap = useDelegationEdgeState(agents)
+
+  // Per-node delegation bubbles
+  const { activeBubbles, lastBubbles } = useNodeDelegationBubbles(agents)
+  const [hoveredNodeId, setHoveredNodeId] = useState<string | null>(null)
 
   // Build per-node glow from edge live state (both parent and child light up)
   const nodeGlowMap = useMemo(() => {
@@ -616,7 +621,6 @@ export function OrgChartView() {
                 y2={cp.y}
                 active={liveState?.active ?? false}
                 direction={liveState?.direction ?? null}
-                messagePreview={liveState?.snippet ?? null}
                 color={liveState?.color ?? 'indigo'}
                 onClick={(e) => {
                   e.stopPropagation()
@@ -639,6 +643,8 @@ export function OrgChartView() {
           const delInfo = agent.role === 'coordinator' && agent.delegationEnabled
             ? { mode: agent.delegationTargetMode || 'all' as const, count: (agent.delegationTargetAgentIds || []).length }
             : null
+          const activeBubble = activeBubbles.get(id)
+          const hoverBubble = !activeBubble && hoveredNodeId === id ? lastBubbles.get(id) : null
           return (
             <div
               key={id}
@@ -648,7 +654,26 @@ export function OrgChartView() {
                 top: pos.y,
                 transition: isDragging ? 'none' : 'left 0.3s ease, top 0.3s ease',
               }}
+              onMouseEnter={() => setHoveredNodeId(id)}
+              onMouseLeave={() => setHoveredNodeId((prev) => prev === id ? null : prev)}
             >
+              {/* Delegation bubble above node */}
+              {(activeBubble || hoverBubble) && (
+                <div
+                  className="absolute z-30"
+                  style={{
+                    left: NODE_W / 2 - 140,
+                    top: -12,
+                    transform: 'translateY(-100%)',
+                    pointerEvents: hoverBubble ? 'auto' : 'none',
+                  }}
+                >
+                  <DelegationBubble
+                    data={activeBubble || hoverBubble!}
+                    isHoverOnly={!activeBubble}
+                  />
+                </div>
+              )}
               <OrgChartNode
                 agent={agent}
                 isRunning={runningAgentIds.has(id)}

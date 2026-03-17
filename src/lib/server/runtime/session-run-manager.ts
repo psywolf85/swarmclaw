@@ -57,6 +57,8 @@ interface QueueEntry {
   resolve: (value: ExecuteChatTurnResult) => void
   reject: (error: Error) => void
   promise: Promise<ExecuteChatTurnResult>
+  /** Whether this entry has been counted in nonHeartbeatWorkCount (prevents double-decrement). */
+  nonHeartbeatCounted?: boolean
 }
 
 interface RuntimeState {
@@ -71,6 +73,7 @@ interface RuntimeState {
   externalHoldTimers: Map<string, ReturnType<typeof setTimeout>>
   drainDepth: Map<string, number>
   lastQueuedAt: number
+  nonHeartbeatWorkCount: Map<string, number>
 }
 
 const MAX_RECENT_RUNS = 500
@@ -94,6 +97,7 @@ const state: RuntimeState = hmrSingleton<RuntimeState>('__swarmclaw_session_run_
   externalHoldTimers: new Map<string, ReturnType<typeof setTimeout>>(),
   drainDepth: new Map<string, number>(),
   lastQueuedAt: 0,
+  nonHeartbeatWorkCount: new Map<string, number>(),
 }))
 const recoveryState = hmrSingleton('__swarmclaw_session_run_recovery__', () => ({ completed: false }))
 
@@ -109,6 +113,7 @@ if (!state.externalSessionHolds) state.externalSessionHolds = new Map<string, nu
 if (!state.externalHoldTimers) state.externalHoldTimers = new Map<string, ReturnType<typeof setTimeout>>()
 if (!state.drainDepth) state.drainDepth = new Map<string, number>()
 if (typeof state.lastQueuedAt !== 'number') state.lastQueuedAt = 0
+if (!state.nonHeartbeatWorkCount) state.nonHeartbeatWorkCount = new Map<string, number>()
 
 function now() {
   return Date.now()
@@ -427,13 +432,27 @@ function ensureRecoveredPersistedRuns(): void {
   }
 }
 
+function isNonHeartbeatEntry(entry: QueueEntry): boolean {
+  return !isInternalHeartbeatRun(entry.run.internal, entry.run.source)
+}
+
+function incrementNonHeartbeatWork(entry: QueueEntry): void {
+  if (!isNonHeartbeatEntry(entry)) return
+  entry.nonHeartbeatCounted = true
+  state.nonHeartbeatWorkCount.set(entry.run.sessionId, (state.nonHeartbeatWorkCount.get(entry.run.sessionId) || 0) + 1)
+}
+
+function decrementNonHeartbeatWork(entry: QueueEntry): void {
+  if (!entry.nonHeartbeatCounted) return
+  entry.nonHeartbeatCounted = false
+  const sessionId = entry.run.sessionId
+  const count = (state.nonHeartbeatWorkCount.get(sessionId) || 0) - 1
+  if (count <= 0) state.nonHeartbeatWorkCount.delete(sessionId)
+  else state.nonHeartbeatWorkCount.set(sessionId, count)
+}
+
 function hasLocalNonHeartbeatWork(sessionId: string): boolean {
-  const running = Array.from(state.runningByExecution.values())
-    .some((entry) => entry.run.sessionId === sessionId && !isInternalHeartbeatRun(entry.run.internal, entry.run.source))
-  if (running) return true
-  return Array.from(state.queueByExecution.values())
-    .flatMap((queue) => queue)
-    .some((entry) => entry.run.sessionId === sessionId && !isInternalHeartbeatRun(entry.run.internal, entry.run.source))
+  return (state.nonHeartbeatWorkCount.get(sessionId) || 0) > 0
 }
 
 function clearDeferredDrain(executionKey: string): void {
@@ -488,6 +507,7 @@ function reconcileSessionActivityLease(sessionId: string): void {
 }
 
 function resolveRecoveredQueuedEntry(entry: QueueEntry, reason: string): void {
+  decrementNonHeartbeatWork(entry)
   if (entry.run.status === 'completed' || entry.run.status === 'failed' || entry.run.status === 'cancelled') {
     entry.run.endedAt = entry.run.endedAt || now()
   } else {
@@ -597,6 +617,7 @@ function cancelPendingForSession(sessionId: string, reason: string): number {
       syncRunRecord(entry.run)
       emitRunMeta(entry, 'cancelled', { reason })
       entry.reject(new Error(reason))
+      decrementNonHeartbeatWork(entry)
       cancelled++
     }
     if (keep.length > 0) state.queueByExecution.set(key, keep)
@@ -626,6 +647,7 @@ function cancelQueuedEntries(
       syncRunRecord(entry.run)
       emitRunMeta(entry, 'cancelled', { reason })
       entry.reject(new Error(reason))
+      decrementNonHeartbeatWork(entry)
       sessionIds.add(entry.run.sessionId)
       cancelled += 1
     }
@@ -696,6 +718,7 @@ export function cancelAllRuns(reason = 'Cancelled'): { cancelledQueued: number; 
     abortSessionRuntime(entry, reason)
   }
   state.runningByExecution.clear()
+  state.nonHeartbeatWorkCount.clear()
 
   return { cancelledQueued, abortedRunning }
 }
@@ -883,7 +906,9 @@ async function drainExecution(executionKey: string): Promise<void> {
   } finally {
     if (runtimeTimer) clearTimeout(runtimeTimer)
     state.runningByExecution.delete(executionKey)
+    decrementNonHeartbeatWork(next)
     reconcileSessionActivityLease(next.run.sessionId)
+    notify(`stream-end:${next.run.sessionId}`)
     if (finishedMissionId && next.run.source !== 'chat') {
       queueMicrotask(() => {
         import('@/lib/server/missions/mission-service')
@@ -1164,7 +1189,10 @@ export function enqueueSessionRun(input: EnqueueSessionRunInput): EnqueueSession
   if (input.callerSignal) chainCallerSignal(input.callerSignal, entry.signalController)
 
   q.push(entry)
-  if (!isInternalHeartbeatRun(internal, source)) reconcileSessionActivityLease(input.sessionId)
+  incrementNonHeartbeatWork(entry)
+  if (entry.nonHeartbeatCounted) {
+    reconcileSessionActivityLease(input.sessionId)
+  }
   const position = (running ? 1 : 0) + q.length - 1
   emitRunMeta(entry, 'queued', { position })
   void drainExecution(executionKey)
@@ -1311,10 +1339,86 @@ export function cancelSessionRuns(sessionId: string, reason = 'Cancelled'): { ca
     cancelledRunning = true
     abortSessionRuntime(running, reason)
     state.runningByExecution.delete(running.executionKey)
+    decrementNonHeartbeatWork(running)
   }
   const cancelledQueued = cancelPendingForSession(sessionId, reason)
   reconcileSessionActivityLease(sessionId)
   return { cancelledQueued, cancelledRunning }
+}
+
+// ---------------------------------------------------------------------------
+// Stuck-run watchdog — safety net for runs that outlive their timeout.
+// Called periodically from daemon health checks.
+// ---------------------------------------------------------------------------
+
+const STUCK_RUN_THRESHOLD_MS = 20 * 60_000 // 20 min (2× default maxRuntime)
+
+export function sweepStuckRuns(): { aborted: number } {
+  const deadline = now()
+  let aborted = 0
+
+  // 1. In-memory running entries that have exceeded their timeout
+  for (const [execKey, entry] of state.runningByExecution.entries()) {
+    const age = deadline - (entry.run.startedAt || entry.run.queuedAt)
+    // If the run has an explicit maxRuntimeMs, the existing setTimeout handles it;
+    // the watchdog only kicks in at 1.5× as a safety net.
+    if (entry.maxRuntimeMs && age < entry.maxRuntimeMs * 1.5) continue
+    if (age < STUCK_RUN_THRESHOLD_MS) continue
+
+    abortSessionRuntime(entry, 'Watchdog: run exceeded maximum allowed duration')
+    state.runningByExecution.delete(execKey)
+    decrementNonHeartbeatWork(entry)
+    reconcileSessionActivityLease(entry.run.sessionId)
+    aborted++
+  }
+
+  // 2. Persisted runs marked running but with no in-memory entry (orphaned by HMR/crash)
+  const persistedRunning = listPersistedRuns({ status: 'running' })
+  for (const run of persistedRunning) {
+    const execKey = run.recoveryPayload?.executionGroupKey || executionKeyForSession(run.sessionId)
+    const inMemory = state.runningByExecution.get(execKey)
+    if (inMemory && inMemory.run.id === run.id) continue // still tracked
+
+    const age = deadline - (run.startedAt || run.queuedAt)
+    if (age < STUCK_RUN_THRESHOLD_MS) continue
+
+    markPersistedRunInterrupted(run, 'Watchdog: orphaned run detected after server restart or HMR')
+    aborted++
+
+    // Re-enqueue if the source is recoverable and no other run is already in-flight for this session
+    const alreadyRunning = state.runningByExecution.has(execKey)
+    const alreadyQueued = (state.queueByExecution.get(execKey) || []).some(e => e.run.sessionId === run.sessionId)
+    if (run.recoveryPayload && isRestartRecoverableSource(run.source) && !alreadyRunning && !alreadyQueued) {
+      try {
+        const payload = run.recoveryPayload
+        enqueueSessionRun({
+          sessionId: run.sessionId,
+          message: payload.message,
+          imagePath: payload.imagePath,
+          imageUrl: payload.imageUrl,
+          attachedFiles: payload.attachedFiles,
+          internal: payload.internal,
+          source: payload.source,
+          mode: normalizeMode(payload.mode, payload.internal),
+          dedupeKey: run.dedupeKey,
+          maxRuntimeMs: payload.maxRuntimeMs,
+          modelOverride: payload.modelOverride,
+          heartbeatConfig: payload.heartbeatConfig,
+          replyToId: payload.replyToId,
+          executionGroupKey: payload.executionGroupKey,
+          recoveredFromRestart: true,
+          recoveredFromRunId: run.id,
+        })
+      } catch (err: unknown) {
+        log.warn('session-run', `Watchdog: failed to re-enqueue orphaned run ${run.id}`, {
+          sessionId: run.sessionId,
+          error: errorMessage(err),
+        })
+      }
+    }
+  }
+
+  return { aborted }
 }
 
 export function resetSessionRunManagerForTests(): void {
@@ -1332,5 +1436,6 @@ export function resetSessionRunManagerForTests(): void {
   state.recentRunIds.length = 0
   state.promises.clear()
   state.externalSessionHolds.clear()
+  state.nonHeartbeatWorkCount.clear()
   state.lastQueuedAt = 0
 }

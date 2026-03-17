@@ -636,6 +636,37 @@ export async function summarizeAndCompact(opts: {
   })
 }
 
+// --- Emergency context reduction (no LLM calls) ---
+
+/**
+ * Aggressively reduce message history when the provider rejects the prompt
+ * for exceeding the context window. Uses simple slicing and truncation —
+ * no LLM summarization (which would itself risk overflow).
+ *
+ * @param messages - The effective message history
+ * @param attempt  - 1-based retry attempt (controls how aggressively to cut)
+ * @returns A reduced copy of the messages array
+ */
+export function emergencyContextReduce(messages: Message[], attempt: number): Message[] {
+  const keepCount = attempt <= 1 ? 15 : 6
+  const maxAssistantChars = attempt <= 1 ? 4_000 : 2_000
+
+  const sliced = messages.length > keepCount ? messages.slice(-keepCount) : [...messages]
+
+  return sliced.map((m) => {
+    const copy = { ...m }
+    // Strip toolEvents to save space
+    if (copy.toolEvents) {
+      delete copy.toolEvents
+    }
+    // Truncate long assistant messages
+    if (copy.role === 'assistant' && copy.text && copy.text.length > maxAssistantChars) {
+      copy.text = copy.text.slice(0, maxAssistantChars) + '\n\n[… truncated for context overflow recovery]'
+    }
+    return copy
+  })
+}
+
 /** Auto-compact: triggers when estimated tokens exceed threshold */
 export function shouldAutoCompact(
   messages: Message[],

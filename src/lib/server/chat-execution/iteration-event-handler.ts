@@ -88,8 +88,12 @@ export async function processIterationEvents(opts: ProcessIterationEventsOpts): 
   let reachedExecutionBoundary = false
   let executionFollowthroughReason: 'research_limit' | 'post_simulation' | null = null
   let loopBroken = false
+  let toolEndCount = 0
   const iterationText = { value: '' }
   const toolPerfEnds = new Map<string, (extra?: Record<string, unknown>) => number>()
+
+  /** Interval for progress checkpoint nudges */
+  const PROGRESS_CHECK_INTERVAL = 10
 
   for await (const event of eventStream) {
     const kind = event.event
@@ -244,6 +248,17 @@ export async function processIterationEvents(opts: ProcessIterationEventsOpts): 
         if (loopResult.severity === 'warning') {
           write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ loopDetection: loopResult.detector, severity: 'warning', message: loopResult.message }) })}\n\n`)
         }
+      }
+
+      // --- Progress checkpoint ---
+      toolEndCount++
+      if (toolEndCount > 0 && toolEndCount % PROGRESS_CHECK_INTERVAL === 0) {
+        const nudge = `Progress check (${toolEndCount} tool calls this iteration). Are you on track for: "${message.slice(0, 200)}"? If stuck, deliver what you have.`
+        write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ progressCheck: true, toolCallCount: toolEndCount, message: nudge }) })}\n\n`)
+        logExecution(session.id, 'decision', nudge, {
+          agentId: session.agentId,
+          detail: { toolEndCount },
+        })
       }
 
       endToolPerf?.({ outputLen: outputStr?.length || 0 })

@@ -1,7 +1,11 @@
 import { genId } from '@/lib/id'
 import { hmrSingleton } from '@/lib/shared-utils'
 import type { DelegationJobArtifact, DelegationJobCheckpoint, DelegationJobRecord, DelegationJobStatus } from '@/types'
-import { loadDelegationJobs, loadSession, patchDelegationJob, upsertDelegationJob } from '@/lib/server/storage'
+import { loadDelegationJobs, loadDelegationJobItem, loadSession, logActivity, patchDelegationJob, upsertDelegationJob } from '@/lib/server/storage'
+import { logExecution } from '@/lib/server/execution-log'
+import { log } from '@/lib/server/logger'
+import { debug } from '@/lib/server/debug'
+import { createNotification } from '@/lib/server/create-notification'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { ensureDelegationMission, syncDelegationMissionFromJob } from '@/lib/server/missions/mission-service'
 import { notify } from '@/lib/server/ws-hub'
@@ -91,12 +95,27 @@ export function createDelegationJob(input: CreateDelegationJobInput): Delegation
   }
   syncDelegationMissionFromJob(job.id)
   notifyDelegationJobsChanged()
+
+  const sid = job.childSessionId || job.parentSessionId || ''
+  log.info('delegation', 'Job created', { jobId: job.id, agentId: job.agentId, task: job.task?.slice(0, 200) })
+  logExecution(sid, 'delegation_start', `Delegation job created: ${job.task?.slice(0, 100)}`, {
+    detail: { jobId: job.id, agentId: job.agentId, kind: job.kind },
+  })
+  logActivity({
+    entityType: 'delegation',
+    entityId: job.id,
+    action: 'delegated',
+    actor: 'agent',
+    actorId: job.agentId || undefined,
+    summary: `Delegation job created: ${job.agentName || job.agentId || 'unknown'} — ${job.task?.slice(0, 100)}`,
+  })
+  debug.verbose('delegation', 'Job details', job)
+
   return job
 }
 
 export function getDelegationJob(id: string): DelegationJobRecord | null {
-  const all = loadDelegationJobs()
-  const current = all[id]
+  const current = loadDelegationJobItem(id)
   if (!current || typeof current !== 'object') return null
   return current as DelegationJobRecord
 }
@@ -166,7 +185,7 @@ export function completeDelegationJob(
   const current = getDelegationJob(id)
   if (!current) return null
   if (isTerminalStatus(current.status)) return current
-  return updateDelegationJob(id, {
+  const updated = updateDelegationJob(id, {
     ...patch,
     status: 'completed',
     result,
@@ -174,6 +193,22 @@ export function completeDelegationJob(
     error: null,
     completedAt: Date.now(),
   })
+
+  const sid = current.childSessionId || current.parentSessionId || ''
+  log.info('delegation', 'Job completed', { jobId: id, agentId: current.agentId })
+  logExecution(sid, 'delegation_complete', `Delegation completed: ${current.agentName || current.agentId}`, {
+    detail: { jobId: id, resultLen: result.length },
+  })
+  logActivity({
+    entityType: 'delegation',
+    entityId: id,
+    action: 'completed',
+    actor: 'agent',
+    actorId: current.agentId || undefined,
+    summary: `Delegation completed: ${current.agentName || current.agentId || 'unknown'}`,
+  })
+
+  return updated
 }
 
 export function failDelegationJob(id: string, error: string, patch?: Partial<DelegationJobRecord>): DelegationJobRecord | null {
@@ -181,12 +216,36 @@ export function failDelegationJob(id: string, error: string, patch?: Partial<Del
   const current = getDelegationJob(id)
   if (!current) return null
   if (isTerminalStatus(current.status)) return current
-  return updateDelegationJob(id, {
+  const updated = updateDelegationJob(id, {
     ...patch,
     status: 'failed',
     error,
     completedAt: Date.now(),
   })
+
+  const sid = current.childSessionId || current.parentSessionId || ''
+  log.warn('delegation', 'Job failed', { jobId: id, agentId: current.agentId, error })
+  logExecution(sid, 'delegation_fail', `Delegation failed: ${current.agentName || current.agentId} — ${error.slice(0, 200)}`, {
+    detail: { jobId: id, error },
+  })
+  logActivity({
+    entityType: 'delegation',
+    entityId: id,
+    action: 'failed',
+    actor: 'agent',
+    actorId: current.agentId || undefined,
+    summary: `Delegation failed: ${current.agentName || current.agentId || 'unknown'} — ${error.slice(0, 100)}`,
+  })
+  createNotification({
+    type: 'error',
+    title: 'Delegation failed',
+    message: `${current.agentName || current.agentId}: ${error.slice(0, 200)}`,
+    entityType: 'delegation',
+    entityId: id,
+    dedupKey: `deleg_fail:${id}`,
+  })
+
+  return updated
 }
 
 export function cancelDelegationJob(id: string): DelegationJobRecord | null {
@@ -199,6 +258,16 @@ export function cancelDelegationJob(id: string): DelegationJobRecord | null {
   } catch {
     // best-effort cancel
   }
+  log.info('delegation', 'Job cancelled', { jobId: id, agentId: current.agentId })
+  logActivity({
+    entityType: 'delegation',
+    entityId: id,
+    action: 'cancelled',
+    actor: 'agent',
+    actorId: current.agentId || undefined,
+    summary: `Delegation cancelled: ${current.agentName || current.agentId || 'unknown'}`,
+  })
+
   // Commit state before deleting handle — if the update fails, the handle
   // stays intact for a future retry rather than being orphaned.
   const result = updateDelegationJob(id, {
@@ -262,6 +331,9 @@ export function recoverStaleDelegationJobs(opts?: { maxAgeMs?: number; fullResta
     && !runtimeHandles.has(job.id)
     && (opts?.fullRestart || (job.updatedAt || job.createdAt) < threshold),
   )
+  if (stale.length > 0) {
+    log.warn('delegation', 'Recovering stale jobs', { count: stale.length })
+  }
   for (const job of stale) {
     failDelegationJob(job.id, 'Delegation job was interrupted by server restart.')
     if (job.parentSessionId) {

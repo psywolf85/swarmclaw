@@ -50,6 +50,7 @@ export interface UsageInfo {
 interface ChatState {
   streaming: boolean
   streamingSessionId: string | null
+  streamSource: 'local' | 'server' | null
   streamText: string
   assistantRenderId: string | null
 
@@ -186,6 +187,7 @@ function syncSessionQueueState(sessionId: string, params: {
 export const useChatStore = create<ChatState>((set, get) => ({
   streaming: false,
   streamingSessionId: null,
+  streamSource: null,
   streamText: '',
   assistantRenderId: null,
   streamPhase: 'thinking',
@@ -198,7 +200,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     // Clear "sending" queue items whose text now appears in the message list
     const queuedMessages = s.queuedMessages.filter((item) => {
       if (!item.sending) return true
-      return !next.messages.some((m) => m.role === 'user' && m.text === item.text)
+      if (next.messages.some((m) => m.role === 'user' && m.text === item.text)) return false
+      if (Date.now() - item.queuedAt > 15_000) return false
+      return true
     })
     const patch: Partial<ChatState> = {
       messages: next.messages,
@@ -240,7 +244,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messages = s.messages
       const cleaned = next.filter((item) => {
         if (!item.sending || item.sessionId !== sessionId) return true
-        return !messages.some((m) => m.role === 'user' && m.text === item.text)
+        if (messages.some((m) => m.role === 'user' && m.text === item.text)) return false
+        if (Date.now() - item.queuedAt > 15_000) return false
+        return true
       })
       return { queuedMessages: cleaned }
     })
@@ -386,6 +392,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set((s) => ({
       streaming: true,
       streamingSessionId: sessionId,
+      streamSource: 'local' as const,
       streamText: '',
       assistantRenderId,
       streamPhase: 'queued' as const,
@@ -588,6 +595,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         messages: mergeCompletedAssistantMessage(s.messages, assistantMsg),
         streaming: false,
         streamingSessionId: null,
+        streamSource: null,
         streamText: '',
         displayText: '',
         streamPhase: 'thinking' as const,
@@ -600,6 +608,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set({
         streaming: false,
         streamingSessionId: null,
+        streamSource: null,
         streamText: '',
         assistantRenderId: null,
         displayText: '',
@@ -617,6 +626,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         set({
           streaming: false,
           streamingSessionId: null,
+          streamSource: null,
           streamText: '',
           assistantRenderId: null,
           displayText: '',
@@ -844,6 +854,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     set({
       streaming: false,
       streamingSessionId: null,
+      streamSource: null,
       streamText: '',
       assistantRenderId: null,
       displayText: '',

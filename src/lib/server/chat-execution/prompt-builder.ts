@@ -28,12 +28,13 @@ import {
 } from '@/lib/server/chat-execution/message-classifier'
 import { isCurrentThreadRecallRequest } from '@/lib/server/memory/memory-policy'
 import { compactThreadRecallText } from '@/lib/server/chat-execution/chat-streaming-utils'
+import { CLI_PROVIDER_CAPABILITIES, isCliProvider } from '@/lib/providers/cli-utils'
 
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
-function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { delegationEnabled?: boolean }): string[] {
+function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { delegationEnabled?: boolean; agentId?: string | null }): string[] {
   const lines = collectCapabilityDescriptions(enabledExtensions)
 
   // Context tools are available to any session with extensions
@@ -41,6 +42,32 @@ function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { del
     lines.push('- I can monitor my own context usage (`context_status`) and compact my conversation history (`context_summarize`) when I\'m running low on space.')
     if (opts?.delegationEnabled) {
       lines.push('- I can delegate tasks to other agents (`delegate_to_agent`) based on their strengths and availability.')
+
+      // CLI team hint — if teammates run CLI providers, mention their strengths
+      if (opts.agentId) {
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { loadAgents } = require('@/lib/server/storage')
+          // eslint-disable-next-line @typescript-eslint/no-require-imports
+          const { resolveTeam } = require('@/lib/server/agents/team-resolution')
+          const agents = loadAgents() as Record<string, Record<string, unknown>>
+          const team = resolveTeam(opts.agentId, agents)
+          if (team.mode === 'team') {
+            const cliTeammates: string[] = []
+            const allMembers = [...(team.coordinator ? [team.coordinator] : []), ...team.peers, ...team.directReports]
+            for (const member of allMembers) {
+              const provider = String(member.provider || '')
+              if (isCliProvider(provider)) {
+                const caps = CLI_PROVIDER_CAPABILITIES[provider] || ''
+                cliTeammates.push(`${member.name} (${provider} — ${caps})`)
+              }
+            }
+            if (cliTeammates.length > 0) {
+              lines.push(`- Your team includes coding specialists: ${cliTeammates.join(', ')}. For complex coding tasks involving file changes, these teammates are well-suited. Use your judgment — simple tasks are fine to handle yourself.`)
+            }
+          }
+        } catch { /* non-critical — team resolution may not be available */ }
+      }
     }
   }
   return lines
@@ -263,6 +290,7 @@ export function buildAgenticExecutionPolicy(opts: {
   allowSilentReplies?: boolean
   isDirectConnectorSession?: boolean
   delegationEnabled?: boolean
+  agentId?: string | null
   userMessage?: string
   history?: Message[]
   hasAttachmentContext?: boolean
@@ -274,7 +302,7 @@ export function buildAgenticExecutionPolicy(opts: {
   const mode = opts.mode || 'full'
   const isMinimal = mode === 'minimal'
   const hasTooling = opts.enabledExtensions.length > 0
-  const extensionLines = isMinimal ? [] : buildExtensionCapabilityLines(opts.enabledExtensions, { delegationEnabled: opts.delegationEnabled })
+  const extensionLines = isMinimal ? [] : buildExtensionCapabilityLines(opts.enabledExtensions, { delegationEnabled: opts.delegationEnabled, agentId: opts.agentId })
   const toolDisciplineLines = buildToolSection(opts.enabledExtensions)
   const hasMemoryTools = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'memory')
 

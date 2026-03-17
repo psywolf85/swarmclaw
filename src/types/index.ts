@@ -28,6 +28,8 @@ export interface Message {
   historyExcluded?: boolean
   /** True while the message is still being streamed — cleared on final persist. */
   streaming?: boolean
+  /** Run ID that produced this message — used to scope streaming artifact replacement. */
+  runId?: string
 }
 
 export type SessionResetMode = 'idle' | 'daily' | 'isolated'
@@ -292,7 +294,7 @@ export interface CanvasDocument {
 
 export type CanvasContent = string | CanvasDocument | null
 
-export type ProviderType = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'openai' | 'ollama' | 'anthropic' | 'openclaw' | 'google' | 'deepseek' | 'groq' | 'together' | 'mistral' | 'xai' | 'fireworks' | 'nebius' | 'deepinfra'
+export type ProviderType = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'gemini-cli' | 'openai' | 'ollama' | 'anthropic' | 'openclaw' | 'google' | 'deepseek' | 'groq' | 'together' | 'mistral' | 'xai' | 'fireworks' | 'nebius' | 'deepinfra'
 
 export interface ProviderInfo {
   id: ProviderType
@@ -348,6 +350,7 @@ export interface Session {
   claudeSessionId: string | null
   codexThreadId?: string | null
   opencodeSessionId?: string | null
+  geminiSessionId?: string | null
   delegateResumeIds?: {
     claudeCode?: string | null
     codex?: string | null
@@ -2036,9 +2039,9 @@ export interface ProtocolRunEvent {
 
 export interface ActivityEntry {
   id: string
-  entityType: 'agent' | 'task' | 'connector' | 'session' | 'webhook' | 'schedule'
+  entityType: 'agent' | 'task' | 'connector' | 'session' | 'webhook' | 'schedule' | 'delegation' | 'swarm' | 'chatroom' | 'coordination'
   entityId: string
-  action: 'created' | 'updated' | 'deleted' | 'started' | 'stopped' | 'queued' | 'completed' | 'failed' | 'archived' | 'restored' | 'approved' | 'rejected'
+  action: 'created' | 'updated' | 'deleted' | 'started' | 'stopped' | 'queued' | 'completed' | 'failed' | 'archived' | 'restored' | 'approved' | 'rejected' | 'delegated' | 'queried' | 'spawned' | 'timeout' | 'cancelled' | 'incident' | 'running' | 'claimed'
   actor: 'user' | 'agent' | 'system' | 'daemon'
   actorId?: string
   summary: string

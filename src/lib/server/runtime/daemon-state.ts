@@ -1,4 +1,4 @@
-import { loadQueue, loadSchedules, loadSessions, loadConnectors, saveConnectors, loadWebhookRetryQueue, upsertWebhookRetry, deleteWebhookRetry, loadWebhooks, loadAgents, loadSettings, appendWebhookLog, loadCredentials, decryptKey } from '@/lib/server/storage'
+import { loadQueue, loadSchedules, loadSessions, loadConnectors, saveConnectors, loadWebhookRetryQueue, upsertWebhookRetry, deleteWebhookRetry, loadWebhooks, loadAgents, loadSettings, appendWebhookLog, loadCredentials, decryptKey, pruneExpiredLocks } from '@/lib/server/storage'
 import { notify } from '@/lib/server/ws-hub'
 import { processNext, cleanupFinishedTaskSessions, validateCompletedTasksQueue, recoverStalledRunningTasks, resumeQueue, promoteDeferred } from '@/lib/server/runtime/queue'
 import { startScheduler, stopScheduler } from '@/lib/server/runtime/scheduler'
@@ -21,7 +21,8 @@ import {
 import { startConnectorOutboxWorker, stopConnectorOutboxWorker } from '@/lib/server/connectors/outbox'
 import { startHeartbeatService, stopHeartbeatService, getHeartbeatServiceStatus, pruneHeartbeatState } from '@/lib/server/runtime/heartbeat-service'
 import { hasOpenClawAgents, ensureGatewayConnected, disconnectAutoGateways, getGateway } from '@/lib/server/openclaw/gateway'
-import { enqueueSessionRun } from '@/lib/server/runtime/session-run-manager'
+import { enqueueSessionRun, sweepStuckRuns } from '@/lib/server/runtime/session-run-manager'
+import { pruneOldRuns } from '@/lib/server/runtime/run-ledger'
 import { getEnabledCapabilitySelection } from '@/lib/capability-selection'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
 import { DEFAULT_HEARTBEAT_INTERVAL_SEC } from '@/lib/runtime/heartbeat-defaults'
@@ -37,6 +38,7 @@ import { notifyOrchestrators } from '@/lib/server/runtime/orchestrator-events'
 import { recoverStaleDelegationJobs } from '@/lib/server/agents/delegation-jobs'
 import { restoreSwarmRegistry } from '@/lib/server/agents/subagent-swarm'
 import { pruneMainLoopState } from '@/lib/server/agents/main-agent-loop'
+import { pruneSystemEventQueues, pruneOrchestratorEventQueues } from '@/lib/server/runtime/system-events'
 import { checkSwarmTimeouts, ensureProtocolEngineRecovered } from '@/lib/server/protocols/protocol-service'
 import { sweepManagedProcesses, reapOrphanedSandboxContainers } from '@/lib/server/runtime/process-manager'
 import { drainIdleWindowCallbacks } from '@/lib/server/runtime/idle-window'
@@ -801,6 +803,9 @@ function pruneOrphanedState(sessions: Record<string, unknown>): void {
   // Heartbeat service tracking maps
   pruneHeartbeatState(liveSessionIds)
 
+  // System event queues for dead sessions
+  pruneSystemEventQueues(liveSessionIds)
+
   // Process manager — sweep completed processes older than TTL
   sweepManagedProcesses()
 
@@ -817,6 +822,9 @@ function pruneOrphanedState(sessions: Record<string, unknown>): void {
   for (const agentId of ds.openclawDownAgentIds) {
     if (!agents[agentId]) ds.openclawDownAgentIds.delete(agentId)
   }
+
+  // Orchestrator event queues for dead agents
+  pruneOrchestratorEventQueues(new Set(Object.keys(agents)))
 
   // Prune circuit breaker entries for providers that no longer have any agent referencing them
   const liveProviderKeys = new Set<string>()
@@ -848,6 +856,16 @@ async function runHealthChecks() {
   // Continuously keep the completed queue honest.
   validateCompletedTasksQueue()
   recoverStalledRunningTasks()
+
+  // Watchdog: abort runs stuck in running state beyond their timeout threshold.
+  try {
+    const stuck = sweepStuckRuns()
+    if (stuck.aborted > 0) {
+      console.log(`[daemon] Watchdog: aborted ${stuck.aborted} stuck run(s)`)
+    }
+  } catch (err: unknown) {
+    console.error('[daemon] Stuck-run watchdog failed:', err instanceof Error ? err.message : String(err))
+  }
 
   // Keep heartbeat state in sync with task terminal states even without daemon restarts.
   cleanupFinishedTaskSessions()
@@ -978,6 +996,26 @@ async function runHealthChecks() {
     pruneOrphanedState(sessions)
   } catch (err: unknown) {
     console.error('[daemon] Memory hygiene sweep failed:', errorMessage(err))
+  }
+
+  // Prune old terminal runs and their events to prevent unbounded growth
+  try {
+    const pruned = pruneOldRuns()
+    if (pruned.prunedRuns > 0 || pruned.prunedEvents > 0) {
+      console.log(`[daemon] Pruned ${pruned.prunedRuns} old run(s) and ${pruned.prunedEvents} run event(s)`)
+    }
+  } catch (err: unknown) {
+    console.error('[daemon] Run pruning failed:', err instanceof Error ? err.message : String(err))
+  }
+
+  // Prune expired runtime locks
+  try {
+    const locksRemoved = pruneExpiredLocks()
+    if (locksRemoved > 0) {
+      console.log(`[daemon] Pruned ${locksRemoved} expired lock(s)`)
+    }
+  } catch (err: unknown) {
+    console.error('[daemon] Lock pruning failed:', err instanceof Error ? err.message : String(err))
   }
 
   // Periodic memory database maintenance (dedup + TTL pruning)

@@ -3,7 +3,7 @@ import type { AppState } from '../use-app-store'
 import type { Sessions, Session } from '../../types'
 import { api } from '@/lib/app/api-client'
 import { fetchChat, fetchChats } from '@/lib/chat/chats'
-import { invalidateFingerprint } from '../set-if-changed'
+import { invalidateFingerprint, setIfChanged } from '../set-if-changed'
 import { createLoader, createInflightDeduplicator } from '../store-utils'
 
 const sessionRefreshDedup = createInflightDeduplicator('sessionSlice_inflightRefreshes')
@@ -82,6 +82,6 @@ export const createSessionSlice: StateCreator<AppState, [], [], SessionSlice> = 
   },
   updateSessionInStore: (session) => {
     invalidateFingerprint('sessions')
-    set({ sessions: { ...get().sessions, [session.id]: session } })
+    setIfChanged<AppState>(set, 'sessions', { ...get().sessions, [session.id]: session })
   }
 })

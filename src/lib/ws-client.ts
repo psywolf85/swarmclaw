@@ -1,12 +1,15 @@
+import { jitteredBackoff } from '@/lib/shared-utils'
+
 type WsCallback = () => void
 
 let ws: WebSocket | null = null
 let wsEnabled = false
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null
-let reconnectDelay = 1000
+let reconnectAttempt = 0
 const MAX_RECONNECT_DELAY = 30_000
 const listeners = new Map<string, Set<WsCallback>>()
 let connected = false
+const connectionStateListeners = new Set<() => void>()
 
 function getWsUrl(): string {
   if (typeof window === 'undefined') return 'ws://localhost:3457/ws'
@@ -41,13 +44,13 @@ function handleMessage(event: MessageEvent) {
 
 function scheduleReconnect() {
   if (reconnectTimer) return
-  const jitter = Math.random() * 2000
+  const delay = jitteredBackoff(1000, reconnectAttempt, MAX_RECONNECT_DELAY)
+  reconnectAttempt++
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
     if (!wsEnabled) return
     connect()
-  }, reconnectDelay + jitter)
-  reconnectDelay = Math.min(reconnectDelay * 2, MAX_RECONNECT_DELAY)
+  }, delay)
 }
 
 function connect() {
@@ -63,7 +66,8 @@ function connect() {
 
   ws.onopen = () => {
     connected = true
-    reconnectDelay = 1000
+    for (const cb of connectionStateListeners) cb()
+    reconnectAttempt = 0
     // Subscribe to all currently registered topics
     const topics = Array.from(listeners.keys())
     if (topics.length > 0) {
@@ -75,6 +79,7 @@ function connect() {
 
   ws.onclose = () => {
     connected = false
+    for (const cb of connectionStateListeners) cb()
     ws = null
     if (wsEnabled) scheduleReconnect()
   }
@@ -86,7 +91,7 @@ function connect() {
 
 export function connectWs() {
   wsEnabled = true
-  reconnectDelay = 1000
+  reconnectAttempt = 0
   connect()
 }
 
@@ -133,4 +138,12 @@ export function unsubscribeWs(topic: string, callback: WsCallback) {
 
 export function isWsConnected(): boolean {
   return connected
+}
+
+export function onWsStateChange(cb: () => void): void {
+  connectionStateListeners.add(cb)
+}
+
+export function offWsStateChange(cb: () => void): void {
+  connectionStateListeners.delete(cb)
 }

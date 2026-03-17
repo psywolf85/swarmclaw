@@ -8,6 +8,11 @@ import type { Chatroom, Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
+import { log } from '../logger'
+import { debug } from '../debug'
+import { logExecution } from '../execution-log'
+import { logActivity } from '../storage'
+import { WORKER_ONLY_PROVIDER_IDS } from '@/lib/provider-sets'
 
 /**
  * Core Chatroom Execution Logic
@@ -73,6 +78,12 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
       const agents = loadAgents()
       const requestedAgentIds = agentIds || []
       const validAgentIds = requestedAgentIds.filter((aid: string) => !!agents[aid])
+      const cliAgentNames = validAgentIds
+        .filter((aid: string) => WORKER_ONLY_PROVIDER_IDS.has(agents[aid]?.provider))
+        .map((aid: string) => agents[aid]?.name || aid)
+      if (cliAgentNames.length > 0) {
+        return `Error: CLI-based agents cannot join chatrooms: ${cliAgentNames.join(', ')}. They can only be used for direct chats and delegation.`
+      }
 
       const chatroom: Chatroom = {
         id,
@@ -90,6 +101,21 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
       chatrooms[id] = chatroom
       saveChatrooms(chatrooms)
       notify('chatrooms')
+
+      const sid = context.agentId || ''
+      log.info('chatroom', 'Created', { chatroomId: id, name: chatroom.name, members: validAgentIds.length })
+      logExecution(sid, 'chatroom_message', `Chatroom created: ${chatroom.name}`, {
+        detail: { chatroomId: id, members: validAgentIds },
+      })
+      logActivity({
+        entityType: 'chatroom',
+        entityId: id,
+        action: 'created',
+        actor: 'agent',
+        actorId: context.agentId || undefined,
+        summary: `Chatroom created: ${chatroom.name} (${validAgentIds.length} members)`,
+      })
+
       return JSON.stringify({ ok: true, chatroom: { id, name: chatroom.name, agentIds: validAgentIds } })
     }
 
@@ -182,6 +208,10 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
 
     if (action === 'add_agent') {
       if (!agentId) return 'Error: agentId required.'
+      const agents = loadAgents()
+      if (WORKER_ONLY_PROVIDER_IDS.has(agents[agentId]?.provider)) {
+        return `Error: ${agents[agentId]?.name || agentId} is a CLI-based agent and cannot join chatrooms. CLI agents can only be used for direct chats and delegation.`
+      }
       if (!chatroom.agentIds.includes(agentId)) {
         chatroom.agentIds.push(agentId)
         chatroom.updatedAt = Date.now()
@@ -229,6 +259,12 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
       saveChatrooms(chatrooms)
       notify(`chatroom:${chatroomId}`)
 
+      const sid = context.agentId || ''
+      logExecution(sid, 'chatroom_message', `Message sent in ${chatroom.name}`, {
+        detail: { chatroomId, senderId: context.agentId, messageLen: message.length },
+      })
+      debug.verbose('chatroom', 'Content', { chatroomId, message })
+
       // Trigger other agents to respond via the chatroom chat API
       if (triggerResponses !== false) {
         try {
@@ -247,6 +283,7 @@ async function executeChatroomAction(args: Record<string, unknown>, context: { a
 
     return `Unknown action "${action}".`
   } catch (err: unknown) {
+    log.warn('chatroom', 'Action failed', { action, error: errorMessage(err) })
     return `Error: ${errorMessage(err)}`
   }
 }

@@ -6,6 +6,7 @@ import type { ChildProcess } from 'node:child_process'
 import Database from 'better-sqlite3'
 
 import { perf } from '@/lib/server/runtime/perf'
+import { notify } from '@/lib/server/ws-hub'
 import { DATA_DIR, IS_BUILD_BOOTSTRAP, WORKSPACE_DIR } from './data-dir'
 import { normalizeHeartbeatSettingFields } from '@/lib/runtime/heartbeat-defaults'
 import { normalizeRuntimeSettingFields } from '@/lib/runtime/runtime-loop'
@@ -48,7 +49,7 @@ import {
   getSettingsCache,
   getAgentsCache,
 } from './storage-cache'
-import { normalizeStoredRecord } from './storage-normalization'
+import { normalizeStoredRecord, type NormalizationResult } from './storage-normalization'
 import {
   tryAcquireRuntimeLock as _tryAcquireRuntimeLock,
   renewRuntimeLock as _renewRuntimeLock,
@@ -180,8 +181,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS runtime_locks (
 )`)
 
 // --- Internal normalize helper that binds the loadItem dependency ---
-function normalize(table: string, value: unknown): unknown {
+function normalize(table: string, value: unknown): NormalizationResult {
   return normalizeStoredRecord(table, value, loadCollectionItem)
+}
+
+/** Shorthand: normalize and return only the value (for callers that don't need the changed flag). */
+function normalizeValue(table: string, value: unknown): unknown {
+  return normalizeStoredRecord(table, value, loadCollectionItem).value
 }
 
 function readCollectionRaw(table: string): LRUMap<string, string> {
@@ -211,10 +217,10 @@ function loadCollectionWithNormalizationState(table: string): {
   let normalizedCount = 0
   for (const [id, data] of raw.entries()) {
     try {
-      const normalized = normalize(table, JSON.parse(data))
+      const { value: normalized, changed } = normalize(table, JSON.parse(data))
       if (!normalized || typeof normalized !== 'object' || Array.isArray(normalized)) continue
       result[id] = normalized as StoredObject
-      if (JSON.stringify(normalized) !== data) normalizedCount += 1
+      if (changed) normalizedCount += 1
     } catch {
       // Ignore malformed records instead of crashing list endpoints.
     }
@@ -237,7 +243,7 @@ function saveCollection(table: string, data: Record<string, unknown>) {
   const toDelete: string[] = []
 
   for (const [id, val] of Object.entries(data)) {
-    const normalized = normalize(table, val)
+    const normalized = normalizeValue(table, val)
     const serialized = JSON.stringify(normalized)
     if (typeof serialized !== 'string') continue
     next.set(id, serialized)
@@ -302,7 +308,7 @@ function deleteCollectionItem(table: string, id: string) {
  * concurrent processes are modifying different items.
  */
 function upsertCollectionItem(table: string, id: string, value: unknown) {
-  const serialized = JSON.stringify(normalize(table, value))
+  const serialized = JSON.stringify(normalizeValue(table, value))
   db.prepare(`INSERT OR REPLACE INTO ${table} (id, data) VALUES (?, ?)`).run(id, serialized)
   // Update the in-memory cache
   const cached = collectionCache.get(table)
@@ -316,7 +322,7 @@ function loadCollectionItem(table: string, id: string): unknown | null {
   const row = db.prepare(`SELECT data FROM ${table} WHERE id = ?`).get(id) as { data: string } | undefined
   if (!row) return null
   try {
-    return normalize(table, JSON.parse(row.data))
+    return normalizeValue(table, JSON.parse(row.data))
   } catch {
     return null
   }
@@ -325,7 +331,7 @@ function loadCollectionItem(table: string, id: string): unknown | null {
 function upsertCollectionItems(table: string, entries: Array<[string, unknown]>): void {
   if (!entries.length) return
   const prepared = entries
-    .map(([id, value]) => [id, JSON.stringify(normalize(table, value))] as const)
+    .map(([id, value]) => [id, JSON.stringify(normalizeValue(table, value))] as const)
     .filter(([, serialized]) => typeof serialized === 'string')
   if (!prepared.length) return
 
@@ -492,6 +498,11 @@ export function isRuntimeLockActive(name: string): boolean {
 
 export function releaseRuntimeLock(name: string, owner: string): void {
   _releaseRuntimeLock(db, name, owner)
+}
+
+export function pruneExpiredLocks(): number {
+  const result = db.prepare('DELETE FROM runtime_locks WHERE expires_at < ?').run(Date.now())
+  return result.changes
 }
 
 // --- JSON Migration ---
@@ -678,10 +689,9 @@ Be concise but not curt. Warmth doesn't require verbosity. When someone asks "ho
           existing.extensions = []
           existing.updatedAt = Date.now()
         }
-        const beforeNormalize = JSON.stringify(existing)
-        const normalized = normalize('agents', structuredClone(existing)) as Record<string, unknown>
-        if (beforeNormalize !== JSON.stringify(normalized)) {
-          Object.assign(existing, normalized)
+        const { value: normalized, changed: normChanged } = normalize('agents', structuredClone(existing))
+        if (normChanged) {
+          Object.assign(existing, normalized as Record<string, unknown>)
           existing.updatedAt = Date.now()
         }
         if (existing.autoDraftSkillSuggestions !== false && existing.autoDraftSkillSuggestions !== true) {
@@ -748,7 +758,7 @@ export function saveSessions(s: Record<string, Session | StoredObject>) {
   // Explicit deletion goes through deleteSession(id).
   const entries: Array<[string, unknown]> = Object.entries(s).map(([id, session]) => [
     id,
-    normalize('sessions', structuredClone(session as unknown as StoredObject)),
+    normalizeValue('sessions', structuredClone(session as unknown as StoredObject)),
   ])
   if (entries.length > 0) upsertCollectionItems('sessions', entries)
 }
@@ -843,10 +853,9 @@ function migrateAgents(agents: Record<string, Record<string, unknown>>): boolean
   let changed = false
   for (const [id, agent] of Object.entries(agents)) {
     if (!agent || typeof agent !== 'object') continue
-    const before = JSON.stringify(agent)
-    const normalized = normalize('agents', agent) as Record<string, unknown>
-    agents[id] = normalized
-    if (JSON.stringify(normalized) !== before) changed = true
+    const result = normalize('agents', agent)
+    agents[id] = result.value as Record<string, unknown>
+    if (result.changed) changed = true
   }
   return changed
 }
@@ -889,7 +898,7 @@ export function saveAgents(p: Record<string, Agent | StoredObject>) {
   // without includeTrashed and then save back.
   const entries: Array<[string, unknown]> = Object.entries(p).map(([id, agent]) => [
     id,
-    normalize('agents', structuredClone(agent)),
+    normalizeValue('agents', structuredClone(agent)),
   ])
   if (entries.length > 0) upsertCollectionItems('agents', entries)
   getAgentsCache().invalidate()
@@ -898,11 +907,11 @@ export function saveAgents(p: Record<string, Agent | StoredObject>) {
 export function loadAgent(id: string, opts?: { includeTrashed?: boolean }): StoredAgentRecord | null {
   const agent = loadCollectionItem('agents', id) as StoredAgentRecord | null
   if (!agent) return null
-  const before = JSON.stringify(agent)
-  const normalized = normalize('agents', agent) as StoredAgentRecord
-  if (JSON.stringify(normalized) !== before) upsertCollectionItem('agents', id, normalized)
-  if (!opts?.includeTrashed && normalized.trashedAt) return null
-  return normalized
+  const { value: normalized, changed } = normalize('agents', agent)
+  if (changed) upsertCollectionItem('agents', id, normalized)
+  const result = normalized as StoredAgentRecord
+  if (!opts?.includeTrashed && result.trashedAt) return null
+  return result
 }
 
 export function upsertAgent(id: string, agent: unknown) {
@@ -920,7 +929,7 @@ export function patchAgent(
 }
 
 // --- Schedules ---
-const schedulesStore = createCollectionStore('schedules')
+const schedulesStore = createCollectionStore('schedules', { ttlMs: 10_000 })
 export function loadSchedules(): Record<string, Schedule> {
   const { result, normalizedCount } = loadCollectionWithNormalizationState('schedules')
   if (normalizedCount > 0) saveCollection('schedules', result)
@@ -949,7 +958,7 @@ export const saveBenchmarks = benchmarksStore.save
 export const deleteBenchmark = benchmarksStore.deleteItem
 
 // --- Tasks ---
-const tasksStore = createCollectionStore('tasks')
+const tasksStore = createCollectionStore('tasks', { ttlMs: 10_000 })
 export const loadTasks = tasksStore.load
 export const saveTasks = tasksStore.save
 export const loadTask = tasksStore.loadItem as (id: string) => BoardTask | null
@@ -1229,12 +1238,12 @@ export function loadProtocolRunEventsByRunId(runId: string): ProtocolRunEvent[] 
 }
 
 // --- Skills ---
-const skillsStore = createCollectionStore('skills')
+const skillsStore = createCollectionStore('skills', { ttlMs: 15_000 })
 export const loadSkills = skillsStore.load
 export const saveSkills = skillsStore.save
 
 // --- Learned Skills ---
-const learnedSkillsStore = createCollectionStore('learned_skills')
+const learnedSkillsStore = createCollectionStore('learned_skills', { ttlMs: 10_000 })
 export const loadLearnedSkills = learnedSkillsStore.load as () => Record<string, LearnedSkill>
 export const saveLearnedSkills = learnedSkillsStore.save as (items: Record<string, LearnedSkill>) => void
 export const loadLearnedSkill = learnedSkillsStore.loadItem as (id: string) => LearnedSkill | null
@@ -1439,6 +1448,7 @@ export function logActivity(entry: {
   const id = crypto.randomBytes(8).toString('hex')
   const record = { id, ...entry, timestamp: Date.now() }
   activityStore.upsert(id, record)
+  notify('activity')
 }
 
 // --- Webhook Retry Queue ---
@@ -1544,8 +1554,9 @@ export const upsertWatchJobs = watchJobsStore.upsertMany
 export const deleteWatchJob = watchJobsStore.deleteItem
 
 // --- Delegation Jobs ---
-const delegationJobsStore = createCollectionStore('delegation_jobs')
+const delegationJobsStore = createCollectionStore('delegation_jobs', { ttlMs: 5_000 })
 export const loadDelegationJobs = delegationJobsStore.load
+export const loadDelegationJobItem = delegationJobsStore.loadItem
 export const upsertDelegationJob = delegationJobsStore.upsert
 export const { patch: patchDelegationJob } = delegationJobsStore
 export const deleteDelegationJob = delegationJobsStore.deleteItem

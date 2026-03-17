@@ -11,6 +11,10 @@
 
 import { genId } from '@/lib/id'
 import { errorMessage, hmrSingleton, sleep } from '@/lib/shared-utils'
+import { log } from '@/lib/server/logger'
+import { logExecution } from '@/lib/server/execution-log'
+import { logActivity } from '@/lib/server/storage'
+import { createNotification } from '@/lib/server/create-notification'
 import { notify } from '@/lib/server/ws-hub'
 import {
   spawnSubagent,
@@ -221,11 +225,13 @@ export async function spawnSwarm(
       members.push({ index: i, handle, result: null, spawnError: null })
     } catch (err: unknown) {
       spawnErrorCount++
+      const errMsg = errorMessage(err)
+      log.warn('swarm', 'Member spawn failed', { swarmId, index: i, agentId: task.agentId, error: errMsg })
       members.push({
         index: i,
         handle: null as unknown as SubagentHandle,
         result: null,
-        spawnError: errorMessage(err),
+        spawnError: errMsg,
       })
     }
   }
@@ -328,6 +334,46 @@ export async function spawnSwarm(
   swarmRegistry.set(swarmId, swarm)
   notifySwarmChanged()
   persistSwarmSnapshot(swarm)
+
+  const sid = context.sessionId || ''
+  log.info('swarm', 'Spawned', { swarmId, taskCount: input.tasks.length, mode: executionMode, spawnErrors: spawnErrorCount })
+  logExecution(sid, 'swarm_spawn', `Swarm spawned: ${input.tasks.length} members (${executionMode})`, {
+    detail: { swarmId, taskCount: input.tasks.length, mode: executionMode, spawnErrors: spawnErrorCount },
+  })
+  logActivity({
+    entityType: 'swarm',
+    entityId: swarmId,
+    action: 'spawned',
+    actor: 'agent',
+    summary: `Swarm spawned: ${input.tasks.length} members (${executionMode})`,
+  })
+
+  // Wire up completion logging
+  swarm.allSettled.then((aggregate) => {
+    const status = aggregate.totalFailed + aggregate.totalSpawnErrors === aggregate.totalSpawned ? 'failed' : 'completed'
+    const durationMs = aggregate.durationMs
+    log.info('swarm', 'Completed', { swarmId, status, durationMs, completed: aggregate.totalCompleted, failed: aggregate.totalFailed })
+    logExecution(sid, 'swarm_complete', `Swarm ${status}: ${aggregate.totalCompleted}/${aggregate.totalSpawned} succeeded`, {
+      detail: { swarmId, status, durationMs, totalCompleted: aggregate.totalCompleted, totalFailed: aggregate.totalFailed, totalSpawned: aggregate.totalSpawned },
+    })
+    logActivity({
+      entityType: 'swarm',
+      entityId: swarmId,
+      action: status === 'failed' ? 'failed' : 'completed',
+      actor: 'agent',
+      summary: `Swarm ${status}: ${aggregate.totalCompleted}/${aggregate.totalSpawned} succeeded in ${Math.round(durationMs / 1000)}s`,
+    })
+    if (status === 'failed') {
+      createNotification({
+        type: 'error',
+        title: 'Swarm failed',
+        message: `All ${aggregate.totalSpawned} members failed`,
+        entityType: 'swarm',
+        entityId: swarmId,
+        dedupKey: `swarm_fail:${swarmId}`,
+      })
+    }
+  }).catch(() => { /* swarm allSettled should not throw, but guard anyway */ })
 
   return swarm
 }

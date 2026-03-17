@@ -266,7 +266,7 @@ export default function AutonomyPage() {
       setAgents(agentMap ? Object.values(agentMap) : [])
     } catch { /* swallow — load() will surface errors */ }
   }, [])
-  useWs('agents', loadAgents, 30_000)
+  useWs('agents', loadAgents, 60_000)
 
   async function toggleOrchestrator(agent: Agent) {
     setPendingAction('orchestrator-toggle')

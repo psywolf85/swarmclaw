@@ -94,7 +94,7 @@ export function AgentChatList({ inSidebar, onSelect }: Props) {
   }, [])
 
   useEffect(() => { loadAgents() }, [loadAgents])
-  useWs('agents', loadAgents, 30_000)
+  useWs('agents', loadAgents, 60_000)
   useWs('sessions', loadSessions, 15_000)
   useWs('runs', loadSessions, 5_000)
 
@@ -450,7 +450,7 @@ export function AgentChatList({ inSidebar, onSelect }: Props) {
                   }`} />
                 </div>
                 <div className="flex flex-col flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 min-w-0">
                     <span className="font-display text-[13.5px] font-600 truncate flex-1 tracking-[-0.01em]">
                       {agent.name}
                     </span>
@@ -464,7 +464,7 @@ export function AgentChatList({ inSidebar, onSelect }: Props) {
                         Default
                       </span>
                     )}
-                    <span className="text-[10px] text-text-3/60 font-mono shrink-0">
+                    <span className="text-[10px] text-text-3/60 font-mono shrink-0 max-w-[30%] truncate">
                       {(threadSession?.model || agent.model)
                         ? (threadSession?.model || agent.model)!.split('/').pop()?.split(':')[0]
                         : agent.provider}

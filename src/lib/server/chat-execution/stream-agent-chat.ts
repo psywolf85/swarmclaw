@@ -50,6 +50,8 @@ import {
   getToolFrequencyHint,
 } from '@/lib/server/chat-execution/stream-continuation'
 import type { ContinuationType } from '@/lib/server/chat-execution/stream-continuation'
+import { CONTEXT_OVERFLOW_RE } from '@/lib/providers/error-classification'
+import { emergencyContextReduce } from '@/lib/server/context-manager'
 import { errorMessage, sleep } from '@/lib/shared-utils'
 import { perf } from '@/lib/server/runtime/perf'
 import {
@@ -409,6 +411,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       allowSilentReplies: isConnectorSession,
       isDirectConnectorSession: isConnectorSession,
       delegationEnabled: agentDelegationEnabled,
+      agentId: session.agentId || null,
       userMessage: message,
       history,
       hasAttachmentContext,
@@ -430,7 +433,15 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     if (memoryBlock) promptParts.push(memoryBlock)
   }
 
+  // Goal anchor — keeps the agent focused when context is long.
+  // Added before budgeting so it's included in the budget calculation.
+  if (history.length > 30) {
+    promptParts.push(`## Goal Anchor\n[GOAL] Original request: "${message.slice(0, 300)}". Stay focused on completing the original request.`)
+  }
+
   // Apply prompt budget
+  // Save a snapshot so we can re-apply with a smaller budget on context overflow
+  const rawPromptParts = [...promptParts]
   const budget = isMinimalPrompt ? MINIMAL_PROMPT_BUDGET : DEFAULT_PROMPT_BUDGET
   const budgetResult = applyPromptBudget(promptParts, budget)
   if (budgetResult.truncated) {
@@ -775,11 +786,12 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   })
   endToolBuildPerf({ toolCount: tools.length })
 
-  const agent = createReactAgent({
+  const checkpointer = new MemorySaver()
+  let agent = createReactAgent({
     llm,
     tools,
     prompt,
-    checkpointer: new MemorySaver(),
+    checkpointer,
   })
   let pendingGraphMessages = [...langchainMessages]
 
@@ -892,6 +904,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
           || /^(InternalServerError|RateLimitError|APIConnectionError|APIConnectionTimeoutError)$/i.test(errName)
           || /internal server error|too many requests|rate limit|service unavailable|bad gateway|gateway timeout|overloaded/i.test(errMsg)
         )
+        const isContextOverflow = !isRecursionError && statusCode === 400
+          && CONTEXT_OVERFLOW_RE.test(errMsg)
         const isTransientAbort = (!isRecursionError && timers.idleTimedOut)
           || (!isRecursionError
           && /abort|timed?\s*out|ECONNRESET|ECONNREFUSED|socket hang up|network/i.test(errMsg)
@@ -901,7 +915,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         console.error(`[stream-agent-chat] Error in streamEvents iteration=${iteration}`, {
           errName, errMsg, errStack,
           statusCode, retryAfterMs: extractedRetryAfterMs,
-          isRecursionError, isTransientAbort,
+          isRecursionError, isContextOverflow, isTransientAbort,
           hasToolCalls: state.hasToolCalls, fullTextLen: state.fullText.length,
           parentAborted: abortController.signal.aborted,
         })
@@ -956,6 +970,53 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
             write(`data: ${JSON.stringify({ t: 'reset', text: iterationStartState.fullText })}\n\n`)
           }
           write(`data: ${JSON.stringify({ t: 'status', text: JSON.stringify({ transientRetry: count, maxRetries: max, error: errMsg }) })}\n\n`)
+        } else if (isContextOverflow && limits.canContinue('context_overflow') && !abortController.signal.aborted) {
+          // Context overflow: emergency-reduce history and retry with a smaller prompt budget
+          state.restore(iterationStartState)
+          shouldContinue = 'context_overflow'
+          const count = limits.increment('context_overflow')
+          const { max } = limits.getStatus('context_overflow')
+
+          // Emergency-reduce history
+          effectiveHistory = emergencyContextReduce(effectiveHistory, count)
+
+          // Rebuild langchainMessages from reduced history
+          langchainMessages.length = 0
+          for (const m of effectiveHistory) {
+            if (m.role === 'user') {
+              langchainMessages.push(new HumanMessage({ content: m.text }))
+            } else {
+              langchainMessages.push(new AIMessage({ content: m.text }))
+            }
+          }
+          langchainMessages.push(new HumanMessage({ content: currentContent }))
+          pendingGraphMessages = [...langchainMessages]
+
+          // Reduce system prompt budget
+          const reducedBudget = count === 1 ? MINIMAL_PROMPT_BUDGET.maxTotalChars : 12_000
+          const reducedBudgetResult = applyPromptBudget(rawPromptParts, { maxTotalChars: reducedBudget, warnThresholdRatio: 0.95 })
+          prompt = reducedBudgetResult.prompt
+
+          // Recreate agent with reduced prompt
+          agent = createReactAgent({ llm, tools, prompt, checkpointer })
+
+          const hadPartialOutput = state.fullText.length > iterationStartState.fullText.length
+          if (hadPartialOutput) {
+            write(`data: ${JSON.stringify({ t: 'reset', text: iterationStartState.fullText })}\n\n`)
+          }
+          logExecution(session.id, 'decision', `Context overflow detected, emergency reduction attempt (${count}/${max})`, {
+            agentId: session.agentId,
+            detail: { errMsg, reducedMessages: effectiveHistory.length, reducedBudget },
+          })
+          write(`data: ${JSON.stringify({
+            t: 'status',
+            text: JSON.stringify({
+              contextOverflow: true,
+              attempt: count,
+              maxAttempts: max,
+              reducedMessages: effectiveHistory.length,
+            }),
+          })}\n\n`)
         } else {
           throw innerErr
         }
@@ -1062,6 +1123,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         const { count } = limits.getStatus('transient')
         const backoffMs = Math.min(3000 * Math.pow(2, count - 1) + Math.random() * 2000, 30_000)
         await sleep(backoffMs)
+      } else if (shouldContinue === 'context_overflow') {
+        // No backoff needed — context already reduced, retry immediately
       }
     }
   } catch (err: unknown) {

@@ -18,10 +18,13 @@ import { buildMissionContextBlock } from '@/lib/server/missions/mission-service'
 import type { Agent, Chatroom } from '@/types'
 import { isOrchestratorEligible } from '@/lib/orchestrator-config'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
-import { buildMainLoopHeartbeatPrompt, isMainSession } from '@/lib/server/agents/main-agent-loop'
+import { buildMainLoopHeartbeatPrompt, getMainLoopStateForSession, isMainSession } from '@/lib/server/agents/main-agent-loop'
 import { ensureAgentThreadSession } from '@/lib/server/agents/agent-thread-session'
 import { isAgentDisabled } from '@/lib/server/agents/agent-availability'
 import { errorMessage, hmrSingleton, jitteredBackoff } from '@/lib/shared-utils'
+import { logExecution } from '@/lib/server/execution-log'
+import { logActivity } from '@/lib/server/storage'
+import { createNotification } from '@/lib/server/create-notification'
 import { WORKER_ONLY_PROVIDER_IDS } from '@/lib/provider-sets'
 
 const HEARTBEAT_TICK_MS = 60_000
@@ -34,6 +37,10 @@ const MAX_CONSECUTIVE_FAILURES = 10
 const STARTUP_GRACE_MS = 180_000
 /** Sessions idle longer than 7 days are skipped — active heartbeats self-refresh lastActiveAt */
 const MAX_SESSION_IDLE_MS = 7 * 24 * 3600_000
+/** Shorter heartbeat interval when an agent is actively progressing */
+const ACTIVE_HEARTBEAT_INTERVAL_SEC = 120
+/** Consider agent "active" if last main loop tick was within this window */
+const ACTIVE_WINDOW_MS = 10 * 60_000
 
 // --- Orchestrator mode constants ---
 const ORCHESTRATOR_DEFAULT_INTERVAL_SEC = 300  // 5 min
@@ -195,9 +202,17 @@ export function readHeartbeatFile(session: HeartbeatFileSession): string {
   return ''
 }
 
+const identityFileCache = hmrSingleton<Map<string, { data: Record<string, string>; expiresAt: number }>>(
+  '__hb_identity_cache__', () => new Map(),
+)
+const IDENTITY_CACHE_TTL_MS = 60_000
+
 function readIdentityFile(session: { cwd?: string | null }): Record<string, string> {
+  const cwd = typeof session.cwd === 'string' ? session.cwd : WORKSPACE_DIR
+  const cached = identityFileCache.get(cwd)
+  if (cached && Date.now() < cached.expiresAt) return cached.data
   try {
-    const filePath = path.join(typeof session.cwd === 'string' ? session.cwd : WORKSPACE_DIR, 'IDENTITY.md')
+    const filePath = path.join(cwd, 'IDENTITY.md')
     if (fs.existsSync(filePath)) {
       const content = fs.readFileSync(filePath, 'utf-8')
       const identity: Record<string, string> = {}
@@ -209,10 +224,13 @@ function readIdentityFile(session: { cwd?: string | null }): Record<string, stri
         const value = cleaned.slice(colonIndex + 1).replace(/^[*_]+|[*_]+$/g, '').trim()
         if (value) identity[label] = value
       }
+      identityFileCache.set(cwd, { data: identity, expiresAt: Date.now() + IDENTITY_CACHE_TTL_MS })
       return identity
     }
   } catch { /* ignore */ }
-  return {}
+  const empty: Record<string, string> = {}
+  identityFileCache.set(cwd, { data: empty, expiresAt: Date.now() + IDENTITY_CACHE_TTL_MS })
+  return empty
 }
 
 export function buildIdentityContext(
@@ -281,7 +299,13 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   return true
 }
 
-export function buildAgentHeartbeatPrompt(session: any, agent: any, fallbackPrompt: string, heartbeatFileContent: string): string {
+export function buildAgentHeartbeatPrompt(
+  session: any,
+  agent: any,
+  fallbackPrompt: string,
+  heartbeatFileContent: string,
+  opts?: { approvals?: Record<string, unknown>; chatrooms?: Record<string, unknown> },
+): string {
   if (!agent) return fallbackPrompt
 
   const sections: string[] = []
@@ -302,7 +326,7 @@ export function buildAgentHeartbeatPrompt(session: any, agent: any, fallbackProm
   const agentId = agent.id || session.agentId || ''
   if (agentId) {
     try {
-      const allApprovals = loadApprovals()
+      const allApprovals = opts?.approvals ?? loadApprovals()
       const pending = Object.values(allApprovals).filter(
         (a) => a.status === 'pending' && a.agentId === agentId,
       )
@@ -359,7 +383,7 @@ export function buildAgentHeartbeatPrompt(session: any, agent: any, fallbackProm
 
   // ── Phase 4b: Chatroom mentions since last heartbeat ──
   try {
-    const chatrooms = Object.values(loadChatrooms()) as Chatroom[]
+    const chatrooms = Object.values(opts?.chatrooms ?? loadChatrooms()) as Chatroom[]
     const myChatrooms = chatrooms.filter((c) => !c.archivedAt && c.agentIds?.includes(agentId))
     if (myChatrooms.length > 0) {
       const lastHeartbeat = state.lastBySession.get(session.id) || 0
@@ -510,6 +534,7 @@ function isBackedOff(sessionId: string, now: number): boolean {
     if (now < nextRecoveryAt) return true
 
     // Time to try recovery — reset count so heartbeat fires again
+    log.info('heartbeat', 'Recovered', { sessionId, recoveryAttempt: recoveryAttempts + 1 })
     record.count = 0
     record.autoDisabledAt = undefined
     record.recoveryAttempts = recoveryAttempts + 1
@@ -553,6 +578,10 @@ export async function tickHeartbeats() {
 
   const sessions = loadSessions()
 
+  // Pre-load shared data once for all agents (avoids N separate full-table scans)
+  const sharedApprovals = loadApprovals()
+  const sharedChatrooms = loadChatrooms()
+
   // Prune tracked sessions that no longer exist or have heartbeat disabled
   for (const trackedId of state.lastBySession.keys()) {
     const s = sessions[trackedId] as any
@@ -563,6 +592,13 @@ export async function tickHeartbeats() {
     const cfg = heartbeatConfigForSession(s, settings, agents)
     if (!cfg.enabled) {
       state.lastBySession.delete(trackedId)
+    }
+  }
+
+  // Prune failure records for sessions that no longer exist
+  for (const trackedId of state.failures.keys()) {
+    if (!sessions[trackedId]) {
+      state.failures.delete(trackedId)
     }
   }
 
@@ -625,7 +661,16 @@ export async function tickHeartbeats() {
     if (idleMs > MAX_SESSION_IDLE_MS) continue
 
     const last = state.lastBySession.get(session.id) || 0
-    if (now - last < cfg.intervalSec * 1000) continue
+    const mainLoopState = getMainLoopStateForSession(session.id)
+    const isActivelyProgressing = mainLoopState
+      && mainLoopState.status === 'progress'
+      && mainLoopState.lastTickAt
+      && (now - mainLoopState.lastTickAt) < ACTIVE_WINDOW_MS
+      && !mainLoopState.paused
+    const effectiveIntervalSec = isActivelyProgressing
+      ? Math.max(ACTIVE_HEARTBEAT_INTERVAL_SEC, Math.min(cfg.intervalSec, 300))
+      : cfg.intervalSec
+    if (now - last < effectiveIntervalSec * 1000) continue
 
     const runState = getSessionRunState(session.id)
     if (runState.runningRunId) continue
@@ -647,7 +692,10 @@ export async function tickHeartbeats() {
     if (!sessionHasDeferredWakes && !hasExplicitGoal && !heartbeatFileContent && !hasCustomPrompt) {
       if (!hasAgentContext || !hasUserMessages) continue
     }
-    const baseHeartbeatMessage = buildAgentHeartbeatPrompt(session, agent, cfg.prompt, heartbeatFileContent)
+    const baseHeartbeatMessage = buildAgentHeartbeatPrompt(session, agent, cfg.prompt, heartbeatFileContent, {
+      approvals: sharedApprovals,
+      chatrooms: sharedChatrooms,
+    })
     let heartbeatMessage = isMainSession(session)
       ? buildMainLoopHeartbeatPrompt(session, baseHeartbeatMessage)
       : baseHeartbeatMessage
@@ -724,6 +772,22 @@ export async function tickHeartbeats() {
       if (newCount >= MAX_CONSECUTIVE_FAILURES) {
         record.autoDisabledAt = Date.now()
         log.warn('heartbeat', `Auto-disabling heartbeat for session ${sid} after ${newCount} consecutive failures`)
+        logExecution(sid, 'heartbeat_failure', `Heartbeat auto-disabled after ${newCount} consecutive failures`)
+        logActivity({
+          entityType: 'session',
+          entityId: sid,
+          action: 'failed',
+          actor: 'system',
+          summary: `Heartbeat auto-disabled after ${newCount} consecutive failures`,
+        })
+        createNotification({
+          type: 'error',
+          title: 'Heartbeat auto-disabled',
+          message: `Session ${sid} heartbeat disabled after ${newCount} consecutive failures`,
+          entityType: 'session',
+          entityId: sid,
+          dedupKey: `heartbeat_disable:${sid}`,
+        })
       }
       state.failures.set(sid, record)
       const msg = errorMessage(err)
@@ -955,6 +1019,21 @@ export async function tickOrchestratorAgents() {
 
   if (orchestrators.length === 0) return
 
+  // Prune orchestrator tracking maps for agents no longer in the active set
+  const activeAgentIds = new Set(orchestrators.map((a) => a.id))
+  for (const agentId of orchestratorState.lastWakeByAgent.keys()) {
+    if (!activeAgentIds.has(agentId)) orchestratorState.lastWakeByAgent.delete(agentId)
+  }
+  for (const agentId of orchestratorState.failures.keys()) {
+    if (!activeAgentIds.has(agentId)) orchestratorState.failures.delete(agentId)
+  }
+  // Prune stale daily cycle entries (keys are agentId:YYYY-MM-DD)
+  const todayStr = new Date(now).toISOString().slice(0, 10)
+  for (const key of orchestratorState.dailyCycles.keys()) {
+    const dateStr = key.slice(key.lastIndexOf(':') + 1)
+    if (dateStr !== todayStr) orchestratorState.dailyCycles.delete(key)
+  }
+
   for (const agent of orchestrators) {
     try {
       // Check interval elapsed
@@ -1031,6 +1110,22 @@ export async function tickOrchestratorAgents() {
         if (newCount >= MAX_CONSECUTIVE_FAILURES) {
           record.autoDisabledAt = Date.now()
           log.warn('orchestrator', `Auto-disabling orchestrator for agent ${agent.id} after ${newCount} consecutive failures`)
+          logExecution(agent.id, 'heartbeat_failure', `Orchestrator auto-disabled after ${newCount} consecutive failures`)
+          logActivity({
+            entityType: 'agent',
+            entityId: agent.id,
+            action: 'failed',
+            actor: 'system',
+            summary: `Orchestrator auto-disabled for ${agent.name} after ${newCount} consecutive failures`,
+          })
+          createNotification({
+            type: 'error',
+            title: 'Orchestrator auto-disabled',
+            message: `${agent.name} orchestrator disabled after ${newCount} consecutive failures`,
+            entityType: 'agent',
+            entityId: agent.id,
+            dedupKey: `orchestrator_disable:${agent.id}`,
+          })
         }
         orchestratorState.failures.set(agent.id, record)
         log.warn('orchestrator', `Orchestrator wake failed for agent ${agent.id} (${newCount}/${MAX_CONSECUTIVE_FAILURES})`, errorMessage(err))

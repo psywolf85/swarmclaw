@@ -1,6 +1,7 @@
 import { genId } from '@/lib/id'
 import type { RunEventRecord, SessionRunRecord, SessionRunStatus, SSEEvent } from '@/types'
 import {
+  deleteStoredItem,
   loadRuntimeRun,
   loadRuntimeRunEvents,
   loadRuntimeRuns,
@@ -105,4 +106,57 @@ export function loadRecoverableStaleRuns(): SessionRunRecord[] {
   return Object.values(loadRuntimeRuns())
     .filter((run) => run.status === 'queued' || run.status === 'running')
     .sort((left, right) => left.queuedAt - right.queuedAt)
+}
+
+// ---------------------------------------------------------------------------
+// Pruning — remove old terminal runs and their events to prevent unbounded growth.
+// ---------------------------------------------------------------------------
+
+const RUN_RETENTION_MS = 7 * 24 * 3600_000      // 7 days
+const RUN_EVENT_RETENTION_MS = 3 * 24 * 3600_000 // 3 days
+
+const TERMINAL_STATUSES = new Set<SessionRunStatus>(['completed', 'failed', 'cancelled'])
+
+/** Orphaned non-terminal runs older than this are force-pruned (2× normal retention). */
+const ORPHANED_RUN_RETENTION_MS = 2 * RUN_RETENTION_MS
+
+export function pruneOldRuns(): { prunedRuns: number; prunedEvents: number } {
+  const deadline = now()
+  let prunedRuns = 0
+  let prunedEvents = 0
+
+  // Collect IDs of runs that are terminal and older than retention,
+  // plus orphaned non-terminal runs that have been stuck for 2× retention
+  const prunedRunIds = new Set<string>()
+  const runs = loadRuntimeRuns()
+  for (const [id, run] of Object.entries(runs)) {
+    const endTs = run.endedAt || run.startedAt || run.queuedAt
+    if (TERMINAL_STATUSES.has(run.status)) {
+      if (deadline - endTs < RUN_RETENTION_MS) continue
+    } else {
+      // Non-terminal (running/queued) — only prune if stuck for much longer
+      if (deadline - endTs < ORPHANED_RUN_RETENTION_MS) continue
+    }
+    deleteStoredItem('runtime_runs', id)
+    prunedRunIds.add(id)
+    prunedRuns++
+  }
+
+  // Prune events for deleted runs, plus any orphaned old events
+  const events = loadRuntimeRunEvents()
+  for (const [id, event] of Object.entries(events)) {
+    if (prunedRunIds.has(event.runId)) {
+      deleteStoredItem('runtime_run_events', id)
+      prunedEvents++
+      continue
+    }
+    // Also prune events for terminal runs older than event retention
+    const parentRun = runs[event.runId]
+    if (!parentRun || !TERMINAL_STATUSES.has(parentRun.status)) continue
+    if (deadline - event.timestamp < RUN_EVENT_RETENTION_MS) continue
+    deleteStoredItem('runtime_run_events', id)
+    prunedEvents++
+  }
+
+  return { prunedRuns, prunedEvents }
 }

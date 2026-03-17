@@ -371,8 +371,14 @@ function normalizeStoredDelegationJobRecord(value: unknown): unknown {
 
 // --- Main dispatch function ---
 
+export interface NormalizationResult {
+  value: unknown
+  changed: boolean
+}
+
 /**
  * Normalize a stored record based on its table.
+ * Returns `{ value, changed }` so callers can skip re-serialization when nothing was modified.
  * Requires a `loadItem` callback to resolve cross-table references
  * (used by schedule normalization to look up sessions and connectors).
  */
@@ -380,10 +386,35 @@ export function normalizeStoredRecord(
   table: string,
   value: unknown,
   loadItem: CollectionItemLoader,
+): NormalizationResult {
+  // Tables with no normalization — early exit
+  if (
+    table !== 'agents' && table !== 'tasks' && table !== 'missions'
+    && table !== 'mission_events' && table !== 'delegation_jobs'
+    && table !== 'schedules' && table !== 'sessions'
+  ) {
+    return { value, changed: false }
+  }
+
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return { value, changed: false }
+  }
+
+  // Snapshot before mutation for dirty tracking
+  const before = JSON.stringify(value)
+
+  const normalized = normalizeStoredRecordInner(table, value, loadItem)
+
+  const after = JSON.stringify(normalized)
+  return { value: normalized, changed: after !== before }
+}
+
+function normalizeStoredRecordInner(
+  table: string,
+  value: unknown,
+  loadItem: CollectionItemLoader,
 ): unknown {
   if (table === 'agents') {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-
     const agent = value as StoredObject
     const normalizedCapabilities = normalizeCapabilitySelection({
       tools: Array.isArray(agent.tools) ? agent.tools as string[] : undefined,
@@ -445,7 +476,6 @@ export function normalizeStoredRecord(
   }
 
   if (table === 'tasks') {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return value
     const task = value as StoredObject
     if ('missionSummary' in task) delete task.missionSummary
     if (!Array.isArray(task.subtaskIds)) task.subtaskIds = []
@@ -468,9 +498,7 @@ export function normalizeStoredRecord(
     return normalizeStoredScheduleRecord(value, loadItem)
   }
 
-  if (table !== 'sessions') return value
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
-
+  // sessions
   const session = value as StoredObject
   // Migrate legacy 'orchestrated' → 'delegated'
   if (session.sessionType === 'orchestrated') session.sessionType = 'delegated'
@@ -496,5 +524,7 @@ export function normalizeStoredRecord(
   if ('plugins' in session) delete session.plugins
   if ('mainLoopState' in session) delete session.mainLoopState
   if ('missionSummary' in session) delete session.missionSummary
+  // Default geminiSessionId for new field
+  if (session.geminiSessionId === undefined) session.geminiSessionId = null
   return session
 }

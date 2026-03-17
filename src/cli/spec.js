@@ -11,6 +11,7 @@ const COMMAND_GROUPS = {
       trash: { description: 'List trashed agents', method: 'GET', path: '/agents/trash' },
       restore: { description: 'Restore a trashed agent', method: 'POST', path: '/agents/trash' },
       purge: { description: 'Permanently delete a trashed agent', method: 'DELETE', path: '/agents/trash' },
+      status: { description: 'Get live status for an agent', method: 'GET', path: '/agents/:id/status', params: ['id'] },
     },
   },
   activity: {
@@ -460,6 +461,16 @@ const COMMAND_GROUPS = {
       doctor: { description: 'Run local setup diagnostics', method: 'GET', path: '/setup/doctor' },
     },
   },
+  'learned-skills': {
+    description: 'Inspect agent-scoped learned skills',
+    commands: {
+      list: { description: 'List learned skills', method: 'GET', path: '/learned-skills' },
+      promote: { description: 'Promote a review-ready skill to active', method: 'POST', path: '/learned-skills/:id?action=promote', params: ['id'] },
+      dismiss: { description: 'Dismiss a learned skill', method: 'POST', path: '/learned-skills/:id?action=dismiss', params: ['id'] },
+      delete: { description: 'Delete a learned skill', method: 'DELETE', path: '/learned-skills/:id', params: ['id'] },
+      'review-counts': { description: 'Show pending review counts', method: 'GET', path: '/skill-review-counts' },
+    },
+  },
   skills: {
     description: 'SwarmClaw and Claude skills',
     commands: {
@@ -544,7 +555,7 @@ function listCoveredRoutes() {
     for (const action of Object.keys(commands)) {
       const cmd = commands[action]
       if (cmd.method && cmd.path) {
-        routes.push(`${cmd.method.toUpperCase()} ${cmd.path}`)
+        routes.push(`${cmd.method.toUpperCase()} ${cmd.path.split('?')[0]}`)
       }
     }
   }

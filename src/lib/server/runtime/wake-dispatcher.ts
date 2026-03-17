@@ -41,6 +41,18 @@ function deferredKey(request: WakeModeRequest): string {
   return `${request.agentId || ''}::${request.sessionId || ''}`
 }
 
+/** Binary insert into a descending-priority-sorted array. */
+function insertSorted(queue: DeferredWake[], entry: DeferredWake): void {
+  let lo = 0
+  let hi = queue.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (queue[mid].priority >= entry.priority) lo = mid + 1
+    else hi = mid
+  }
+  queue.splice(lo, 0, entry)
+}
+
 // ── Public API ──────────────────────────────────────────────────────────
 
 /**
@@ -113,14 +125,12 @@ function dispatchDeferred(request: WakeModeRequest, priority: number, jobId: str
   if (existingIndex >= 0) {
     // Replace with higher-priority version
     if (priority >= queue[existingIndex].priority) {
-      queue[existingIndex] = entry
+      queue.splice(existingIndex, 1)
+      insertSorted(queue, entry)
     }
   } else {
-    queue.push(entry)
+    insertSorted(queue, entry)
   }
-
-  // Keep sorted by priority (highest first)
-  queue.sort((a: DeferredWake, b: DeferredWake) => b.priority - a.priority)
   state.deferredQueue.set(key, queue)
 
   log.info('wake-dispatcher', `Deferred wake ${jobId} queued for next heartbeat`, {

@@ -23,7 +23,7 @@ import { buildLLM } from '@/lib/server/build-llm'
 import { errorMessage } from '@/lib/shared-utils'
 import { cleanText, isDiscussionStepKind, now, uniqueIds } from '@/lib/server/protocols/protocol-types'
 import type { ProtocolRunDeps } from '@/lib/server/protocols/protocol-types'
-import { findRunStep, loadProtocolRunById } from '@/lib/server/protocols/protocol-normalization'
+import { findRunStep, loadProtocolRunById, normalizeProtocolRun } from '@/lib/server/protocols/protocol-normalization'
 import {
   appendProtocolEvent,
   appendTranscriptMessage,
@@ -143,11 +143,10 @@ export function buildParallelStepState(
 }
 
 export function syncProtocolParentFromChildRun(runOrId: ProtocolRun | string, deps?: ProtocolRunDeps): ProtocolRun | null {
-  const normMod = require('@/lib/server/protocols/protocol-normalization') as typeof import('@/lib/server/protocols/protocol-normalization')
   const subflowMod = require('@/lib/server/protocols/protocol-subflow') as typeof import('@/lib/server/protocols/protocol-subflow')
   const lifecycleMod = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof import('@/lib/server/protocols/protocol-run-lifecycle')
 
-  const child = typeof runOrId === 'string' ? loadProtocolRunById(runOrId) : normMod.normalizeProtocolRun(runOrId)
+  const child = typeof runOrId === 'string' ? loadProtocolRunById(runOrId) : normalizeProtocolRun(runOrId)
   if (!child?.parentRunId || !child.parentStepId) return null
   const parent = loadProtocolRunById(child.parentRunId)
   if (!parent) return null

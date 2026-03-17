@@ -25,6 +25,7 @@ const COMMAND_GROUPS = [
       cmd('thread', 'POST', '/agents/:id/thread', 'Get or create agent thread session'),
       cmd('clone', 'POST', '/agents/:id/clone', 'Clone an agent'),
       cmd('bulk-update', 'PATCH', '/agents/bulk', 'Bulk update agents', { expectsJsonBody: true }),
+      cmd('status', 'GET', '/agents/:id/status', 'Get live status for an agent'),
     ],
   },
   {
@@ -619,6 +620,10 @@ const COMMAND_GROUPS = [
     description: 'Inspect agent-scoped learned skills',
     commands: [
       cmd('list', 'GET', '/learned-skills', 'List learned skills'),
+      cmd('promote', 'POST', '/learned-skills/:id?action=promote', 'Promote a review-ready skill to active'),
+      cmd('dismiss', 'POST', '/learned-skills/:id?action=dismiss', 'Dismiss a learned skill'),
+      cmd('delete', 'DELETE', '/learned-skills/:id', 'Delete a learned skill'),
+      cmd('review-counts', 'GET', '/skill-review-counts', 'Show pending review counts'),
     ],
   },
   {
@@ -1566,7 +1571,7 @@ function extractById(payload, id) {
 function getApiCoveragePairs() {
   return COMMANDS
     .filter((command) => !command.virtual)
-    .map((command) => `${command.method} ${command.route}`)
+    .map((command) => `${command.method} ${command.route.split('?')[0]}`)
 }
 
 module.exports = {

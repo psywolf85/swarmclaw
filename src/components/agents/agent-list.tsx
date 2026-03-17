@@ -49,7 +49,7 @@ export function AgentList({ inSidebar }: Props) {
 
   const [loaded, setLoaded] = useState(Object.keys(agents).length > 0)
   useEffect(() => { loadAgents().then(() => setLoaded(true)) }, [loadAgents])
-  useWs('agents', loadAgents, 30_000)
+  useWs('agents', loadAgents, 60_000)
 
   // Compute which agents are "running" (have active sessions)
   const runningAgentIds = useMemo(() => {

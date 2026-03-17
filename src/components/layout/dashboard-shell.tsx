@@ -171,7 +171,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [loadExtensions])
 
   useEffect(() => { refreshExtensionState() }, [refreshExtensionState])
-  useWs('extensions', refreshExtensionState, 30000)
+  useWs('extensions', refreshExtensionState, 60_000)
 
   // Keyboard shortcuts
   const handleShortcutKey = useCallback((e: KeyboardEvent) => {

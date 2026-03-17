@@ -1,21 +1,40 @@
 import { loadSettings, loadCredentials, decryptKey } from './storage'
+import { hmrSingleton } from '@/lib/shared-utils'
 
-let localPipeline: any = null
-let localPipelineLoading: Promise<any> | null = null
+interface PipelineState {
+  instance: unknown
+  loading: Promise<unknown> | null
+}
 
-async function getLocalPipeline() {
-  if (localPipeline) return localPipeline
-  if (localPipelineLoading) return localPipelineLoading
+const pipelineState = hmrSingleton<PipelineState>('__swarmclaw_embedding_pipeline__', () => ({
+  instance: null,
+  loading: null,
+}))
 
-  localPipelineLoading = (async () => {
-    const { pipeline } = await import('@huggingface/transformers')
-    localPipeline = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
-      dtype: 'fp32',
-    })
-    return localPipeline
+async function getLocalPipeline(): Promise<unknown> {
+  if (pipelineState.instance) return pipelineState.instance
+  if (pipelineState.loading) {
+    try {
+      return await pipelineState.loading
+    } catch {
+      // Previous attempt failed — fall through to retry
+    }
+  }
+
+  pipelineState.loading = (async () => {
+    try {
+      const { pipeline } = await import('@huggingface/transformers')
+      pipelineState.instance = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2', {
+        dtype: 'fp32',
+      })
+      return pipelineState.instance
+    } catch (err) {
+      pipelineState.loading = null // allow retry on transient failure
+      throw err
+    }
   })()
 
-  return localPipelineLoading
+  return pipelineState.loading
 }
 
 export async function getEmbedding(text: string): Promise<number[] | null> {
@@ -42,17 +61,17 @@ export async function getEmbedding(text: string): Promise<number[] | null> {
     } else if (provider === 'ollama') {
       return await ollamaEmbed(text, model, settings.embeddingEndpoint)
     }
-  } catch (err: any) {
-    console.error(`[embeddings] Error computing embedding:`, err.message)
+  } catch (err: unknown) {
+    console.error(`[embeddings] Error computing embedding:`, err instanceof Error ? err.message : String(err))
   }
 
   return null
 }
 
 async function localEmbed(text: string): Promise<number[]> {
-  const pipe = await getLocalPipeline()
+  const pipe = await getLocalPipeline() as (input: string, opts: Record<string, unknown>) => Promise<{ data: Float32Array }>
   const output = await pipe(text.slice(0, 8000), { pooling: 'mean', normalize: true })
-  return Array.from(output.data as Float32Array)
+  return Array.from(output.data)
 }
 
 async function openaiEmbed(text: string, model: string, apiKey: string | null): Promise<number[]> {
@@ -85,6 +104,7 @@ async function ollamaEmbed(text: string, model: string, endpoint?: string | null
   })
   if (!res.ok) throw new Error(`Ollama embeddings API error: ${res.status}`)
   const data = await res.json()
+  if (!Array.isArray(data?.embedding)) throw new Error('Unexpected Ollama embeddings response shape')
   return data.embedding
 }
 

@@ -1,49 +1,27 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { spawn, spawnSync } from 'child_process'
+import { spawn } from 'child_process'
 import type { StreamChatOptions } from './index'
 import { log } from '../server/logger'
 import { loadRuntimeSettings } from '@/lib/server/runtime/runtime-settings'
-
-function findCodex(): string {
-  const locations = [
-    path.join(os.homedir(), '.local/bin/codex'),
-    '/usr/local/bin/codex',
-    '/opt/homebrew/bin/codex',
-    path.join(os.homedir(), '.npm-global/bin/codex'),
-  ]
-  // Check nvm paths
-  const nvmDir = process.env.NVM_DIR || path.join(os.homedir(), '.nvm')
-  try {
-    const versions = fs.readdirSync(path.join(nvmDir, 'versions/node'))
-    for (const v of versions) {
-      locations.push(path.join(nvmDir, 'versions/node', v, 'bin/codex'))
-    }
-  } catch { /* nvm not installed */ }
-  for (const loc of locations) {
-    if (fs.existsSync(loc)) {
-      log.info('codex-cli', `Found codex at: ${loc}`)
-      return loc
-    }
-  }
-  log.warn('codex-cli', 'Codex binary not found in known locations, falling back to PATH')
-  return 'codex'
-}
-
-const CODEX = findCodex()
+import { resolveCliBinary, buildCliEnv, probeCliAuth, attachAbortHandler, symlinkConfigFiles } from './cli-utils'
 
 function codexModelRequiresReasoningDowngrade(model: string | null | undefined): boolean {
   const value = String(model || '').trim().toLowerCase()
-  // Some Codex models currently reject `model_reasoning_effort = "xhigh"`
-  // from global ~/.codex/config.toml. Force a compatible value per request.
   return value === 'gpt-5-codex' || value === 'gpt-5-codex-mini'
 }
 
-export function streamCodexCliChat({ session, message, imagePath, systemPrompt, write, active }: StreamChatOptions): Promise<string> {
+export function streamCodexCliChat({ session, message, imagePath, systemPrompt, write, active, signal }: StreamChatOptions): Promise<string> {
   const processTimeoutMs = loadRuntimeSettings().cliProcessTimeoutMs
-  const prompt = message
+  const binary = resolveCliBinary('codex')
+  if (!binary) {
+    const msg = 'Codex CLI not found. Install it and ensure it is on your PATH.'
+    write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
+    return Promise.resolve('')
+  }
 
+  const prompt = message
   const args: string[] = ['exec']
 
   // Session resume
@@ -63,54 +41,44 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
     args.push('-i', imagePath)
   }
 
-  // System prompt: write temp AGENTS.override.md in a temp CODEX_HOME
-  // Codex reads AGENTS.override.md from CODEX_HOME on startup
-  let tempCodexHome: string | null = null
-  if (systemPrompt && !session.codexThreadId) {
-    tempCodexHome = path.join(os.tmpdir(), `swarmclaw-codex-${session.id}`)
-    fs.mkdirSync(tempCodexHome, { recursive: true })
-    fs.writeFileSync(path.join(tempCodexHome, 'AGENTS.override.md'), systemPrompt)
-  }
-
   // Read from stdin
   args.push('-')
 
-  const env = { ...process.env, TERM: 'dumb', NO_COLOR: '1' } as NodeJS.ProcessEnv
-  for (const key of Object.keys(env)) {
-    if (key.toUpperCase().startsWith('CODEX')) delete (env as Record<string, unknown>)[key]
-  }
+  // Build clean env — preserves user's CODEX_HOME for auth
+  const env = buildCliEnv()
 
   // Pass API key if available
   if (session.apiKey) {
     env.OPENAI_API_KEY = session.apiKey
   }
 
-  // Point to temp CODEX_HOME for system prompt injection
-  if (tempCodexHome) {
-    env.CODEX_HOME = tempCodexHome
-  }
-
+  // Auth probe BEFORE creating temp CODEX_HOME — uses real config dir
   if (!session.apiKey) {
-    const loginProbe = spawnSync(CODEX, ['login', 'status'], {
-      cwd: session.cwd,
-      env,
-      encoding: 'utf-8',
-      timeout: 8000,
-    })
-    const probeText = `${loginProbe.stdout || ''}\n${loginProbe.stderr || ''}`.toLowerCase()
-    const loggedIn = probeText.includes('logged in')
-    if ((loginProbe.status ?? 1) !== 0 || !loggedIn) {
-      const msg = 'Codex CLI is not authenticated. Run `codex login` (or set an API key in provider settings) and try again.'
-      log.error('codex-cli', msg)
-      write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
-      if (tempCodexHome) {
-        try { fs.rmSync(tempCodexHome, { recursive: true }) } catch { /* ignore */ }
-      }
+    const auth = probeCliAuth(binary, 'codex', env, session.cwd)
+    if (!auth.authenticated) {
+      log.error('codex-cli', auth.errorMessage || 'Auth failed')
+      write(`data: ${JSON.stringify({ t: 'err', text: auth.errorMessage || 'Codex CLI is not authenticated.' })}\n\n`)
       return Promise.resolve('')
     }
   }
 
-  log.info('codex-cli', `Spawning: ${CODEX}`, {
+  // System prompt: write temp AGENTS.override.md in a temp CODEX_HOME
+  // Symlink auth files from the real config dir so auth still works
+  let tempCodexHome: string | null = null
+  if (systemPrompt && !session.codexThreadId) {
+    const realCodexHome = process.env.CODEX_HOME || path.join(os.homedir(), '.codex')
+    tempCodexHome = path.join(os.tmpdir(), `swarmclaw-codex-${session.id}`)
+    fs.mkdirSync(tempCodexHome, { recursive: true })
+
+    // Symlink auth/config files from real CODEX_HOME into temp dir
+    symlinkConfigFiles(realCodexHome, tempCodexHome)
+
+    // Write system prompt as AGENTS.override.md
+    fs.writeFileSync(path.join(tempCodexHome, 'AGENTS.override.md'), systemPrompt)
+    env.CODEX_HOME = tempCodexHome
+  }
+
+  log.info('codex-cli', `Spawning: ${binary}`, {
     args: args.map(a => a.length > 100 ? a.slice(0, 100) + '...' : a),
     cwd: session.cwd,
     promptLen: prompt.length,
@@ -118,7 +86,7 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
     tempCodexHome,
   })
 
-  const proc = spawn(CODEX, args, {
+  const proc = spawn(binary, args, {
     cwd: session.cwd,
     env,
     stdio: ['pipe', 'pipe', 'pipe'],
@@ -131,6 +99,8 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
   proc.stdin!.end()
 
   active.set(session.id, proc)
+  attachAbortHandler(proc, signal)
+
   let fullResponse = ''
   let buf = ''
   let eventCount = 0
@@ -176,7 +146,7 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
         else if (ev.type === 'item.completed' && ev.item?.type === 'message' && ev.item?.role === 'assistant') {
           const content = ev.item.content
           if (Array.isArray(content)) {
-            const text = content.filter((c: any) => c.type === 'output_text').map((c: any) => c.text).join('')
+            const text = content.filter((c: Record<string, unknown>) => c.type === 'output_text').map((c: Record<string, unknown>) => c.text).join('')
             if (text) {
               fullResponse = text
               write(`data: ${JSON.stringify({ t: 'r', text })}\n\n`)
@@ -231,8 +201,8 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
   })
 
   return new Promise((resolve) => {
-    proc.on('close', (code, signal) => {
-      log.info('codex-cli', `Process closed: code=${code} signal=${signal} events=${eventCount} response=${fullResponse.length}chars`)
+    proc.on('close', (code, sig) => {
+      log.info('codex-cli', `Process closed: code=${code} signal=${sig} events=${eventCount} response=${fullResponse.length}chars`)
       active.delete(session.id)
       // Clean up temp CODEX_HOME
       if (tempCodexHome) {
@@ -240,8 +210,8 @@ export function streamCodexCliChat({ session, message, imagePath, systemPrompt, 
       }
       if ((code ?? 0) !== 0 && !fullResponse.trim()) {
         const msg = stderrText.trim()
-          ? `Codex CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''}: ${stderrText.trim().slice(0, 1200)}`
-          : `Codex CLI exited with code ${code ?? 'unknown'}${signal ? ` (${signal})` : ''} and returned no output.`
+          ? `Codex CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''}: ${stderrText.trim().slice(0, 1200)}`
+          : `Codex CLI exited with code ${code ?? 'unknown'}${sig ? ` (${sig})` : ''} and returned no output.`
         write(`data: ${JSON.stringify({ t: 'err', text: msg })}\n\n`)
       }
       resolve(fullResponse)

@@ -78,7 +78,7 @@ export function NotificationCenter({
     loadNotifications()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  useWs('notifications', handleWsNotification, 30_000)
+  useWs('notifications', handleWsNotification, 60_000)
 
   // Close panel when clicking outside
   useEffect(() => {

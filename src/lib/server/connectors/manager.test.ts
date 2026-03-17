@@ -3290,7 +3290,7 @@ describe('sanitizeConnectorOutboundContent', () => {
     `) as any
 
     assert.equal(output.first, 'Reply 1')
-    assert.equal(output.second, 'Queued. I will reply here as soon as the current task finishes.')
+    assert.equal(output.second, 'NO_MESSAGE')
     assert.equal(output.third, 'NO_MESSAGE')
     assert.equal(output.snapshotBefore.queueLength, 2)
     assert.deepEqual(output.snapshotBefore.items.map((item: { text: string }) => item.text), ['[Alice] Second task', '[Alice] Third task'])

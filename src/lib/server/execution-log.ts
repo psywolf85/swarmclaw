@@ -21,6 +21,16 @@ export type LogCategory =
   | 'mission_complete'   // mission reached ok status
   | 'budget_warning'     // mission approaching or exceeding budget
   | 'loop_detection'     // repeated tool call pattern detected
+  | 'peer_query'
+  | 'delegation_start'
+  | 'delegation_complete'
+  | 'delegation_fail'
+  | 'swarm_spawn'
+  | 'swarm_complete'
+  | 'chatroom_message'
+  | 'supervisor_incident'
+  | 'heartbeat_failure'
+  | 'coordination'
 
 export interface ExecutionLogEntry {
   id: string

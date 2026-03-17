@@ -251,7 +251,7 @@ export function ConnectorInbox() {
 
   useWs('sessions', loadSessions, 15_000)
   useWs('connectors', loadConnectors, 15_000)
-  useWs('agents', loadAgents, 30_000)
+  useWs('agents', loadAgents, 60_000)
 
   const inboxSessions = useMemo(() => {
     const normalizedSearch = search.trim().toLowerCase()

@@ -82,3 +82,19 @@ export function drainOrchestratorEvents(agentId: string): SystemEvent[] {
 export function peekOrchestratorEvents(agentId: string): SystemEvent[] {
   return orchestratorQueues.get(agentId) || []
 }
+
+// --- Pruning for dead sessions/agents ---
+
+/** Remove session event queues for sessions that no longer exist. */
+export function pruneSystemEventQueues(liveSessionIds: Set<string>): void {
+  for (const sessionId of queues.keys()) {
+    if (!liveSessionIds.has(sessionId)) queues.delete(sessionId)
+  }
+}
+
+/** Remove orchestrator event queues for agents that no longer exist. */
+export function pruneOrchestratorEventQueues(liveAgentIds: Set<string>): void {
+  for (const agentId of orchestratorQueues.keys()) {
+    if (!liveAgentIds.has(agentId)) orchestratorQueues.delete(agentId)
+  }
+}

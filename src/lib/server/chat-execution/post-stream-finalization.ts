@@ -26,19 +26,21 @@ import { buildForcedExternalServiceSummary } from '@/lib/server/chat-execution/p
 // objects that some models echo verbatim into their response text.
 // ---------------------------------------------------------------------------
 
-const CLASSIFICATION_LEAK_RE = /^\s*\{\s*"isDeliverableTask"\s*:/
+const CLASSIFICATION_LEAK_RE = /\{\s*"isDeliverableTask"\s*:/
 
 function stripLeakedClassificationJson(text: string): { cleaned: string; stripped: boolean } {
-  if (!CLASSIFICATION_LEAK_RE.test(text)) return { cleaned: text, stripped: false }
+  const match = CLASSIFICATION_LEAK_RE.exec(text)
+  if (!match || match.index === undefined) return { cleaned: text, stripped: false }
+  const startIdx = match.index
   let depth = 0
   let end = -1
-  for (let i = text.indexOf('{'); i < text.length; i++) {
+  for (let i = startIdx; i < text.length; i++) {
     if (text[i] === '{') depth++
     else if (text[i] === '}') { depth--; if (depth === 0) { end = i + 1; break } }
   }
   if (end === -1) return { cleaned: text, stripped: false }
   console.warn('[post-stream-finalization] Stripped leaked classification JSON from model output')
-  return { cleaned: text.slice(end).trimStart(), stripped: true }
+  return { cleaned: (text.slice(0, startIdx) + text.slice(end)).trimStart(), stripped: true }
 }
 
 // StreamAgentChatResult is defined inline to avoid circular dependency with stream-agent-chat.ts

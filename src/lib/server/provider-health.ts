@@ -36,11 +36,16 @@ function cooldownMsForFailures(failures: number): number {
   return jitteredBackoff(10_000, clamped - 1, 5 * 60_000)
 }
 
-export function markProviderFailure(providerId: string, error: string): void {
+function healthKey(providerId: string, credentialId?: string | null): string {
+  return credentialId ? `${providerId}:${credentialId}` : providerId
+}
+
+export function markProviderFailure(providerId: string, error: string, credentialId?: string | null): void {
+  const key = healthKey(providerId, credentialId)
   const now = Date.now()
-  const prev = states.get(providerId) || { failures: 0 }
+  const prev = states.get(key) || { failures: 0 }
   const failures = Math.min(50, (prev.failures || 0) + 1)
-  states.set(providerId, {
+  states.set(key, {
     failures,
     lastError: error.slice(0, 500),
     lastFailureAt: now,
@@ -50,14 +55,15 @@ export function markProviderFailure(providerId: string, error: string): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { upsertStoredItem } = require('@/lib/server/storage')
-    upsertStoredItem('provider_health', providerId, states.get(providerId)!)
+    upsertStoredItem('provider_health', key, states.get(key)!)
   } catch {}
 }
 
-export function markProviderSuccess(providerId: string): void {
+export function markProviderSuccess(providerId: string, credentialId?: string | null): void {
+  const key = healthKey(providerId, credentialId)
   const now = Date.now()
-  const prev = states.get(providerId) || { failures: 0 }
-  states.set(providerId, {
+  const prev = states.get(key) || { failures: 0 }
+  states.set(key, {
     failures: 0,
     lastError: prev.lastError,
     lastFailureAt: prev.lastFailureAt,
@@ -67,7 +73,7 @@ export function markProviderSuccess(providerId: string): void {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { upsertStoredItem } = require('@/lib/server/storage')
-    upsertStoredItem('provider_health', providerId, states.get(providerId)!)
+    upsertStoredItem('provider_health', key, states.get(key)!)
   } catch {}
   queueMicrotask(() => {
     import('@/lib/server/missions/mission-service')
@@ -80,10 +86,15 @@ export function markProviderSuccess(providerId: string): void {
   })
 }
 
-export function isProviderCoolingDown(providerId: string): boolean {
-  const state = states.get(providerId)
-  if (!state?.cooldownUntil) return false
-  return Date.now() < state.cooldownUntil
+export function isProviderCoolingDown(providerId: string, credentialId?: string | null): boolean {
+  // Check credential-specific key first, then fall back to global provider key
+  if (credentialId) {
+    const credState = states.get(healthKey(providerId, credentialId))
+    if (credState?.cooldownUntil && Date.now() < credState.cooldownUntil) return true
+  }
+  const globalState = states.get(healthKey(providerId))
+  if (!globalState?.cooldownUntil) return false
+  return Date.now() < globalState.cooldownUntil
 }
 
 function delegateBinary(delegateTool: DelegateTool): string {

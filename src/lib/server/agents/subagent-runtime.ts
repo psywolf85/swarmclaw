@@ -43,6 +43,9 @@ import {
   type SubagentState,
 } from '@/lib/server/agents/subagent-lineage'
 import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
+import { log } from '@/lib/server/logger'
+import { debug } from '@/lib/server/debug'
+import { logExecution } from '@/lib/server/execution-log'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { getEnabledCapabilityIds, splitCapabilityIds } from '@/lib/capability-selection'
 
@@ -61,9 +64,9 @@ export interface SpawnSubagentInput {
   shareBrowserProfile?: boolean
   /** Inherit parent session's extensions/tools (default true) */
   inheritExtensions?: boolean
-  /** Wait for completion (default true) */
+  /** Caller-owned: controls whether the caller awaits `handle.promise`. Not read by the runtime. */
   waitForCompletion?: boolean
-  /** Timeout in seconds for waiting */
+  /** Timeout in seconds (default 600). Set 0 to disable. */
   timeoutSec?: number
   /** Optional shared execution lane key for serializing sibling runs. */
   executionGroupKey?: string
@@ -198,6 +201,7 @@ async function spawnSubagentImpl(
   const agent = agents[input.agentId]
 
   if (!agent) {
+    log.warn('subagent', 'Spawn rejected: agent not found', { agentId: input.agentId })
     throw new Error(`Agent "${input.agentId}" not found.`)
   }
 
@@ -205,6 +209,7 @@ async function spawnSubagentImpl(
   const sessions = (context._sessions ?? loadSessions()) as unknown as Record<string, Record<string, unknown>>
   const depth = getSessionDepth(context.sessionId, maxDepth, sessions)
   if (depth >= maxDepth) {
+    log.warn('subagent', 'Spawn rejected: max depth exceeded', { agentId: input.agentId, depth, maxDepth })
     throw new Error(`Max subagent depth (${maxDepth}) reached.`)
   }
   const parent = context.sessionId ? sessions[context.sessionId] : null
@@ -273,6 +278,11 @@ async function spawnSubagentImpl(
   sessions[sid] = applyResolvedRoute(nextSession, resolvePrimaryAgentRoute(agent))
   saveSessions(sessions)
 
+  log.info('subagent', 'Spawning', { agentId: agent.id, agentName: agent.name, depth: depth + 1, jobId: job.id, sessionId: sid })
+  logExecution(sid, 'delegation_start', `Subagent spawning: ${agent.name}`, {
+    detail: { agentId: agent.id, depth: depth + 1, jobId: job.id, parentSessionId: context.sessionId },
+  })
+
   // 3. Create lineage node (starts in 'initializing')
   const lineageNode = createLineageNode({
     sessionId: sid,
@@ -333,8 +343,20 @@ async function spawnSubagentImpl(
     },
   })
 
-  // 9. Build result promise
-  const resultPromise = run.promise
+  // 9. Build result promise (with optional timeout)
+  const DEFAULT_TIMEOUT_SEC = 600 // 10 minutes
+  const effectiveTimeoutSec = input.timeoutSec ?? DEFAULT_TIMEOUT_SEC
+  const timeoutPromise = effectiveTimeoutSec > 0
+    ? new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('__subagent_timeout__')), effectiveTimeoutSec * 1000)
+      })
+    : null
+
+  const racedPromise = timeoutPromise
+    ? Promise.race([run.promise, timeoutPromise])
+    : run.promise
+
+  const resultPromise = racedPromise
     .then(async (result): Promise<SubagentResult> => {
       const latest = getDelegationJob(job.id)
       const node = getLineageNode(lineageNode.id)
@@ -349,6 +371,10 @@ async function spawnSubagentImpl(
 
         subagentResult = buildResult(job.id, sid, lineageNode, agent, 'completed', responseText, null)
       }
+
+      log.info('subagent', 'Completed', { agentId: agent.id, agentName: agent.name, durationMs: subagentResult.durationMs, status: subagentResult.status })
+      debug.verbose('subagent', 'Result', { jobId: job.id, response: subagentResult.response?.slice(0, 2000) })
+
       await runCapabilityHook(
         'subagentEnded',
         {
@@ -387,11 +413,20 @@ async function spawnSubagentImpl(
     })
     .catch(async (err: unknown): Promise<SubagentResult> => {
       const message = errorMessage(err)
+      const isTimeout = message === '__subagent_timeout__'
       const latest = getDelegationJob(job.id)
       const node = getLineageNode(lineageNode.id)
       let subagentResult: SubagentResult
       if (latest?.status === 'cancelled' || node?.status === 'cancelled') {
         subagentResult = buildResult(job.id, sid, lineageNode, agent, 'cancelled', null, null)
+      } else if (isTimeout) {
+        // Abort the underlying run on timeout
+        run.abort()
+        const timeoutMsg = `Subagent timed out after ${effectiveTimeoutSec}s`
+        failLineageNode(lineageNode.id, timeoutMsg)
+        appendDelegationCheckpoint(job.id, timeoutMsg, 'failed')
+        failDelegationJob(job.id, timeoutMsg, { childSessionId: sid })
+        subagentResult = buildResult(job.id, sid, lineageNode, agent, 'timed_out', null, timeoutMsg)
       } else {
         failLineageNode(lineageNode.id, message)
         appendDelegationCheckpoint(job.id, `Child session failed: ${message}`, 'failed')
@@ -399,6 +434,9 @@ async function spawnSubagentImpl(
 
         subagentResult = buildResult(job.id, sid, lineageNode, agent, 'failed', null, message)
       }
+
+      log.warn('subagent', 'Failed', { agentId: agent.id, agentName: agent.name, error: message })
+
       await runCapabilityHook(
         'subagentEnded',
         {

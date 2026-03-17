@@ -324,6 +324,14 @@ textarea:hover::-webkit-scrollbar { width: 6px; }
   100% { opacity: 0; }
 }
 
+/* Delegation bubble above org-chart nodes: pop-in, hold, fade-out over 5s */
+@keyframes delegationBubbleFade {
+  0% { opacity: 0; transform: translateY(6px) scale(0.95); }
+  6% { opacity: 1; transform: translateY(0) scale(1); }
+  80% { opacity: 1; }
+  100% { opacity: 0; transform: translateY(-2px); }
+}
+
 /* ===== SwarmClaw Loader Keyframes ===== */
 @keyframes sc-orbit {
   from { transform: rotate(0deg); }

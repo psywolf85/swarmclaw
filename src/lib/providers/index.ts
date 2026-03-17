@@ -1,6 +1,7 @@
 import { streamClaudeCliChat } from './claude-cli'
 import { streamCodexCliChat } from './codex-cli'
 import { streamOpenCodeCliChat } from './opencode-cli'
+import { streamGeminiCliChat } from './gemini-cli'
 import { streamOpenAiChat } from './openai'
 import { streamOllamaChat } from './ollama'
 import { streamAnthropicChat } from './anthropic'
@@ -89,6 +90,14 @@ export const PROVIDERS: Record<string, BuiltinProviderConfig> = {
     requiresApiKey: false,
     requiresEndpoint: false,
     handler: { streamChat: streamOpenCodeCliChat },
+  },
+  'gemini-cli': {
+    id: 'gemini-cli',
+    name: 'Gemini CLI',
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.5-flash-lite'],
+    requiresApiKey: false,
+    requiresEndpoint: false,
+    handler: { streamChat: streamGeminiCliChat },
   },
   google: {
     id: 'google',
@@ -297,7 +306,7 @@ export function getProviderList(): ProviderInfo[] {
         ...info,
         models: overrides[info.id] || info.models,
         defaultModels: info.models,
-        supportsModelDiscovery: !['claude-cli', 'codex-cli', 'opencode-cli', 'fireworks'].includes(info.id),
+        supportsModelDiscovery: !['claude-cli', 'codex-cli', 'opencode-cli', 'gemini-cli', 'fireworks'].includes(info.id),
       }
     })
   
