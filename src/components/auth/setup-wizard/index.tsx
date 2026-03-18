@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import { api } from '@/lib/app/api-client'
 import { useAppStore } from '@/stores/use-app-store'
 import { dedup, errorMessage } from '@/lib/shared-utils'
-import type { ProviderType, GatewayProfile } from '@/types'
+import type { ProviderId, GatewayProfile } from '@/types'
 import {
   SETUP_PROVIDERS,
   SWARMCLAW_ASSISTANT_PROMPT,
@@ -21,7 +21,7 @@ import type {
   ProviderCheckResponse,
 } from './types'
 import { STEP_ORDER } from './types'
-import { stepIndex } from './utils'
+import { requiresSetupProviderVerification, stepIndex } from './utils'
 import { SparkleIcon } from './shared'
 import { StepProgress } from './step-progress'
 import { StepProviders } from './step-providers'
@@ -53,7 +53,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
     [editingProviderId, configuredProviders],
   )
   const totalSteps = STEP_ORDER.length
-  const configuredProviderIds = new Set(configuredProviders.map((cp) => cp.provider))
+  const configuredProviderIds = new Set(configuredProviders.map((cp) => cp.setupProvider))
   const canContinueFromProviders = configuredProviders.length > 0
 
   const skip = async () => {
@@ -76,7 +76,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
   const selectProvider = (nextProvider: SetupProvider) => {
     const meta = SETUP_PROVIDERS.find((candidate) => candidate.id === nextProvider)
-    const existing = configuredProviders.find((cp) => cp.provider === nextProvider)
+    const existing = configuredProviders.find((cp) => cp.setupProvider === nextProvider)
     setActiveProvider(nextProvider)
     setEditingProviderId(existing?.id || null)
     setActiveProviderLabel(existing?.name || meta?.name || '')
@@ -94,6 +94,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       return {
         ...draft,
         providerConfigId: fallback?.id || null,
+        setupProvider: fallback?.setupProvider || null,
         provider: fallback?.provider || null,
         credentialId: fallback?.credentialId || null,
         apiEndpoint: fallback?.endpoint || null,
@@ -125,6 +126,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         systemPrompt: SWARMCLAW_ASSISTANT_PROMPT,
         soul: '',
         providerConfigId: cp.id,
+        setupProvider: cp.setupProvider,
         provider: cp.provider,
         model: cp.defaultModel,
         credentialId: cp.credentialId,
@@ -149,6 +151,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           if (draft.providerConfigId !== editingProviderId) return draft
           return {
             ...draft,
+            setupProvider: configured.setupProvider,
             provider: configured.provider,
             credentialId: configured.credentialId,
             apiEndpoint: configured.endpoint,
@@ -186,6 +189,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       systemPrompt: '',
       soul: '',
       providerConfigId: defaultProvider?.id || null,
+      setupProvider: defaultProvider?.setupProvider || null,
       provider: defaultProvider?.provider || null,
       model: defaultProvider?.defaultModel || '',
       credentialId: defaultProvider?.credentialId || null,
@@ -224,13 +228,14 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
 
     setDraftAgents((current) => current.map((draft) => {
       if (draft.id !== id) return draft
-      const previousDefault = draft.provider ? getDefaultModelForProvider(draft.provider) : ''
+      const previousDefault = draft.setupProvider ? getDefaultModelForProvider(draft.setupProvider) : ''
       const nextModel = !draft.model || draft.model === previousDefault
         ? configuredProvider.defaultModel
         : draft.model
       return {
         ...draft,
         providerConfigId: configuredProvider.id,
+        setupProvider: configuredProvider.setupProvider,
         provider: configuredProvider.provider,
         credentialId: configuredProvider.credentialId,
         apiEndpoint: configuredProvider.endpoint,
@@ -246,6 +251,10 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       setError('Every enabled agent needs a provider assignment before you continue.')
       return
     }
+    if (enabledDrafts.some((draft) => draft.setupProvider === 'custom' && !draft.model.trim())) {
+      setError('Every custom-provider agent needs a model before you continue.')
+      return
+    }
 
     setSaving(true)
     setError('')
@@ -254,12 +263,12 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       const checkedCombos = new Map<string, ProviderCheckResponse>()
       for (const draft of enabledDrafts) {
         const cp = configuredProviders.find((c) => c.id === draft.providerConfigId)
-        if (!cp || cp.provider === 'openclaw') continue
-        const comboKey = `${cp.provider}|${draft.apiEndpoint || cp.endpoint || ''}|${draft.model}`
+        if (!cp || !requiresSetupProviderVerification(cp.setupProvider)) continue
+        const comboKey = `${cp.setupProvider}|${draft.apiEndpoint || cp.endpoint || ''}|${draft.model}`
         if (checkedCombos.has(comboKey)) continue
         try {
           const result = await api<ProviderCheckResponse>('POST', '/setup/check-provider', {
-            provider: cp.provider,
+            provider: cp.setupProvider,
             credentialId: cp.credentialId || undefined,
             endpoint: draft.apiEndpoint || cp.endpoint || undefined,
             model: draft.model || undefined,
@@ -276,7 +285,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
       }
 
       const gatewayProfileIdsByProviderConfig = new Map<string, string>()
-      const openClawProviders = configuredProviders.filter((candidate) => candidate.provider === 'openclaw')
+      const openClawProviders = configuredProviders.filter((candidate) => candidate.setupProvider === 'openclaw')
       if (openClawProviders.length > 0) {
         const existingGateways = await api<GatewayProfile[]>('GET', '/gateways')
         let shouldCreateDefault = existingGateways.length === 0
@@ -322,8 +331,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
           description: draft.description.trim(),
           systemPrompt: draft.systemPrompt.trim(),
           soul: draft.soul.trim() || undefined,
-          provider: draft.provider as ProviderType,
-          model: draft.model.trim() || getDefaultModelForProvider(draft.provider as SetupProvider),
+          provider: draft.provider,
+          model: draft.model.trim() || (draft.setupProvider ? getDefaultModelForProvider(draft.setupProvider) : ''),
           credentialId: draft.credentialId || null,
           tools: draft.tools,
           capabilities: draft.capabilities,
@@ -355,7 +364,7 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         }
 
         // Push soul and identity files to the OpenClaw gateway (non-fatal)
-        if (draft.provider === 'openclaw') {
+        if (draft.setupProvider === 'openclaw') {
           try {
             if (draft.soul.trim()) {
               await api('PUT', '/openclaw/agent-files', { agentId, filename: 'SOUL.md', content: draft.soul.trim() })
@@ -373,8 +382,8 @@ export function SetupWizard({ onComplete }: SetupWizardProps) {
         created.push({
           id: agentId,
           name: draft.name.trim(),
-          provider: draft.provider as SetupProvider,
-          providerName: configuredProviders.find((candidate) => candidate.id === draft.providerConfigId)?.name || draft.provider as SetupProvider,
+          provider: draft.provider as ProviderId,
+          providerName: configuredProviders.find((candidate) => candidate.id === draft.providerConfigId)?.name || String(draft.provider || ''),
         })
       }
 

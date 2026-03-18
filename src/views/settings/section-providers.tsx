@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
 import { createCredential, deleteCredential } from '@/lib/chat/chats'
 import { toast } from 'sonner'
-import type { ProviderType } from '@/types'
+import type { ProviderId } from '@/types'
 import type { SettingsSectionProps } from './types'
 
 export function ProvidersSection({ inputClass }: SettingsSectionProps) {
@@ -14,7 +14,7 @@ export function ProvidersSection({ inputClass }: SettingsSectionProps) {
 
   const credList = Object.values(credentials)
 
-  const [addProvider, setAddProvider] = useState<ProviderType | null>(null)
+  const [addProvider, setAddProvider] = useState<ProviderId | null>(null)
   const [newName, setNewName] = useState('')
   const [newKey, setNewKey] = useState('')
   const [deleting, setDeleting] = useState<string | null>(null)

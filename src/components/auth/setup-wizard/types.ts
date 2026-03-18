@@ -1,4 +1,4 @@
-import type { GatewayProfile } from '@/types'
+import type { GatewayProfile, ProviderId } from '@/types'
 import type { SetupProvider } from '@/lib/setup-defaults'
 
 export type SetupStep = 'profile' | 'providers' | 'connect' | 'agents' | 'next' | 'done'
@@ -34,7 +34,8 @@ export interface SetupWizardProps {
 
 export interface ConfiguredProvider {
   id: string
-  provider: SetupProvider
+  setupProvider: SetupProvider
+  provider: ProviderId
   name: string
   credentialId: string | null
   endpoint: string | null
@@ -56,7 +57,8 @@ export interface StarterDraftAgent {
   systemPrompt: string
   soul: string
   providerConfigId: string | null
-  provider: SetupProvider | null
+  setupProvider: SetupProvider | null
+  provider: ProviderId | null
   model: string
   credentialId: string | null
   apiEndpoint: string | null
@@ -77,7 +79,7 @@ export interface StarterDraftAgent {
 export interface CreatedAgentSummary {
   id: string
   name: string
-  provider: SetupProvider
+  provider: ProviderId
   providerName: string
 }
 

@@ -5,7 +5,7 @@ import { api } from '@/lib/app/api-client'
 import { dedup, errorMessage } from '@/lib/shared-utils'
 import { getDefaultModelForProvider } from '@/lib/setup-defaults'
 import { OpenClawDeployPanel } from '@/components/openclaw/openclaw-deploy-panel'
-import type { Credential, Credentials, GatewayProfile, ProviderConfig } from '@/types'
+import type { Credential, Credentials, GatewayProfile, ProviderId, ProviderConfig } from '@/types'
 import type { StepConnectProps, CheckState, ProviderCheckResponse, ConfiguredProvider } from './types'
 import {
   formatEndpointHost,
@@ -35,7 +35,9 @@ export function StepConnect({
   const [checkMessage, setCheckMessage] = useState('')
   const [checkErrorCode, setCheckErrorCode] = useState<string | null>(null)
   const [openclawDeviceId, setOpenclawDeviceId] = useState<string | null>(null)
-  const [providerSuggestedModel, setProviderSuggestedModel] = useState(provider === 'custom' ? '' : getDefaultModelForProvider(provider))
+  const [providerSuggestedModel, setProviderSuggestedModel] = useState(
+    editingProvider?.defaultModel || (provider === 'custom' ? '' : getDefaultModelForProvider(provider)),
+  )
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [existingCredentials, setExistingCredentials] = useState<Credential[]>([])
@@ -63,6 +65,7 @@ export function StepConnect({
   const supportsEndpoint = selectedProvider.supportsEndpoint || isCustom
   const keyIsOptional = (selectedProvider.optionalKey && !isOllamaCloud) || isCustom
   const requiresVerifiedConnection = provider === 'openclaw'
+  const canCheckConnection = !isCustom
   const openClawEndpointValue = provider === 'openclaw'
     ? (endpoint.trim() || selectedProvider.defaultEndpoint || 'http://localhost:18789/v1')
     : null
@@ -162,6 +165,11 @@ export function StepConnect({
       return
     }
 
+    if (isCustom && !providerSuggestedModel.trim()) {
+      setError('Custom providers need a default model ID.')
+      return
+    }
+
     setSaving(true)
     setError('')
     try {
@@ -187,17 +195,17 @@ export function StepConnect({
       }
 
       // Custom providers: create a ProviderConfig in the DB so agents can reference it
-      let resolvedProvider = provider
+      let resolvedProvider: ProviderId = provider
       if (isCustom) {
         const customConfig = await api<ProviderConfig>('POST', '/providers', {
           name: providerLabel.trim() || 'Custom Provider',
           baseUrl: endpoint.trim(),
-          models: providerSuggestedModel ? [providerSuggestedModel] : [],
-          requiresApiKey: !!apiKey.trim(),
+          models: providerSuggestedModel.trim() ? [providerSuggestedModel.trim()] : [],
+          requiresApiKey: hasKeyOrCredential,
           credentialId: nextCredentialId || null,
           isEnabled: true,
         })
-        resolvedProvider = customConfig.id as typeof provider
+        resolvedProvider = customConfig.id as ProviderId
       }
 
       // Build a tokenized dashboard URL for OpenClaw so step-agents can link to it
@@ -209,11 +217,12 @@ export function StepConnect({
 
       const configured: ConfiguredProvider = {
         id: crypto.randomUUID(),
+        setupProvider: provider,
         provider: resolvedProvider,
         name: providerLabel.trim() || selectedProvider.name,
         credentialId: nextCredentialId || null,
         endpoint: supportsEndpoint ? (endpoint.trim() || selectedProvider.defaultEndpoint || null) : null,
-        defaultModel: providerSuggestedModel || (isCustom ? '' : getDefaultModelForProvider(provider)),
+        defaultModel: providerSuggestedModel.trim() || (isCustom ? '' : getDefaultModelForProvider(provider)),
         gatewayProfileId: null,
         notes: providerNotes.trim() || null,
         tags: providerTags,
@@ -320,6 +329,26 @@ export function StepConnect({
                 <p className="text-[12px] text-text-3">Remote example: <code className="text-text-2">https://your-gateway.ts.net/v1</code>.</p>
               </div>
             )}
+          </div>
+        )}
+
+        {isCustom && (
+          <div>
+            <label className="block text-[12px] text-text-3 font-500 mb-1.5 ml-1">
+              Default model
+            </label>
+            <input
+              type="text"
+              value={providerSuggestedModel}
+              onChange={(e) => setProviderSuggestedModel(e.target.value)}
+              placeholder="e.g. gpt-4o-mini"
+              className="w-full px-4 py-3 rounded-[12px] border border-white/[0.08] bg-surface
+                text-text text-[14px] font-mono outline-none transition-all duration-200
+                focus:border-accent-bright/30 focus:shadow-[0_0_30px_rgba(99,102,241,0.1)]"
+            />
+            <p className="mt-1.5 text-[11px] text-text-3">
+              Save the model ID you want starter agents to use with this provider. You can change it later per agent.
+            </p>
           </div>
         )}
 
@@ -536,17 +565,19 @@ export function StepConnect({
         >
           Back
         </button>
-        <button
-          onClick={runConnectionCheck}
-          disabled={checkState === 'checking' || saving}
-          className="px-6 py-3.5 rounded-[14px] border border-white/[0.08] bg-white/[0.03] text-text text-[14px]
-            font-display font-600 cursor-pointer hover:bg-white/[0.06] transition-all duration-200 disabled:opacity-40"
-        >
-          {checkState === 'checking' ? 'Checking...' : 'Check Connection'}
-        </button>
+        {canCheckConnection && (
+          <button
+            onClick={runConnectionCheck}
+            disabled={checkState === 'checking' || saving}
+            className="px-6 py-3.5 rounded-[14px] border border-white/[0.08] bg-white/[0.03] text-text text-[14px]
+              font-display font-600 cursor-pointer hover:bg-white/[0.06] transition-all duration-200 disabled:opacity-40"
+          >
+            {checkState === 'checking' ? 'Checking...' : 'Check Connection'}
+          </button>
+        )}
         <button
           onClick={saveProvider}
-          disabled={(requiresKey && !hasKeyOrCredential) || saving}
+          disabled={(requiresKey && !hasKeyOrCredential) || (isCustom && !providerSuggestedModel.trim()) || saving}
           className="px-8 py-3.5 rounded-[14px] border-none bg-accent-bright text-white text-[15px] font-display font-600
             cursor-pointer hover:brightness-110 active:scale-[0.97] transition-all duration-200
             shadow-[0_6px_28px_rgba(99,102,241,0.3)] disabled:opacity-30"

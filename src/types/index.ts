@@ -295,9 +295,10 @@ export interface CanvasDocument {
 export type CanvasContent = string | CanvasDocument | null
 
 export type ProviderType = 'claude-cli' | 'codex-cli' | 'opencode-cli' | 'gemini-cli' | 'openai' | 'ollama' | 'anthropic' | 'openclaw' | 'google' | 'deepseek' | 'groq' | 'together' | 'mistral' | 'xai' | 'fireworks' | 'nebius' | 'deepinfra'
+export type ProviderId = ProviderType | (string & {})
 
 export interface ProviderInfo {
-  id: ProviderType
+  id: ProviderId
   name: string
   models: string[]
   defaultModels?: string[]
@@ -338,7 +339,7 @@ export interface Session {
   shortcutForAgentId?: string | null
   cwd: string
   user: string
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: OllamaMode | null
   credentialId?: string | null
@@ -563,7 +564,7 @@ export interface ExtensionPromptBuildResult {
 }
 
 export interface ExtensionModelResolveResult {
-  providerOverride?: ProviderType
+  providerOverride?: ProviderId
   modelOverride?: string
   apiEndpointOverride?: string | null
 }
@@ -596,7 +597,7 @@ export interface ExtensionHooks {
     session: Session
     prompt: string
     message: string
-    provider: ProviderType
+    provider: ProviderId
     model: string
     apiEndpoint?: string | null
   }) => Promise<ExtensionModelResolveResult | void> | ExtensionModelResolveResult | void
@@ -618,7 +619,7 @@ export interface ExtensionHooks {
   llmInput?: (ctx: {
     session: Session
     runId: string
-    provider: ProviderType
+    provider: ProviderId
     model: string
     systemPrompt?: string
     prompt: string
@@ -628,7 +629,7 @@ export interface ExtensionHooks {
   llmOutput?: (ctx: {
     session: Session
     runId: string
-    provider: ProviderType
+    provider: ProviderId
     model: string
     assistantTexts: string[]
     response: string
@@ -1056,7 +1057,7 @@ export interface Agent {
   theme?: string
   avatar?: string
   systemPrompt: string
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: OllamaMode | null
   credentialId?: string | null
@@ -2615,7 +2616,7 @@ export interface AgentRoutingTarget {
   id: string
   label?: string
   role?: AgentRoutingTargetRole
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: OllamaMode | null
   credentialId?: string | null
@@ -2631,7 +2632,7 @@ export interface AgentPackEntry {
   id: string
   name: string
   description?: string
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: OllamaMode | null
   credentialId?: string | null
@@ -2668,7 +2669,7 @@ export interface ExternalAgentRuntime {
   name: string
   sourceType: ExternalAgentSourceType
   status: ExternalAgentStatus
-  provider?: ProviderType | null
+  provider?: ProviderId | null
   model?: string | null
   workspace?: string | null
   transport?: 'http' | 'ws' | 'cli' | 'gateway' | 'custom' | null

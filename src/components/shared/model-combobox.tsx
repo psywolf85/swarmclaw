@@ -40,6 +40,7 @@ export function ModelCombobox({
   const containerRef = useRef<HTMLDivElement>(null)
   const lastDiscoveryKeyRef = useRef<string | null>(null)
   const loadProviders = useAppStore((s) => s.loadProviders)
+  const loadProviderConfigs = useAppStore((s) => s.loadProviderConfigs)
 
   const availableModels = [...models, ...discoveredModels].filter((model, index, source) => source.indexOf(model) === index)
   const trimmedQuery = query.trim()
@@ -53,8 +54,8 @@ export function ModelCombobox({
 
   const persistModels = useCallback(async (next: string[]) => {
     await api('PUT', `/providers/${providerId}/models`, { models: next })
-    await loadProviders()
-  }, [providerId, loadProviders])
+    await Promise.all([loadProviders(), loadProviderConfigs()])
+  }, [loadProviderConfigs, loadProviders, providerId])
 
   const addModel = useCallback(async (name: string) => {
     const next = [...models, name]
@@ -73,8 +74,8 @@ export function ModelCombobox({
     } else {
       await persistModels(next)
     }
-    await loadProviders()
-  }, [models, defaultModels, value, onChange, providerId, persistModels, loadProviders])
+    await Promise.all([loadProviders(), loadProviderConfigs()])
+  }, [models, defaultModels, value, onChange, providerId, persistModels, loadProviderConfigs, loadProviders])
 
   const selectModel = useCallback((m: string) => {
     onChange(m)

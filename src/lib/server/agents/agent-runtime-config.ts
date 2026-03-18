@@ -3,7 +3,7 @@ import type {
   AgentRoutingStrategy,
   AgentRoutingTarget,
   GatewayProfile,
-  ProviderType,
+  ProviderId,
 } from '@/types'
 import { deriveOpenClawWsUrl, normalizeProviderEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { resolveProviderApiEndpoint, resolveProviderCredentialId } from '@/lib/server/provider-endpoint'
@@ -16,7 +16,7 @@ const DEFAULT_OPENCLAW_MODEL = 'default'
 export interface ResolvedAgentRoute {
   id: string
   label: string
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null
@@ -36,7 +36,7 @@ interface GatewayRoutePreferences {
 interface RouteSeed {
   id: string
   label?: string
-  provider?: ProviderType | null
+  provider?: ProviderId | null
   model?: string | null
   ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null
@@ -258,7 +258,7 @@ function buildRouteFromSeed(
   routePreferences?: GatewayRoutePreferences | null,
   agentGatewayProfileId?: string | null,
 ): ResolvedAgentRoute | null {
-  const provider = (seed.provider || 'claude-cli') as ProviderType
+  const provider: ProviderId = seed.provider || 'claude-cli'
   const mergedPreferences = normalizeRoutePreferences({
     preferredGatewayTags: seed.preferredGatewayTags ?? routePreferences?.preferredGatewayTags,
     preferredGatewayUseCase: seed.preferredGatewayUseCase ?? routePreferences?.preferredGatewayUseCase,
@@ -406,7 +406,7 @@ export function resolvePrimaryAgentRoute(
 }
 
 export function applyResolvedRoute<T extends {
-  provider: ProviderType
+  provider: ProviderId
   model: string
   ollamaMode?: Agent['ollamaMode']
   credentialId?: string | null

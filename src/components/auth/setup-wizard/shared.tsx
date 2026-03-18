@@ -69,10 +69,10 @@ export function ConfiguredProviderChips({
             {formatEndpointHost(cp.endpoint)
               ? `· ${formatEndpointHost(cp.endpoint)}`
               : ''}
-            {cp.provider === 'openclaw' && cp.deployment?.useCase
+            {cp.setupProvider === 'openclaw' && cp.deployment?.useCase
               ? ` · ${OPENCLAW_USE_CASE_LABELS[cp.deployment.useCase]}`
               : ''}
-            {cp.provider === 'openclaw' && cp.deployment?.exposure
+            {cp.setupProvider === 'openclaw' && cp.deployment?.exposure
               ? ` · ${OPENCLAW_EXPOSURE_LABELS[cp.deployment.exposure]}`
               : ''}
             {cp.defaultModel ? ` · ${cp.defaultModel}` : ''}

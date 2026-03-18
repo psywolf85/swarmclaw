@@ -9,7 +9,7 @@ import { streamOpenClawChat } from './openclaw'
 import { errorMessage, sleep, jitteredBackoff } from '@/lib/shared-utils'
 import { classifyProviderError } from './error-classification'
 import { log } from '@/lib/server/logger'
-import type { ProviderInfo, ProviderConfig as CustomProviderConfig, ProviderType } from '../../types'
+import type { ProviderInfo, ProviderConfig as CustomProviderConfig, ProviderType, ProviderId } from '../../types'
 
 const TAG = 'providers'
 
@@ -281,8 +281,11 @@ export const PROVIDERS: Record<string, BuiltinProviderConfig> = {
 function getCustomProviders(): Record<string, CustomProviderConfig> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { loadProviderConfigs } = require('../server/storage')
-    return loadProviderConfigs() as Record<string, CustomProviderConfig>
+    const { loadProviderConfigs } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
+    const configs = loadProviderConfigs() as Record<string, CustomProviderConfig>
+    return Object.fromEntries(
+      Object.entries(configs).filter(([, config]) => config?.type === 'custom'),
+    )
   } catch {
     return {}
   }
@@ -291,7 +294,7 @@ function getCustomProviders(): Record<string, CustomProviderConfig> {
 function getModelOverrides(): Record<string, string[]> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { loadModelOverrides } = require('../server/storage')
+    const { loadModelOverrides } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
     return loadModelOverrides()
   } catch {
     return {}
@@ -316,11 +319,11 @@ export function getProviderList(): ProviderInfo[] {
   const customs: ProviderInfo[] = Object.values(getCustomProviders())
     .filter((c) => c.isEnabled)
     .map((c) => ({
-      id: c.id as ProviderType,
+      id: c.id as ProviderId,
       name: c.name,
       models: c.models,
       defaultModels: c.models,
-      supportsModelDiscovery: !!(c.baseUrl && c.baseUrl.trim()),
+      supportsModelDiscovery: false,
       requiresApiKey: c.requiresApiKey,
       requiresEndpoint: false as boolean,
       defaultEndpoint: c.baseUrl,
@@ -331,7 +334,7 @@ export function getProviderList(): ProviderInfo[] {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { getExtensionManager } = require('../server/extensions')
     extensionProviders = getExtensionManager().getProviders().map((p: Record<string, unknown>) => ({
-      id: String(p.id) as ProviderType,
+      id: String(p.id) as ProviderId,
       name: String(p.name),
       models: p.models as string[],
       defaultModels: p.models as string[],
@@ -353,7 +356,7 @@ export function getProvider(id: string): BuiltinProviderConfig | null {
   const custom = customs[id]
   if (custom?.isEnabled) {
     return {
-      id: custom.id as ProviderType,
+      id: custom.id as ProviderId,
       name: custom.name,
       models: custom.models,
       requiresApiKey: custom.requiresApiKey,
@@ -376,7 +379,7 @@ export function getProvider(id: string): BuiltinProviderConfig | null {
     const found = extensionProviders.find((p: Record<string, unknown>) => p.id === id)
     if (found) {
       return {
-        id: found.id as ProviderType,
+        id: found.id as ProviderId,
         name: found.name,
         models: found.models,
         requiresApiKey: found.requiresApiKey,
@@ -421,7 +424,7 @@ export async function streamChatWithFailover(
       if (credId && i > 0) {
         // Need to decrypt fallback credential
         // eslint-disable-next-line @typescript-eslint/no-require-imports
-        const { loadCredentials, decryptKey } = require('../server/storage')
+        const { loadCredentials, decryptKey } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
         const creds = loadCredentials()
         const cred = creds[credId]
         if (cred?.encryptedKey) {

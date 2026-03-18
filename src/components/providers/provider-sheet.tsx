@@ -46,7 +46,8 @@ export function ProviderSheet() {
   const [deleting, setDeleting] = useState(false)
 
   // Find editing provider in custom configs OR built-in list
-  const editingCustom = editingId ? providerConfigs.find((c) => c.id === editingId) : null
+  const editingCustom = editingId ? providerConfigs.find((c) => c.id === editingId && c.type === 'custom') : null
+  const editingBuiltinOverride = editingId ? providerConfigs.find((c) => c.id === editingId && c.type === 'builtin') : null
   const editingBuiltin = editingId ? providers.find((p) => p.id === editingId) : null
   const isBuiltin = !!editingBuiltin && !editingCustom
   const editing = editingCustom || editingBuiltin
@@ -75,7 +76,7 @@ export function ProviderSheet() {
         // Default to existing credential for this provider
         const existingCred = Object.values(credentials).find((c) => c.provider === editingBuiltin.id)
         setCredentialId(existingCred?.id || null)
-        setIsEnabled(true)
+        setIsEnabled(editingBuiltinOverride?.isEnabled !== false)
       } else {
         setName('')
         setBaseUrl('')
@@ -85,7 +86,7 @@ export function ProviderSheet() {
         setIsEnabled(true)
       }
     }
-  }, [open, editingId, credentials, editingBuiltin, editingCustom, loadCredentials])
+  }, [open, editingId, credentials, editingBuiltin, editingBuiltinOverride, editingCustom, loadCredentials])
 
   // Reset test status when connection params change
   useEffect(() => {
@@ -100,6 +101,7 @@ export function ProviderSheet() {
   }, [editingId, credentialId, baseUrl, requiresApiKey])
 
   const handleTestConnection = async () => {
+    if (!isBuiltin) return
     setTestStatus('testing')
     setTestMessage('')
     try {
@@ -138,8 +140,12 @@ export function ProviderSheet() {
         // Save model overrides for built-in providers
         const modelList = models.split(',').map((m) => m.trim()).filter(Boolean)
         await api('PUT', `/providers/${editingId}/models`, { models: modelList })
-        toast.success('Built-in provider models updated')
-        await loadProviders()
+        await api('PUT', `/providers/${editingId}`, {
+          type: 'builtin',
+          isEnabled,
+        })
+        toast.success('Built-in provider updated')
+        await Promise.all([loadProviders(), loadProviderConfigs()])
         onClose()
         return
       }
@@ -159,7 +165,7 @@ export function ProviderSheet() {
         await createProviderConfig(data)
         toast.success('Provider created')
       }
-      await loadProviderConfigs()
+      await Promise.all([loadProviderConfigs(), loadProviders()])
       onClose()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save provider')
@@ -172,7 +178,7 @@ export function ProviderSheet() {
       try {
         await deleteProviderConfig(editingCustom.id)
         toast.success('Provider deleted')
-        await loadProviderConfigs()
+        await Promise.all([loadProviderConfigs(), loadProviders()])
         setConfirmDelete(false)
         onClose()
       } catch (err: unknown) {
@@ -187,8 +193,8 @@ export function ProviderSheet() {
     if (isBuiltin && editingId) {
       await api('DELETE', `/providers/${editingId}/models`)
       await loadProviders()
-      // Re-read the reset models
-      const updated = providers.find((p) => p.id === editingId)
+      // Re-read from fresh store state (closure captures stale providers)
+      const updated = useAppStore.getState().providers.find((p) => p.id === editingId)
       if (updated) setModels(updated.models.join(', '))
     }
   }
@@ -207,7 +213,7 @@ export function ProviderSheet() {
   }
 
   const handleLoadLiveModels = async (force = false) => {
-    if (!open) return
+    if (!open || !isBuiltin) return
     const providerId = editingId || 'custom'
     setLiveLoading(true)
     setLiveMessage('')
@@ -240,9 +246,8 @@ export function ProviderSheet() {
   const credList = Object.values(credentials)
   const modelList = models.split(',').map((m) => m.trim()).filter(Boolean)
   const showApiKey = isBuiltin ? editingBuiltin?.requiresApiKey || editingBuiltin?.optionalApiKey : requiresApiKey
-  const canDiscoverModels = isBuiltin
-    ? Boolean(editingBuiltin?.supportsModelDiscovery)
-    : !!baseUrl.trim()
+  const canDiscoverModels = Boolean(isBuiltin && editingBuiltin?.supportsModelDiscovery)
+  const showTestButton = Boolean(isBuiltin && showApiKey && credentialId)
 
   const inputClass = "w-full px-4 py-3.5 rounded-[14px] border border-white/[0.08] bg-surface text-text text-[15px] outline-none transition-all duration-200 placeholder:text-text-3/50 focus-glow"
 
@@ -367,7 +372,7 @@ export function ProviderSheet() {
               className={`${inputClass} resize-y min-h-[80px] font-mono text-[14px]`}
               style={{ fontFamily: 'inherit' }}
             />
-            <p className="text-[11px] text-text-3/70 mt-2">Comma-separated model IDs</p>
+            <p className="text-[11px] text-text-3/70 mt-2">Comma-separated model IDs. Custom providers are saved as-is, so add the models you want manually.</p>
           </>
         )}
       </div>
@@ -471,8 +476,8 @@ export function ProviderSheet() {
         </div>
       )}
 
-      {/* Enabled toggle — only for custom */}
-      {!isBuiltin && editingCustom && (
+      {/* Enabled toggle */}
+      {(isBuiltin || editingCustom) && (
         <div className="mb-8">
           <label className="flex items-center gap-3 cursor-pointer">
             <div
@@ -484,17 +489,20 @@ export function ProviderSheet() {
                 ${isEnabled ? 'left-[22px]' : 'left-0.5'}`} />
             </div>
             <span className="font-display text-[14px] font-600 text-text-2">Enabled</span>
+            {isBuiltin && (
+              <span className="text-[12px] text-text-3">Hidden from the agent sheet when off.</span>
+            )}
           </label>
         </div>
       )}
 
       {/* Test connection result */}
-      {testStatus === 'fail' && (
+      {isBuiltin && testStatus === 'fail' && (
         <div className="mb-4 p-3 rounded-[12px] bg-red-500/[0.08] border border-red-500/20">
           <p className="text-[13px] text-red-400">{testMessage || 'Connection test failed'}</p>
         </div>
       )}
-      {testStatus === 'pass' && (
+      {isBuiltin && testStatus === 'pass' && (
         <div className="mb-4 p-3 rounded-[12px] bg-emerald-500/[0.08] border border-emerald-500/20">
           <p className="text-[13px] text-emerald-400">{testMessage || 'Connected successfully'}</p>
         </div>
@@ -509,25 +517,24 @@ export function ProviderSheet() {
         <button onClick={onClose} className="flex-1 py-3.5 rounded-[14px] border border-white/[0.08] bg-transparent text-text-2 text-[15px] font-600 cursor-pointer hover:bg-surface-2 transition-all" style={{ fontFamily: 'inherit' }}>
           Cancel
         </button>
-        {showApiKey && credentialId && testStatus !== 'pass' ? (
+        {showTestButton && (
           <button
             onClick={handleTestConnection}
             disabled={testStatus === 'testing'}
-            className="flex-1 py-3.5 rounded-[14px] border-none bg-emerald-600 text-white text-[15px] font-600 cursor-pointer active:scale-[0.97] disabled:opacity-30 transition-all shadow-[0_4px_20px_rgba(16,185,129,0.2)] hover:brightness-110"
+            className="py-3.5 px-6 rounded-[14px] border-none bg-emerald-600 text-white text-[15px] font-600 cursor-pointer active:scale-[0.97] disabled:opacity-30 transition-all shadow-[0_4px_20px_rgba(16,185,129,0.2)] hover:brightness-110"
             style={{ fontFamily: 'inherit' }}
           >
             {testStatus === 'testing' ? 'Testing...' : testStatus === 'fail' ? 'Retry Connection' : 'Test Connection'}
           </button>
-        ) : (
-          <button
-            onClick={handleSave}
-            disabled={isBuiltin ? false : (!name.trim() || !baseUrl.trim())}
-            className="flex-1 py-3.5 rounded-[14px] border-none bg-accent-bright text-white text-[15px] font-600 cursor-pointer active:scale-[0.97] disabled:opacity-30 transition-all shadow-[0_4px_20px_rgba(99,102,241,0.25)] hover:brightness-110"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {editing ? 'Save' : 'Create'}
-          </button>
         )}
+        <button
+          onClick={handleSave}
+          disabled={isBuiltin ? false : (!name.trim() || !baseUrl.trim())}
+          className="flex-1 py-3.5 rounded-[14px] border-none bg-accent-bright text-white text-[15px] font-600 cursor-pointer active:scale-[0.97] disabled:opacity-30 transition-all shadow-[0_4px_20px_rgba(99,102,241,0.25)] hover:brightness-110"
+          style={{ fontFamily: 'inherit' }}
+        >
+          {editing ? 'Save' : 'Create'}
+        </button>
       </div>
       <ConfirmDialog
         open={confirmDelete}

@@ -28,6 +28,7 @@ import { resolveStoredOllamaMode } from '@/lib/ollama-mode'
 import { errorMessage } from '@/lib/shared-utils'
 import { getDefaultAgentToolIds } from '@/lib/agent-default-tools'
 import { getEnabledExtensionIds, getEnabledToolIds } from '@/lib/capability-selection'
+import { buildAgentSelectableProviders, resolveAgentSelectableProviderCredentials } from '@/lib/agent-provider-options'
 
 const HB_PRESETS = [1800, 3600, 7200, 21600, 43200] as const
 const FALLBACK_ELEVENLABS_VOICE_ID = 'JBFqnCBsd6RMkjVDRZzb'
@@ -46,6 +47,7 @@ const AUTO_SYNC_MODEL_PROVIDER_IDS = new Set<ProviderType>([
   'ollama',
 ])
 const CONNECTION_TEST_TIMEOUT_MS = 40_000
+type AgentProviderId = string
 
 type SafeAgentWallet = Omit<AgentWallet, 'encryptedPrivateKey'> & {
   balanceAtomic?: string
@@ -171,6 +173,8 @@ export function AgentSheet() {
   const loadProjects = useAppStore((s) => s.loadProjects)
   const providers = useAppStore((s) => s.providers)
   const loadProviders = useAppStore((s) => s.loadProviders)
+  const providerConfigs = useAppStore((s) => s.providerConfigs)
+  const loadProviderConfigs = useAppStore((s) => s.loadProviderConfigs)
   const gatewayProfiles = useAppStore((s) => s.gatewayProfiles)
   const loadGatewayProfiles = useAppStore((s) => s.loadGatewayProfiles)
   const credentials = useAppStore((s) => s.credentials)
@@ -197,7 +201,7 @@ export function AgentSheet() {
   const [soulInitial, setSoulInitial] = useState('')
   const [soulSaveState, setSoulSaveState] = useState<'idle' | 'saved'>('idle')
   const [systemPrompt, setSystemPrompt] = useState('')
-  const [provider, setProvider] = useState<ProviderType>('claude-cli')
+  const [provider, setProvider] = useState<AgentProviderId>('claude-cli')
   const [model, setModel] = useState('')
   const [credentialId, setCredentialId] = useState<string | null>(null)
   const [apiEndpoint, setApiEndpoint] = useState<string | null>(null)
@@ -308,8 +312,15 @@ export function AgentSheet() {
     }
   }, [])
 
-  const currentProvider = providers.find((p) => p.id === provider)
-  const providerCredentials = Object.values(credentials).filter((c) => c.provider === provider)
+  const agentSelectableProviders = useMemo(
+    () => buildAgentSelectableProviders(providers, providerConfigs),
+    [providers, providerConfigs],
+  )
+  const currentProvider = agentSelectableProviders.find((p) => p.id === provider)
+  const providerCredentials = useMemo(
+    () => resolveAgentSelectableProviderCredentials(provider, credentials, providerConfigs),
+    [credentials, provider, providerConfigs],
+  )
   const openclawCredentials = Object.values(credentials).filter((c) => c.provider === 'openclaw')
   const openclawGatewayProfiles = gatewayProfiles.filter((item) => item.provider === 'openclaw')
   const setAgentPrefill = useAppStore((s) => s.setAgentPrefill)
@@ -327,15 +338,15 @@ export function AgentSheet() {
       ? 'Global default'
       : 'Built-in fallback'
   const syncLiveProviderModels = useCallback(async (
-    providerId: ProviderType,
+    providerId: string,
     nextCredentialId: string | null,
     nextEndpoint: string | null,
     nextOllamaMode: 'local' | 'cloud',
     force = false,
   ): Promise<{ synced: boolean; models: string[] } | null> => {
     if (openclawEnabled) return null
-    if (!AUTO_SYNC_MODEL_PROVIDER_IDS.has(providerId)) return null
-    const providerInfo = providers.find((item) => item.id === providerId)
+    if (!AUTO_SYNC_MODEL_PROVIDER_IDS.has(providerId as ProviderType)) return null
+    const providerInfo = agentSelectableProviders.find((item) => item.id === providerId)
     if (!providerInfo?.supportsModelDiscovery) return null
 
     const result = await fetchProviderModelDiscovery({
@@ -358,7 +369,7 @@ export function AgentSheet() {
 
     setModel((currentModel) => currentModel.trim() || result.models[0] || '')
     return { synced: !sameModels, models: result.models }
-  }, [loadProviders, openclawEnabled, providers])
+  }, [agentSelectableProviders, loadProviders, openclawEnabled])
 
   const providerNeedsKey = !editing && (
     (currentProvider?.requiresApiKey && providerCredentials.length === 0 && !addingKey) ||
@@ -371,7 +382,7 @@ export function AgentSheet() {
       return
     }
     if (openclawEnabled) return
-    if (!AUTO_SYNC_MODEL_PROVIDER_IDS.has(provider)) return
+    if (!AUTO_SYNC_MODEL_PROVIDER_IDS.has(provider as ProviderType)) return
     if (!currentProvider?.supportsModelDiscovery) return
 
     const requiresCredential = currentProvider.requiresApiKey || (provider === 'ollama' && ollamaMode === 'cloud')
@@ -388,6 +399,7 @@ export function AgentSheet() {
     if (open) {
       loadSettings()
       loadProviders()
+      loadProviderConfigs()
       loadGatewayProfiles()
       loadCredentials()
       loadSkills()
@@ -637,7 +649,7 @@ export function AgentSheet() {
       setModel(currentProvider.models[0])
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider, providers])
+  }, [provider, agentSelectableProviders])
 
   // Reset test status when connection params change
   useEffect(() => {
@@ -873,13 +885,18 @@ export function AgentSheet() {
 
   const handleExport = () => {
     if (!editing) return
+    const recommendedProviders = agentSelectableProviders.some((providerOption) => (
+      providerOption.id === editing.provider && providerOption.type === 'builtin'
+    ))
+      ? [editing.provider as ProviderType]
+      : undefined
     const pack: AgentPackManifest = {
       schemaVersion: 1,
       kind: 'swarmclaw-agent-pack',
       name: `${editing.name} Pack`,
       description: editing.description || undefined,
       exportedAt: Date.now(),
-      recommendedProviders: [editing.provider],
+      recommendedProviders,
       agents: [{
         id: editing.name.replace(/\s+/g, '-').toLowerCase(),
         name: editing.name,
@@ -1213,7 +1230,7 @@ export function AgentSheet() {
                   if (!apiEndpoint) setApiEndpoint('http://localhost:18789')
                 } else {
                   setOpenclawEnabled(false)
-                  const first = providers[0]?.id || 'claude-cli'
+                  const first = agentSelectableProviders[0]?.id || 'claude-cli'
                   setProvider(first)
                   setModel('')
                   setApiEndpoint(null)
@@ -1445,13 +1462,17 @@ export function AgentSheet() {
       {!openclawEnabled && <div className="mb-8">
         <SectionLabel>Provider</SectionLabel>
         <div className="grid grid-cols-3 gap-3">
-          {providers.map((p) => {
-            const isConnected = !p.requiresApiKey || Object.values(credentials).some((c) => c.provider === p.id)
+          {agentSelectableProviders.map((p) => {
+            const nextCredentials = resolveAgentSelectableProviderCredentials(p.id, credentials, providerConfigs)
+            const isConnected = !p.requiresApiKey || nextCredentials.length > 0
             return (
               <button
                 key={p.id}
                 onClick={() => {
                   setProvider(p.id)
+                  if (!nextCredentials.some((item) => item.id === credentialId)) {
+                    setCredentialId(nextCredentials[0]?.id || null)
+                  }
                   setGatewayProfileId(null)
                 }}
                 className={`relative py-3.5 px-4 rounded-[14px] text-center cursor-pointer transition-all duration-200
@@ -2161,7 +2182,7 @@ export function AgentSheet() {
         </div>
         <div className="space-y-3">
           {routingTargets.map((target, index) => {
-            const targetCredentials = Object.values(credentials).filter((item) => item.provider === target.provider)
+            const targetCredentials = resolveAgentSelectableProviderCredentials(target.provider, credentials, providerConfigs)
             return (
               <div key={target.id} className="p-4 rounded-[12px] border border-white/[0.08] bg-white/[0.02] space-y-3">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -2182,19 +2203,24 @@ export function AgentSheet() {
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   <select
                     value={target.provider}
-                    onChange={(e) => updateRoutingTarget(target.id, {
-                      provider: e.target.value as ProviderType,
-                      gatewayProfileId: e.target.value === 'openclaw' ? target.gatewayProfileId : null,
-                      ollamaMode: e.target.value === 'ollama'
+                    onChange={(e) => {
+                      const nextProviderId = e.target.value
+                      const nextCredentials = resolveAgentSelectableProviderCredentials(nextProviderId, credentials, providerConfigs)
+                      updateRoutingTarget(target.id, {
+                        provider: nextProviderId,
+                        credentialId: nextCredentials[0]?.id || null,
+                        gatewayProfileId: nextProviderId === 'openclaw' ? target.gatewayProfileId : null,
+                        ollamaMode: nextProviderId === 'ollama'
                         ? resolveStoredOllamaMode({
                           ollamaMode: target.ollamaMode ?? null,
                           apiEndpoint: target.apiEndpoint ?? null,
                         })
                         : null,
-                    })}
+                      })
+                    }}
                     className={inputClass}
                   >
-                    {providers.map((item) => (
+                    {agentSelectableProviders.map((item) => (
                       <option key={item.id} value={item.id}>{item.name}</option>
                     ))}
                   </select>

@@ -36,9 +36,10 @@ function ModelCombobox({
   const fetched = useRef<string | null>(null)
 
   const effectiveEndpoint = endpointOverride || provider?.endpoint || null
+  const supportsModelDiscovery = Boolean(provider && provider.setupProvider !== 'custom')
 
   const fetchModels = useCallback(async (force?: boolean) => {
-    if (!provider) return
+    if (!provider || !supportsModelDiscovery) return
     const cacheKey = `${provider.provider}|${effectiveEndpoint || ''}|${provider.credentialId || ''}`
     if (!force && fetched.current === cacheKey) return
     fetched.current = cacheKey
@@ -63,11 +64,21 @@ function ModelCombobox({
     } finally {
       setLoading(false)
     }
-  }, [provider, effectiveEndpoint])
+  }, [provider, effectiveEndpoint, supportsModelDiscovery])
 
   useEffect(() => {
+    if (!provider) {
+      setModels([])
+      setFetchError('')
+      return
+    }
+    if (!supportsModelDiscovery) {
+      setModels(provider.defaultModel ? [provider.defaultModel] : [])
+      setFetchError('')
+      return
+    }
     fetchModels()
-  }, [fetchModels])
+  }, [fetchModels, provider, supportsModelDiscovery])
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -116,38 +127,40 @@ function ModelCombobox({
             </svg>
           </a>
         )}
-        <button
-          type="button"
-          onClick={() => {
-            if (models.length > 0 && !loading) {
-              setOpen(!open)
-              if (!open) setSearch(value)
-            } else {
-              fetchModels(true)
-            }
-          }}
-          disabled={loading}
-          className="text-text-3 hover:text-accent-bright transition-colors bg-transparent border-none cursor-pointer disabled:opacity-40"
-          title={models.length > 0 ? 'Show models' : 'Fetch available models'}
-        >
-          {loading ? (
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="animate-spin">
-              <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" opacity="0.25" />
-              <path d="M12.5 7A5.5 5.5 0 0 0 7 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-            </svg>
-          ) : models.length > 0 ? (
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
-              <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          ) : (
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
-              <path d="M1.5 7A5.5 5.5 0 1 1 7 12.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
-              <path d="M1.5 12.5V9.5H4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-          )}
-        </button>
+        {supportsModelDiscovery && (
+          <button
+            type="button"
+            onClick={() => {
+              if (models.length > 0 && !loading) {
+                setOpen(!open)
+                if (!open) setSearch(value)
+              } else {
+                fetchModels(true)
+              }
+            }}
+            disabled={loading}
+            className="text-text-3 hover:text-accent-bright transition-colors bg-transparent border-none cursor-pointer disabled:opacity-40"
+            title={models.length > 0 ? 'Show models' : 'Fetch available models'}
+          >
+            {loading ? (
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none" className="animate-spin">
+                <circle cx="7" cy="7" r="5.5" stroke="currentColor" strokeWidth="1.5" opacity="0.25" />
+                <path d="M12.5 7A5.5 5.5 0 0 0 7 1.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              </svg>
+            ) : models.length > 0 ? (
+              <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+                <path d="M3 4.5L6 7.5L9 4.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            ) : (
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+                <path d="M1.5 7A5.5 5.5 0 1 1 7 12.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+                <path d="M1.5 12.5V9.5H4.5" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            )}
+          </button>
+        )}
       </div>
-      {fetchError && models.length === 0 && (
+      {fetchError && models.length === 0 && supportsModelDiscovery && (
         <div className="mt-1 text-[11px] text-amber-300/80">{fetchError}</div>
       )}
       {open && filtered.length > 0 && (
@@ -423,7 +436,7 @@ export function StepAgents({
                         focus:border-accent-bright/30 focus:shadow-[0_0_30px_rgba(99,102,241,0.1)]"
                     />
                   </div>
-                  {matchedProvider?.provider === 'openclaw' ? (
+                  {matchedProvider?.setupProvider === 'openclaw' ? (
                     <div className="md:col-span-2">
                       <label className="block text-[12px] text-text-3 font-500 mb-1.5 ml-1">Model</label>
                       <div className="flex items-center gap-3 px-4 py-3 rounded-[12px] border border-white/[0.08] bg-bg">
@@ -448,7 +461,7 @@ export function StepAgents({
                         provider={matchedProvider}
                         endpointOverride={draft.apiEndpoint}
                         onChange={(model) => onUpdateDraft(draft.id, { model })}
-                        modelLibraryUrl={matchedProvider ? SETUP_PROVIDERS.find((sp) => sp.id === matchedProvider.provider)?.modelLibraryUrl : null}
+                        modelLibraryUrl={matchedProvider ? SETUP_PROVIDERS.find((sp) => sp.id === matchedProvider.setupProvider)?.modelLibraryUrl : null}
                       />
                     </div>
                   )}
@@ -457,7 +470,7 @@ export function StepAgents({
                       value={draft.soul}
                       onChange={(soul) => onUpdateDraft(draft.id, { soul })}
                     />
-                    {matchedProvider?.provider === 'openclaw' && (
+                    {matchedProvider?.setupProvider === 'openclaw' && (
                       <p className="mt-1.5 ml-1 text-[11px] text-text-3/70">
                         Synced to the gateway as SOUL.md on save.
                       </p>

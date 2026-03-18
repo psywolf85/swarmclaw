@@ -392,6 +392,7 @@ export function normalizeStoredRecord(
     table !== 'agents' && table !== 'tasks' && table !== 'missions'
     && table !== 'mission_events' && table !== 'delegation_jobs'
     && table !== 'schedules' && table !== 'sessions'
+    && table !== 'provider_configs'
   ) {
     return { value, changed: false }
   }
@@ -480,6 +481,28 @@ function normalizeStoredRecordInner(
     if ('missionSummary' in task) delete task.missionSummary
     if (!Array.isArray(task.subtaskIds)) task.subtaskIds = []
     return task
+  }
+
+  if (table === 'provider_configs') {
+    const provider = value as StoredObject
+    provider.type = provider.type === 'builtin' ? 'builtin' : 'custom'
+    if (typeof provider.name !== 'string' || !provider.name.trim()) {
+      provider.name = provider.type === 'builtin' ? 'Built-in Provider' : 'Custom Provider'
+    } else {
+      provider.name = provider.name.trim()
+    }
+    provider.baseUrl = typeof provider.baseUrl === 'string' ? provider.baseUrl.trim() : ''
+    provider.models = normalizeStoredStringArray(provider.models)
+
+    if (typeof provider.requiresApiKey !== 'boolean') provider.requiresApiKey = true
+    if (typeof provider.isEnabled !== 'boolean') provider.isEnabled = true
+
+    const credentialId = typeof provider.credentialId === 'string' ? provider.credentialId.trim() : ''
+    provider.credentialId = credentialId || null
+
+    if (typeof provider.createdAt !== 'number') provider.createdAt = Date.now()
+    if (typeof provider.updatedAt !== 'number') provider.updatedAt = provider.createdAt as number
+    return provider
   }
 
   if (table === 'missions') {

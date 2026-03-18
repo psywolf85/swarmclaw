@@ -158,6 +158,56 @@ describe('storage-normalization', () => {
     })
   })
 
+  describe('provider_configs', () => {
+    it('defaults legacy custom provider configs to enabled with normalized fields', () => {
+      const providerConfig = {
+        id: 'custom-llama',
+        name: '  Llama.cpp  ',
+        type: 'custom',
+        baseUrl: ' http://localhost:8080/v1/ ',
+        models: [' llama-3.1-70b ', 'llama-3.1-70b', ''],
+      } as Record<string, unknown>
+      const result = normalizeStoredRecord('provider_configs', providerConfig, noopLoader).value as Record<string, unknown>
+      assert.equal(result.name, 'Llama.cpp')
+      assert.equal(result.baseUrl, 'http://localhost:8080/v1/')
+      assert.deepEqual(result.models, ['llama-3.1-70b'])
+      assert.equal(result.requiresApiKey, true)
+      assert.equal(result.isEnabled, true)
+      assert.equal(result.credentialId, null)
+    })
+
+    it('normalizes builtin override configs without treating them as custom providers', () => {
+      const providerConfig = {
+        id: 'openai',
+        type: 'builtin',
+        isEnabled: false,
+      } as Record<string, unknown>
+      const result = normalizeStoredRecord('provider_configs', providerConfig, noopLoader).value as Record<string, unknown>
+      assert.equal(result.type, 'builtin')
+      assert.equal(result.name, 'Built-in Provider')
+      assert.equal(result.baseUrl, '')
+      assert.deepEqual(result.models, [])
+      assert.equal(result.requiresApiKey, true)
+      assert.equal(result.isEnabled, false)
+      assert.equal(result.credentialId, null)
+    })
+
+    it('defaults createdAt and updatedAt for legacy records missing timestamps', () => {
+      const providerConfig = {
+        id: 'custom-old',
+        name: 'Old Provider',
+        type: 'custom',
+        baseUrl: 'http://localhost:8080/v1',
+        models: ['model-a'],
+      } as Record<string, unknown>
+      const result = normalizeStoredRecord('provider_configs', providerConfig, noopLoader).value as Record<string, unknown>
+      assert.equal(typeof result.createdAt, 'number')
+      assert.equal(typeof result.updatedAt, 'number')
+      assert.ok((result.createdAt as number) > 0)
+      assert.equal(result.updatedAt, result.createdAt)
+    })
+  })
+
   // ---- Mission normalization ----
   describe('missions', () => {
     it('defaults status/phase/sourceRef', () => {

@@ -6,6 +6,7 @@ import {
   isLocalOpenClawEndpoint,
   resolveOpenClawDashboardUrl,
   getOpenClawErrorHint,
+  requiresSetupProviderVerification,
   withHttpScheme,
   buildStarterDrafts,
   preferredConfiguredProvider,
@@ -165,21 +166,24 @@ test('withHttpScheme preserves wss://', () => {
 // buildStarterDrafts — OpenClaw provider handling
 // ---------------------------------------------------------------------------
 
-function makeConfiguredProvider(overrides: Partial<ConfiguredProvider> & { provider: ConfiguredProvider['provider'] }): ConfiguredProvider {
+function makeConfiguredProvider(overrides: Partial<ConfiguredProvider> & { setupProvider: ConfiguredProvider['setupProvider']; provider?: ConfiguredProvider['provider'] }): ConfiguredProvider {
+  const { setupProvider, provider = setupProvider, ...rest } = overrides
   return {
     id: 'cp-1',
+    setupProvider,
+    provider,
     name: 'Test Provider',
     credentialId: null,
     endpoint: null,
     defaultModel: '',
     gatewayProfileId: null,
     verified: true,
-    ...overrides,
+    ...rest,
   }
 }
 
 test('buildStarterDrafts assigns OpenClaw provider to drafts', () => {
-  const cp = makeConfiguredProvider({ provider: 'openclaw', endpoint: 'http://localhost:18789' })
+  const cp = makeConfiguredProvider({ setupProvider: 'openclaw', endpoint: 'http://localhost:18789' })
   const drafts = buildStarterDrafts({
     starterKitId: 'personal_assistant',
     intentText: '',
@@ -188,12 +192,13 @@ test('buildStarterDrafts assigns OpenClaw provider to drafts', () => {
   assert.ok(drafts.length > 0, 'should produce at least one draft')
   for (const d of drafts) {
     assert.equal(d.provider, 'openclaw')
+    assert.equal(d.setupProvider, 'openclaw')
     assert.equal(d.providerConfigId, cp.id)
   }
 })
 
 test('buildStarterDrafts OpenClaw drafts use empty model (not "default")', () => {
-  const cp = makeConfiguredProvider({ provider: 'openclaw', defaultModel: '' })
+  const cp = makeConfiguredProvider({ setupProvider: 'openclaw', defaultModel: '' })
   const drafts = buildStarterDrafts({
     starterKitId: 'personal_assistant',
     intentText: '',
@@ -206,7 +211,7 @@ test('buildStarterDrafts OpenClaw drafts use empty model (not "default")', () =>
 })
 
 test('buildStarterDrafts OpenClaw drafts inherit endpoint from provider', () => {
-  const cp = makeConfiguredProvider({ provider: 'openclaw', endpoint: 'http://10.0.0.5:18789' })
+  const cp = makeConfiguredProvider({ setupProvider: 'openclaw', endpoint: 'http://10.0.0.5:18789' })
   const drafts = buildStarterDrafts({
     starterKitId: 'personal_assistant',
     intentText: '',
@@ -219,7 +224,7 @@ test('buildStarterDrafts OpenClaw drafts inherit endpoint from provider', () => 
 
 test('buildStarterDrafts carries dashboardUrl through from ConfiguredProvider', () => {
   const cp = makeConfiguredProvider({
-    provider: 'openclaw',
+    setupProvider: 'openclaw',
     endpoint: 'http://localhost:18789',
     dashboardUrl: 'http://localhost:18789?token=my-secret',
   })
@@ -228,11 +233,36 @@ test('buildStarterDrafts carries dashboardUrl through from ConfiguredProvider', 
 })
 
 test('preferredConfiguredProvider picks openclaw provider for openclaw template', () => {
-  const openclawCp = makeConfiguredProvider({ id: 'oc-1', provider: 'openclaw' })
-  const openaiCp = makeConfiguredProvider({ id: 'oai-1', provider: 'openai' })
+  const openclawCp = makeConfiguredProvider({ id: 'oc-1', setupProvider: 'openclaw' })
+  const openaiCp = makeConfiguredProvider({ id: 'oai-1', setupProvider: 'openai' })
   const result = preferredConfiguredProvider(
     { id: 'tmpl-1', name: 'Test', description: '', systemPrompt: '', tools: [], recommendedProviders: ['openclaw'] },
     [openaiCp, openclawCp],
   )
   assert.equal(result?.id, 'oc-1')
+})
+
+test('buildStarterDrafts carries custom runtime provider ids alongside custom setup provider state', () => {
+  const cp = makeConfiguredProvider({
+    setupProvider: 'custom',
+    provider: 'custom-openrouter',
+    defaultModel: 'openai/gpt-4.1',
+  })
+  const drafts = buildStarterDrafts({
+    starterKitId: 'personal_assistant',
+    intentText: '',
+    configuredProviders: [cp],
+  })
+
+  for (const draft of drafts) {
+    assert.equal(draft.setupProvider, 'custom')
+    assert.equal(draft.provider, 'custom-openrouter')
+    assert.equal(draft.model, 'openai/gpt-4.1')
+  }
+})
+
+test('requiresSetupProviderVerification skips custom providers', () => {
+  assert.equal(requiresSetupProviderVerification('custom'), false)
+  assert.equal(requiresSetupProviderVerification('openclaw'), false)
+  assert.equal(requiresSetupProviderVerification('openai'), true)
 })

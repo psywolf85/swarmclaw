@@ -26,6 +26,7 @@ import { ModelCombobox } from '@/components/shared/model-combobox'
 import { buildOpenClawMainSessionKey } from '@/lib/openclaw/openclaw-agent-id'
 import { StructuredSessionLauncher } from '@/components/protocols/structured-session-launcher'
 import { useWs } from '@/hooks/use-ws'
+import { buildAgentSelectableProviders } from '@/lib/agent-provider-options'
 
 interface Props {
   agent: Agent
@@ -61,17 +62,27 @@ const PROVIDER_LABELS: Record<string, string> = {
 function ModelSwitcherInline({ session, agent }: { session: Session; agent: Agent }) {
   const providers = useAppStore((s) => s.providers)
   const loadProviders = useAppStore((s) => s.loadProviders)
+  const providerConfigs = useAppStore((s) => s.providerConfigs)
+  const loadProviderConfigs = useAppStore((s) => s.loadProviderConfigs)
   const refreshSession = useAppStore((s) => s.refreshSession)
   const streaming = useChatStore((s) => s.streaming)
   const [expanded, setExpanded] = useState(false)
   const [selectedProvider, setSelectedProvider] = useState(agent.provider)
   const [saving, setSaving] = useState(false)
 
-  useEffect(() => { if (!providers.length) void loadProviders() }, [providers.length, loadProviders])
+  useEffect(() => {
+    void loadProviders()
+    void loadProviderConfigs()
+  }, [loadProviderConfigs, loadProviders])
   useEffect(() => { setSelectedProvider(agent.provider) }, [agent.provider])
 
-  const currentProviderInfo = providers.find((p) => p.id === selectedProvider)
-  const providerLabel = PROVIDER_LABELS[agent.provider] || agent.provider.replace(/-/g, ' ')
+  const agentSelectableProviders = useMemo(
+    () => buildAgentSelectableProviders(providers, providerConfigs),
+    [providerConfigs, providers],
+  )
+  const currentProviderInfo = agentSelectableProviders.find((p) => p.id === selectedProvider)
+  const activeAgentProvider = agentSelectableProviders.find((p) => p.id === agent.provider)
+  const providerLabel = PROVIDER_LABELS[agent.provider] || activeAgentProvider?.name || agent.provider.replace(/-/g, ' ')
 
   const handleModelChange = async (model: string) => {
     if (saving) return
@@ -122,7 +133,7 @@ function ModelSwitcherInline({ session, agent }: { session: Session; agent: Agen
         </button>
       </div>
       <div className="flex flex-wrap gap-1 mb-2">
-        {providers.filter((p) => p.models.length > 0).map((p) => (
+        {agentSelectableProviders.filter((p) => p.models.length > 0).map((p) => (
           <button
             key={p.id}
             type="button"

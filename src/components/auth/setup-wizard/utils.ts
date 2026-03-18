@@ -91,6 +91,10 @@ export function getOpenClawErrorHint(message: string): string | null {
   return null
 }
 
+export function requiresSetupProviderVerification(provider: SetupProvider | null | undefined): boolean {
+  return provider != null && provider !== 'openclaw' && provider !== 'custom'
+}
+
 export function preferredConfiguredProvider(
   template: StarterKitAgentTemplate,
   configuredProviders: ConfiguredProvider[],
@@ -103,12 +107,12 @@ export function preferredConfiguredProvider(
   }
 
   if (fallbackProvider) {
-    const exact = configuredProviders.find((candidate) => candidate.provider === fallbackProvider)
+    const exact = configuredProviders.find((candidate) => candidate.setupProvider === fallbackProvider)
     if (exact) return exact
   }
 
   for (const provider of template.recommendedProviders || []) {
-    const exact = configuredProviders.find((candidate) => candidate.provider === provider)
+    const exact = configuredProviders.find((candidate) => candidate.setupProvider === provider)
     if (exact) return exact
   }
 
@@ -134,14 +138,15 @@ export function buildStarterDrafts(args: {
       template,
       configuredProviders,
       previous?.providerConfigId,
-      previous?.provider,
+      previous?.setupProvider,
     )
-    const oldProvider = previous?.provider || null
+    const oldProvider = previous?.setupProvider || null
+    const previousModel = previous?.model || ''
     const oldProviderDefault = oldProvider ? getDefaultModelForProvider(oldProvider) : ''
     const nextProviderDefault = configuredProvider?.defaultModel || ''
     const shouldRefreshModel =
-      !previous?.model
-      || (oldProvider !== configuredProvider?.provider && previous.model === oldProviderDefault)
+      !previousModel.trim()
+      || (oldProvider !== configuredProvider?.setupProvider && previousModel === oldProviderDefault)
 
     return {
       id,
@@ -151,8 +156,9 @@ export function buildStarterDrafts(args: {
       systemPrompt: previous?.systemPrompt || applyIntentContext(template.systemPrompt, intentText),
       soul: previous?.soul || '',
       providerConfigId: configuredProvider?.id || null,
+      setupProvider: configuredProvider?.setupProvider || null,
       provider: configuredProvider?.provider || null,
-      model: shouldRefreshModel ? nextProviderDefault : previous.model,
+      model: shouldRefreshModel ? nextProviderDefault : previousModel,
       credentialId: configuredProvider?.credentialId || null,
       apiEndpoint: configuredProvider?.endpoint || null,
       gatewayProfileId: configuredProvider?.gatewayProfileId || null,

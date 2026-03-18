@@ -190,6 +190,12 @@ The building blocks are the same: **agents, tools, memory, delegation, schedules
 
 ## Release Notes
 
+### v1.2.4 Highlights
+
+- **Custom providers in agent config**: agent setup and inline model switching now merge saved custom provider configs into the selectable provider list, so custom providers show up reliably even when the built-in provider feed is stale or incomplete.
+- **Custom provider save-only flow**: the Providers screen no longer forces connection tests or live model discovery for custom providers; operators can save the endpoint, linked key, and manual model list directly.
+- **Custom provider runtime routing**: saved custom-provider model lists and linked credentials now flow through the agent UI and runtime resolution paths consistently, including legacy `provider_configs` records normalized on load.
+
 ### v1.2.3 Highlights
 
 - **Standalone asset staging repair**: `swarmclaw server` now copies `.next/static` and `public/` into the Next.js standalone runtime after the first build, preventing blank UI loads and 503s for CSS, JS, and image assets.
