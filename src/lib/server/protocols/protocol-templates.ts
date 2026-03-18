@@ -9,11 +9,13 @@ import {
   loadProtocolTemplate,
   loadProtocolTemplates,
   patchProtocolTemplate,
+  upsertProtocolTemplate,
+} from '@/lib/server/protocols/protocol-template-repository'
+import {
   releaseRuntimeLock,
   renewRuntimeLock,
   tryAcquireRuntimeLock,
-  upsertProtocolTemplate,
-} from '@/lib/server/storage'
+} from '@/lib/server/runtime/runtime-lock-repository'
 import { notify } from '@/lib/server/ws-hub'
 import { cleanText, now, PROTOCOL_LOCK_TTL_MS, uniqueIds } from '@/lib/server/protocols/protocol-types'
 import type { ProtocolRunDeps, UpsertProtocolTemplateInput } from '@/lib/server/protocols/protocol-types'

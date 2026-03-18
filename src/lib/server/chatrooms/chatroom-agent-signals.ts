@@ -1,5 +1,5 @@
 import type { Chatroom, Agent } from '@/types'
-import { loadChatrooms, saveChatrooms } from '@/lib/server/storage'
+import { patchChatroom } from '@/lib/server/chatrooms/chatroom-repository'
 import { notify } from '@/lib/server/ws-hub'
 
 /**
@@ -35,25 +35,33 @@ export function isImplicitlyMentioned(text: string, agent: Agent): boolean {
  * Useful for acknowledging tasks or agreeing with teammates.
  */
 export function addAgentReaction(chatroomId: string, messageId: string, agentId: string, emoji: string) {
-  const chatrooms = loadChatrooms()
-  const chatroom = chatrooms[chatroomId] as Chatroom | undefined
-  if (!chatroom) return
+  const updated = patchChatroom(chatroomId, (current) => {
+    const chatroom = current as Chatroom | null
+    if (!chatroom) return null
+    const message = chatroom.messages.find(m => m.id === messageId)
+    if (!message) return chatroom
+    if (message.reactions.some(r => r.reactorId === agentId && r.emoji === emoji)) return chatroom
 
-  const message = chatroom.messages.find(m => m.id === messageId)
-  if (!message) return
-
-  // Prevent duplicate reactions from the same agent
-  if (message.reactions.some(r => r.reactorId === agentId && r.emoji === emoji)) return
-
-  message.reactions.push({
-    emoji,
-    reactorId: agentId,
-    time: Date.now()
+    return {
+      ...chatroom,
+      messages: chatroom.messages.map((entry) => (
+        entry.id !== messageId
+          ? entry
+          : {
+              ...entry,
+              reactions: [
+                ...entry.reactions,
+                {
+                  emoji,
+                  reactorId: agentId,
+                  time: Date.now(),
+                },
+              ],
+            }
+      )),
+    }
   })
-
-  chatrooms[chatroomId] = chatroom
-  saveChatrooms(chatrooms)
-  notify(`chatroom:${chatroomId}`)
+  if (updated) notify(`chatroom:${chatroomId}`)
 }
 
 /**

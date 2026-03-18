@@ -7,7 +7,7 @@ import type {
 } from '@/types'
 import { deriveOpenClawWsUrl, normalizeProviderEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { resolveProviderApiEndpoint, resolveProviderCredentialId } from '@/lib/server/provider-endpoint'
-import { loadGatewayProfiles } from '@/lib/server/storage'
+import { loadGatewayProfiles } from '@/lib/server/gateways/gateway-profile-repository'
 import { isProviderCoolingDown } from '@/lib/server/provider-health'
 
 const DEFAULT_OPENCLAW_ENDPOINT = 'http://localhost:18789/v1'

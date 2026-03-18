@@ -408,13 +408,13 @@ function resolveApiKeyForSession(session: SessionWithCredentials, provider: Prov
     if (!session.credentialId) throw new Error('No API key configured for this session')
     const creds = loadCredentials()
     const cred = creds[session.credentialId]
-    if (!cred) throw new Error('API key not found. Please add one in Settings.')
+    if (!cred?.encryptedKey) throw new Error('API key not found. Please add one in Settings.')
     return decryptKey(cred.encryptedKey)
   }
   if (provider.optionalApiKey && session.credentialId) {
     const creds = loadCredentials()
     const cred = creds[session.credentialId]
-    if (cred) {
+    if (cred?.encryptedKey) {
       try { return decryptKey(cred.encryptedKey) } catch { return null }
     }
   }

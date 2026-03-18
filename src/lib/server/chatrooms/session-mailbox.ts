@@ -1,6 +1,6 @@
 import { genId } from '@/lib/id'
 import type { MailboxEnvelope } from '@/types'
-import { loadSessions, saveSessions } from '@/lib/server/storage'
+import { loadSession, patchSession } from '@/lib/server/sessions/session-repository'
 import { requestMissionTicksForHumanReply } from '@/lib/server/missions/mission-service'
 
 interface MailboxOptions {
@@ -83,9 +83,8 @@ function normalizeMailbox(target: { mailbox?: MailboxEnvelope[] | null }, now = 
 
 function findLatestPendingHumanRequestEnvelope(
   sessionId: string,
-  sessions = loadSessions(),
+  target = loadSession(sessionId),
 ): MailboxEnvelope | null {
-  const target = sessions[sessionId]
   if (!target) throw new Error(`Session not found: ${sessionId}`)
   const envelopes = normalizeMailbox(target)
   const repliedCorrelationIds = new Set(
@@ -108,8 +107,7 @@ export function findPendingHumanRequestEnvelope(params: {
   fromSessionId?: string | null
   fromAgentId?: string | null
 }): MailboxEnvelope | null {
-  const sessions = loadSessions()
-  const target = sessions[params.sessionId]
+  const target = loadSession(params.sessionId)
   if (!target) throw new Error(`Session not found: ${params.sessionId}`)
   const expectedSignature = normalizeHumanRequestSignature(params)
   const envelopes = normalizeMailbox(target)
@@ -139,8 +137,7 @@ export function sendMailboxEnvelope(input: {
   correlationId?: string | null
   ttlSec?: number | null
 }): MailboxEnvelope {
-  const sessions = loadSessions()
-  const target = sessions[input.toSessionId]
+  const target = loadSession(input.toSessionId)
   if (!target) throw new Error(`Target session not found: ${input.toSessionId}`)
 
   const now = Date.now()
@@ -162,12 +159,14 @@ export function sendMailboxEnvelope(input: {
     ackAt: null,
   }
 
-  const existing = normalizeMailbox(target, now)
-  existing.push(envelope)
-  target.mailbox = existing
-  target.lastActiveAt = now
-  sessions[input.toSessionId] = target
-  saveSessions(sessions)
+  patchSession(input.toSessionId, (current) => {
+    if (!current) return null
+    return {
+      ...current,
+      mailbox: [...normalizeMailbox(current, now), envelope],
+      lastActiveAt: now,
+    }
+  })
   if (envelope.type === 'human_reply') {
     requestMissionTicksForHumanReply({
       sessionId: input.toSessionId,
@@ -188,8 +187,7 @@ export function sendMailboxEnvelope(input: {
 }
 
 export function listMailbox(sessionId: string, opts: MailboxOptions = {}): MailboxEnvelope[] {
-  const sessions = loadSessions()
-  const target = sessions[sessionId]
+  const target = loadSession(sessionId)
   if (!target) throw new Error(`Session not found: ${sessionId}`)
   const list = pruneExpired(normalizeMailboxList(target.mailbox || []))
   const includeAcked = opts.includeAcked === true
@@ -201,36 +199,48 @@ export function listMailbox(sessionId: string, opts: MailboxOptions = {}): Mailb
 }
 
 export function ackMailboxEnvelope(sessionId: string, envelopeId: string): MailboxEnvelope | null {
-  const sessions = loadSessions()
-  const target = sessions[sessionId]
+  const target = loadSession(sessionId)
   if (!target) throw new Error(`Session not found: ${sessionId}`)
-  const list = normalizeMailbox(target)
-  const idx = list.findIndex((env) => env.id === envelopeId)
-  if (idx === -1) return null
-  list[idx] = {
-    ...list[idx],
-    status: 'ack',
-    ackAt: Date.now(),
-  }
-  target.mailbox = list
-  target.lastActiveAt = Date.now()
-  sessions[sessionId] = target
-  saveSessions(sessions)
-  return list[idx]
+  const ackAt = Date.now()
+  let acked: MailboxEnvelope | null = null
+  patchSession(sessionId, (current) => {
+    if (!current) return null
+    const list = normalizeMailbox(current)
+    const idx = list.findIndex((env) => env.id === envelopeId)
+    if (idx === -1) return current
+    list[idx] = {
+      ...list[idx],
+      status: 'ack',
+      ackAt,
+    }
+    acked = list[idx]
+    return {
+      ...current,
+      mailbox: list,
+      lastActiveAt: ackAt,
+    }
+  })
+  return acked
 }
 
 export function clearMailbox(sessionId: string, includeAcked = true): { before: number; after: number } {
-  const sessions = loadSessions()
-  const target = sessions[sessionId]
+  const target = loadSession(sessionId)
   if (!target) throw new Error(`Session not found: ${sessionId}`)
-  const list = normalizeMailbox(target)
-  const before = list.length
-  const afterList = includeAcked ? [] : list.filter((env) => env.status !== 'ack')
-  target.mailbox = afterList
-  target.lastActiveAt = Date.now()
-  sessions[sessionId] = target
-  saveSessions(sessions)
-  return { before, after: afterList.length }
+  let before = 0
+  let after = 0
+  patchSession(sessionId, (current) => {
+    if (!current) return null
+    const list = normalizeMailbox(current)
+    const afterList = includeAcked ? [] : list.filter((env) => env.status !== 'ack')
+    before = list.length
+    after = afterList.length
+    return {
+      ...current,
+      mailbox: afterList,
+      lastActiveAt: Date.now(),
+    }
+  })
+  return { before, after }
 }
 
 export function bridgeHumanReplyFromChat(input: {

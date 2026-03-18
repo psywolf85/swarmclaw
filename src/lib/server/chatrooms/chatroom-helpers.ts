@@ -1,14 +1,17 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { loadSettings, loadSkills, loadCredentials, decryptKey, loadSessions, saveSessions } from '@/lib/server/storage'
 import { buildCurrentDateTimePromptContext } from '@/lib/server/prompt-runtime-context'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
 import { genId } from '@/lib/id'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
 import { applyResolvedRoute, resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
+import { loadCredential, decryptKey } from '@/lib/server/credentials/credential-repository'
 import { resolveProviderApiEndpoint, resolveProviderCredentialId } from '@/lib/server/provider-endpoint'
+import { loadSettings } from '@/lib/server/settings/settings-repository'
 import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/server/skills/runtime-skill-resolver'
+import { loadSkills } from '@/lib/server/skills/skill-repository'
+import { loadSession, patchSession, saveSession } from '@/lib/server/sessions/session-repository'
 import type { Chatroom, ChatroomMember, Agent, Session, Message, ChatroomMessage } from '@/types'
 import { getEnabledCapabilityIds, getEnabledToolIds } from '@/lib/capability-selection'
 
@@ -16,8 +19,7 @@ import { getEnabledCapabilityIds, getEnabledToolIds } from '@/lib/capability-sel
 export function resolveApiKey(credentialId: string | null | undefined): string | null {
   const resolvedCredentialId = resolveProviderCredentialId({ credentialId })
   if (!resolvedCredentialId) return null
-  const creds = loadCredentials()
-  const cred = creds[resolvedCredentialId]
+  const cred = loadCredential(resolvedCredentialId)
   if (!cred?.encryptedKey) return null
   try { return decryptKey(cred.encryptedKey) } catch { return null }
 }
@@ -136,6 +138,7 @@ export function parseMentions(
 
   // Check if the only explicit matches are the sender — if so, treat as "no explicit mentions"
   const senderId = opts?.senderId
+  const explicitSelfMentioned = senderId ? mentioned.includes(senderId) : false
   const explicitNonSelf = senderId ? mentioned.filter((id) => id !== senderId) : mentioned
 
   // 2. Reply-based implicit mention
@@ -158,8 +161,9 @@ export function parseMentions(
     }
   }
 
-  // Remove self from final list when senderId is provided
-  return senderId ? mentioned.filter((mid) => mid !== senderId) : mentioned
+  // Preserve explicit self-mentions so agents can intentionally address themselves.
+  if (!senderId || explicitSelfMentioned) return mentioned
+  return mentioned.filter((mid) => mid !== senderId)
 }
 
 export function resolveReplyTargetAgentId(
@@ -312,9 +316,8 @@ export function ensureSyntheticSession(agent: Agent, chatroomId: string): Sessio
   const roomWorkspace = resolveChatroomWorkspaceDir(chatroomId)
   fs.mkdirSync(roomWorkspace, { recursive: true })
   const sessionId = resolveSyntheticSessionId(chatroomId, agent.id)
-  const sessions = loadSessions()
   const now = Date.now()
-  const existing = sessions[sessionId]
+  const existing = loadSession(sessionId)
   const session: Session = existing
     ? applyResolvedRoute({
         ...existing,
@@ -348,8 +351,7 @@ export function ensureSyntheticSession(agent: Agent, chatroomId: string): Sessio
   }
   if (session.codexThreadId === undefined) session.codexThreadId = null
   if (session.opencodeSessionId === undefined) session.opencodeSessionId = null
-  sessions[sessionId] = session
-  saveSessions(sessions)
+  saveSession(sessionId, session)
   return session
 }
 
@@ -360,18 +362,22 @@ export function appendSyntheticSessionMessage(
 ): void {
   const trimmed = String(text || '').trim()
   if (!trimmed) return
-  const sessions = loadSessions()
-  const session = sessions[sessionId]
-  if (!session) return
-  if (!Array.isArray(session.messages)) session.messages = []
-  session.messages.push({
-    role,
-    text: trimmed,
-    time: Date.now(),
+  patchSession(sessionId, (current) => {
+    if (!current) return null
+    const timestamp = Date.now()
+    return {
+      ...current,
+      messages: [
+        ...(Array.isArray(current.messages) ? current.messages : []),
+        {
+          role,
+          text: trimmed,
+          time: timestamp,
+        },
+      ],
+      lastActiveAt: timestamp,
+    }
   })
-  session.lastActiveAt = Date.now()
-  sessions[sessionId] = session
-  saveSessions(sessions)
 }
 
 /** Build agent's system prompt including skills and identity context */

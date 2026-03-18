@@ -2,7 +2,9 @@ import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import type { Agent, Session, SessionSkillRuntimeState } from '@/types'
 import { errorMessage } from '@/lib/shared-utils'
-import { loadAgent, loadSkills, patchSession } from '@/lib/server/storage'
+import { loadAgent } from '@/lib/server/agents/agent-repository'
+import { loadSkills } from '@/lib/server/skills/skill-repository'
+import { patchSession } from '@/lib/server/sessions/session-repository'
 import {
   findResolvedSkill,
   recommendRuntimeSkillsForTask,

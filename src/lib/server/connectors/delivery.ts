@@ -1,5 +1,5 @@
 import type { Connector, MessageSource } from '@/types'
-import { loadConnectors } from '../storage'
+import { loadConnectors } from './connector-repository'
 import { notify } from '../ws-hub'
 import { resolveConnectorSessionPolicy, shouldReplyToInboundMessage } from './policy'
 import { runningConnectors } from './runtime-state'

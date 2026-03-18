@@ -15,13 +15,14 @@ import type {
 import { errorMessage } from '@/lib/shared-utils'
 import { buildLLM } from '@/lib/server/build-llm'
 import {
+  loadLearnedSkill,
   loadLearnedSkills,
-  loadRunReflections,
-  loadSessions,
+  loadRunReflection,
   loadSkills,
-  saveRunReflections,
+  upsertRunReflection,
   upsertLearnedSkill,
-} from '@/lib/server/storage'
+} from '@/lib/server/skills/skill-repository'
+import { loadSession } from '@/lib/server/sessions/session-repository'
 import { buildSessionTranscript } from './skill-suggestions'
 import { normalizeSkillPayload } from './skills-normalize'
 import { onNextIdleWindow } from '@/lib/server/runtime/idle-window'
@@ -455,20 +456,20 @@ function appendReflectionLearnedSkillNotes(params: {
   skillIds: string[]
 }): void {
   if (!params.reflection || (params.notes.length === 0 && params.skillIds.length === 0)) return
-  const reflections = loadRunReflections()
-  const current = reflections[params.reflection.id]
+  const current = loadRunReflection(params.reflection.id)
   if (!current) return
-  current.learnedSkillNotes = Array.from(new Set([
-    ...(current.learnedSkillNotes || []),
-    ...params.notes,
-  ]))
-  current.learnedSkillIds = Array.from(new Set([
-    ...(current.learnedSkillIds || []),
-    ...params.skillIds,
-  ]))
-  current.updatedAt = Date.now()
-  reflections[current.id] = current
-  saveRunReflections(reflections)
+  upsertRunReflection(current.id, {
+    ...current,
+    learnedSkillNotes: Array.from(new Set([
+      ...(current.learnedSkillNotes || []),
+      ...params.notes,
+    ])),
+    learnedSkillIds: Array.from(new Set([
+      ...(current.learnedSkillIds || []),
+      ...params.skillIds,
+    ])),
+    updatedAt: Date.now(),
+  })
 }
 
 function matchesSelectedLearnedSkill(session: Session, skill: LearnedSkill): boolean {
@@ -599,8 +600,7 @@ export async function observeLearnedSkillRunOutcome(
 ): Promise<{ notes: string[]; skillIds: string[] }> {
   const agentId = typeof input.agentId === 'string' ? input.agentId.trim() : ''
   if (!agentId) return { notes: [], skillIds: [] }
-  const sessions = loadSessions()
-  const session = sessions[input.sessionId] as Session | undefined
+  const session = loadSession(input.sessionId)
   if (!session) return { notes: [], skillIds: [] }
 
   const observation = buildObservation(input, session)
@@ -732,7 +732,7 @@ export async function observeLearnedSkillRunOutcome(
 
   if (validation.status === 'passed') {
     const parent = target.parentSkillId
-      ? loadLearnedSkills()[target.parentSkillId] || null
+      ? loadLearnedSkill(target.parentSkillId)
       : null
     if (parent && parent.lifecycle === 'active') {
       target.lifecycle = 'review_ready'

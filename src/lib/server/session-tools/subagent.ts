@@ -5,7 +5,7 @@ import type { Extension, ExtensionHooks } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage, sleep } from '@/lib/shared-utils'
-import { loadAgents } from '@/lib/server/storage'
+import { loadAgents } from '@/lib/server/agents/agent-repository'
 import {
   cancelDelegationJob,
   getDelegationJob,

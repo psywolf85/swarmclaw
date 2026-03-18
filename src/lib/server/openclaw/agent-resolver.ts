@@ -1,7 +1,7 @@
 import type { Agent } from '@/types'
 import { normalizeOpenClawAgentId } from '@/lib/openclaw/openclaw-agent-id'
+import { loadAgent } from '@/lib/server/agents/agent-repository'
 import { ensureGatewayConnected, type OpenClawGateway } from './gateway'
-import { loadAgents } from '../storage'
 
 export interface OpenClawGatewayAgentSummary {
   id: string
@@ -101,8 +101,7 @@ export async function resolveOpenClawGatewayAgentId(
     throw new Error('Missing agentId')
   }
 
-  const localAgents = loadAgents({ includeTrashed: true }) as Record<string, Agent>
-  const localAgent = localAgents[trimmedRef] || null
+  const localAgent = loadAgent(trimmedRef, { includeTrashed: true }) as Agent | null
   if (localAgent && localAgent.provider !== 'openclaw') {
     throw new Error(`Agent "${localAgent.name}" is not an OpenClaw agent`)
   }

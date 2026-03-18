@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
-import { loadAgents, loadGatewayProfiles, loadCredentials, decryptKey } from '@/lib/server/storage'
+import { getAgent } from '@/lib/server/agents/agent-repository'
+import { getGatewayProfile } from '@/lib/server/agents/agent-runtime-config'
+import { resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
 
 /** GET ?agentId=X — resolve the tokenized dashboard URL for an OpenClaw agent's gateway */
 export async function GET(req: Request) {
@@ -9,8 +11,7 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: 'Missing agentId' }, { status: 400 })
   }
 
-  const agents = loadAgents()
-  const agent = agents[agentId]
+  const agent = getAgent(agentId)
   if (!agent) {
     return NextResponse.json({ error: 'Agent not found' }, { status: 404 })
   }
@@ -24,8 +25,7 @@ export async function GET(req: Request) {
 
   // If agent has a gatewayProfileId, prefer its endpoint and credential
   if (agent.gatewayProfileId) {
-    const gateways = loadGatewayProfiles()
-    const gw = gateways[agent.gatewayProfileId]
+    const gw = getGatewayProfile(agent.gatewayProfileId)
     if (gw) {
       endpoint = gw.endpoint || endpoint
       credentialId = gw.credentialId || credentialId
@@ -50,17 +50,9 @@ export async function GET(req: Request) {
 
   // Decrypt the token if we have a credential
   if (credentialId) {
-    try {
-      const creds = loadCredentials()
-      const cred = creds[credentialId]
-      if (cred?.encryptedKey) {
-        const token = decryptKey(cred.encryptedKey)
-        if (token) {
-          dashboardUrl = `${dashboardUrl}?token=${encodeURIComponent(token)}`
-        }
-      }
-    } catch {
-      // If decryption fails, return the URL without token
+    const token = resolveCredentialSecret(credentialId)
+    if (token) {
+      dashboardUrl = `${dashboardUrl}?token=${encodeURIComponent(token)}`
     }
   }
 

@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 import { safeParseBody } from '@/lib/server/safe-parse-body'
-import { UPLOAD_DIR } from '@/lib/server/storage'
 import { getFileCategory } from '@/lib/server/mime'
+import { UPLOAD_DIR } from '@/lib/server/upload-path'
 
 interface UploadFile {
   name: string

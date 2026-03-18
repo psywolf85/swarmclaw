@@ -14,13 +14,10 @@ import type {
   Schedule,
 } from '@/types'
 import { computeStepReadiness } from '@/lib/server/protocols/dag-scheduler'
-import {
-  loadAgents,
-  loadChatrooms,
-  loadProtocolRuns,
-  loadTask,
-  upsertChatroom,
-} from '@/lib/server/storage'
+import { getAgents } from '@/lib/server/agents/agent-repository'
+import { patchChatroom, upsertChatroom } from '@/lib/server/chatrooms/chatroom-repository'
+import { loadProtocolRuns } from '@/lib/server/protocols/protocol-run-repository'
+import { loadTask } from '@/lib/server/tasks/task-repository'
 import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
 import { requestMissionTick } from '@/lib/server/missions/mission-service'
 import { cleanText, isDiscussionStepKind, now, uniqueIds } from '@/lib/server/protocols/protocol-types'
@@ -35,6 +32,7 @@ import {
   persistRun,
   updateRun,
 } from '@/lib/server/protocols/protocol-agent-turn'
+import { claimSwarmWorkItem, syncSwarmClaimCompletion } from '@/lib/server/protocols/protocol-swarm'
 import {
   completeProtocolRun,
   currentStep,
@@ -42,7 +40,6 @@ import {
   syncProtocolParentFromChildRun,
 } from '@/lib/server/protocols/protocol-step-helpers'
 import { stepProtocolRun } from '@/lib/server/protocols/protocol-step-processors'
-import { syncSwarmClaimCompletion } from '@/lib/server/protocols/protocol-swarm'
 
 // ---- Singletons ----
 
@@ -197,8 +194,8 @@ export function ensureProtocolEngineRecovered(deps?: ProtocolRunDeps): void {
 // ---- Create/Run/Action (G18) ----
 
 export function createProtocolRun(input: CreateProtocolRunInput, deps?: ProtocolRunDeps): ProtocolRun {
-  const agents = loadAgents()
   const participantAgentIds = uniqueIds(input.participantAgentIds, 64)
+  const agents = getAgents(participantAgentIds)
   if (participantAgentIds.length === 0) {
     throw new Error('Structured sessions require at least one participant.')
   }
@@ -330,8 +327,8 @@ export async function runProtocolRun(runId: string, deps?: ProtocolRunDeps): Pro
         appendProtocolEvent(run.id, { type: 'failed', summary: `Exceeded maximum step iterations (${MAX_STEP_ITERATIONS}).` }, deps)
         break
       }
-      // Yield to the event loop so the server can process other HTTP requests
-      await new Promise((resolve) => setTimeout(resolve, 0))
+      // Yield between steps so I/O, HTTP responses, and timers can run.
+      await new Promise(r => setTimeout(r, 0))
       const latest = loadProtocolRunById(run.id)
       if (!latest) return null
       if (latest.status === 'paused' || latest.status === 'cancelled' || latest.status === 'archived' || latest.status === 'completed') {
@@ -397,7 +394,6 @@ export async function runProtocolRun(runId: string, deps?: ProtocolRunDeps): Pro
 }
 
 export function performProtocolRunAction(runId: string, input: ProtocolRunActionInput): ProtocolRun | null {
-  const { claimSwarmWorkItem } = require('@/lib/server/protocols/protocol-swarm') as typeof import('@/lib/server/protocols/protocol-swarm')
   const run = loadProtocolRunById(runId)
   if (!run) return null
   const action = input.action
@@ -437,20 +433,20 @@ export function performProtocolRunAction(runId: string, input: ProtocolRunAction
     return updated
   }
   if (action === 'archive') {
+    const archivedAt = Date.now()
     const updated = updateRun(runId, (current) => ({
       ...current,
       status: 'archived',
-      archivedAt: current.archivedAt || Date.now(),
-      updatedAt: Date.now(),
+      archivedAt: current.archivedAt || archivedAt,
+      updatedAt: archivedAt,
     }))
     if (updated) {
       if (updated.transcriptChatroomId) {
-        const chatrooms = loadChatrooms()
-        const transcript = chatrooms[updated.transcriptChatroomId]
-        if (transcript) {
-          transcript.archivedAt = Date.now()
-          upsertChatroom(transcript.id, transcript)
-        }
+        patchChatroom(updated.transcriptChatroomId, (current) => (
+          current
+            ? { ...current, archivedAt: current.archivedAt || archivedAt }
+            : null
+        ))
       }
       appendProtocolEvent(runId, {
         type: 'archived',

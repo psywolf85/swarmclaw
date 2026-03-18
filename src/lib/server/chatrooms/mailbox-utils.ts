@@ -3,8 +3,10 @@ import path from 'path'
 import { ImapFlow } from 'imapflow'
 import { createTransport } from 'nodemailer'
 import { simpleParser } from 'mailparser'
-import { UPLOAD_DIR, loadConnectors } from '@/lib/server/storage'
+import type { Connector } from '@/types'
+import { loadConnectors } from '@/lib/server/connectors/connector-repository'
 import { getExtensionManager } from '@/lib/server/extensions'
+import { UPLOAD_DIR } from '@/lib/server/upload-path'
 
 export interface MailboxConfig {
   imapHost: string
@@ -79,7 +81,7 @@ export function getMailboxConfig(): MailboxConfig {
   const emailSettings = extensionManager.getExtensionSettings('email') as Record<string, unknown>
   const connectors = loadConnectors()
   const emailConnector = Object.values(connectors)
-    .find((entry) => entry && typeof entry === 'object' && String((entry as Record<string, unknown>).platform || '').toLowerCase() === 'email') as Record<string, unknown> | undefined
+    .find((entry) => entry.platform === 'email') as Connector | undefined
   const connectorConfig = emailConnector && typeof emailConnector.config === 'object' && emailConnector.config
     ? emailConnector.config as Record<string, unknown>
     : {}

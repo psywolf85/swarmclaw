@@ -3,7 +3,7 @@ import { hmrSingleton } from '@/lib/shared-utils'
 import { getProviderList } from '@/lib/providers'
 import { isOllamaCloudEndpoint, resolveStoredOllamaMode } from '@/lib/ollama-mode'
 import { OPENAI_COMPATIBLE_DEFAULTS } from '@/lib/server/provider-health'
-import { decryptKey, loadCredentials } from '@/lib/server/storage'
+import { resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
 import type { ProviderInfo, ProviderModelDiscoveryResult } from '@/types'
 
 type DiscoveryStrategy = 'openai-compatible' | 'anthropic' | 'google' | 'ollama' | 'openclaw'
@@ -192,16 +192,7 @@ export function parseErrorMessage(text: string, fallback: string): string {
 }
 
 function resolveCredentialApiKey(credentialId: string | null | undefined): string | null {
-  const id = clean(credentialId)
-  if (!id) return null
-  try {
-    const credentials = loadCredentials()
-    const credential = credentials[id]
-    if (!credential?.encryptedKey) return null
-    return decryptKey(credential.encryptedKey)
-  } catch {
-    return null
-  }
+  return resolveCredentialSecret(credentialId)
 }
 
 function hashApiKey(apiKey: string | null): string {

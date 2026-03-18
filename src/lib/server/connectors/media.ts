@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 import { genId } from '@/lib/id'
-import { UPLOAD_DIR } from '../storage'
+import { UPLOAD_DIR } from '../upload-path'
 import type { InboundMedia, InboundMediaType } from './types'
 
 const MIME_EXT_MAP: Record<string, string> = {

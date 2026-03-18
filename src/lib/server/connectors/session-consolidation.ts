@@ -3,7 +3,8 @@
  * Populates the field from existing senderId, senderIdAlt, channelId, channelIdAlt, peerKey.
  */
 import { log } from '@/lib/server/logger'
-import { loadSessions, loadSettings, saveSettings, upsertStoredItem } from '../storage'
+import { saveSession, loadSessions } from '@/lib/server/sessions/session-repository'
+import { loadSettings, saveSettings } from '../settings/settings-repository'
 import type { Session } from '@/types'
 import { isDirectConnectorSession } from './session-kind'
 
@@ -38,7 +39,7 @@ export function backfillAllKnownPeerIds(): { migrated: number; skipped: boolean 
       ...ctx,
       allKnownPeerIds: [...ids],
     }
-    upsertStoredItem('sessions', session.id, session)
+    saveSession(session.id, session)
     migrated++
   }
 
@@ -75,7 +76,7 @@ export function pruneThreadConnectorMirrors(): { cleanedSessions: number; remove
     if (removed <= 0) continue
 
     session.messages = filteredMessages
-    upsertStoredItem('sessions', session.id, session)
+    saveSession(session.id, session)
     cleanedSessions += 1
     removedMessages += removed
   }

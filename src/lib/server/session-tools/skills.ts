@@ -4,11 +4,15 @@ import { dedup, errorMessage } from '@/lib/shared-utils'
 import { requestApproval } from '@/lib/server/approvals'
 import {
   loadAgent,
-  loadApprovals,
-  loadSkills,
   patchAgent,
-  saveSkills,
-} from '@/lib/server/storage'
+} from '@/lib/server/agents/agent-repository'
+import { loadApproval, loadApprovals } from '@/lib/server/approvals/approval-repository'
+import {
+  deleteSkill,
+  loadSkill,
+  loadSkills,
+  saveSkill,
+} from '@/lib/server/skills/skill-repository'
 import { fetchSkillContent, searchClawHub } from '@/lib/server/skills/clawhub-client'
 import { clearDiscoveredSkillsCache } from '@/lib/server/skills/skill-discovery'
 import {
@@ -133,11 +137,10 @@ function upsertStoredSkill(input: {
   existingId?: string
   body: Record<string, unknown>
 }): Skill {
-  const skills = loadSkills()
   const normalized = normalizeSkillPayload(input.body)
   const now = Date.now()
   const id = input.existingId || genId()
-  const previous = input.existingId ? skills[input.existingId] : null
+  const previous = input.existingId ? loadSkill(input.existingId) : null
 
   const next: Skill = {
     id,
@@ -171,8 +174,7 @@ function upsertStoredSkill(input: {
     updatedAt: now,
   }
 
-  skills[id] = next
-  saveSkills(skills)
+  saveSkill(id, next)
   clearDiscoveredSkillsCache()
   return next
 }
@@ -241,7 +243,7 @@ function ensureApprovedInstall(approvalId: string | null | undefined): ApprovalR
   if (!normalized) {
     throw new Error('This install requires approval. Call manage_skills install first to create the approval request, then retry with approvalId after approval.')
   }
-  const approval = loadApprovals()[normalized]
+  const approval = loadApproval(normalized)
   if (!approval) throw new Error(`Approval "${normalized}" not found.`)
   if (approval.status !== 'approved') {
     throw new Error(`Approval "${normalized}" is not approved yet.`)
@@ -251,7 +253,7 @@ function ensureApprovedInstall(approvalId: string | null | undefined): ApprovalR
 
 async function materializeResolvedSkill(skill: ResolvedRuntimeSkill): Promise<Skill> {
   const skills = loadSkills()
-  const existing = skill.storageId ? skills[skill.storageId] : null
+  const existing = skill.storageId ? loadSkill(skill.storageId) : null
   if (existing) return existing
   const duplicate = Object.values(skills).find((entry) =>
     normalizeKey(entry.skillKey || entry.name) === normalizeKey(skill.skillKey || skill.name),
@@ -366,7 +368,7 @@ export async function executeManageSkillsAction(
       case 'update': {
         const skillId = typeof normalized.id === 'string' ? normalized.id.trim() : ''
         if (!skillId) return 'Error: "id" is required for update action.'
-        const existing = loadSkills()[skillId]
+        const existing = loadSkill(skillId)
         if (!existing) return `Not found: skills "${skillId}"`
         const updated = upsertStoredSkill({
           existingId: skillId,
@@ -377,10 +379,8 @@ export async function executeManageSkillsAction(
       case 'delete': {
         const skillId = typeof normalized.id === 'string' ? normalized.id.trim() : ''
         if (!skillId) return 'Error: "id" is required for delete action.'
-        const skills = loadSkills()
-        if (!skills[skillId]) return `Not found: skills "${skillId}"`
-        delete skills[skillId]
-        saveSkills(skills)
+        if (!loadSkill(skillId)) return `Not found: skills "${skillId}"`
+        deleteSkill(skillId)
         return JSON.stringify({ deleted: skillId })
       }
       case 'status': {

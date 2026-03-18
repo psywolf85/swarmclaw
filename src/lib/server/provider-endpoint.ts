@@ -1,7 +1,8 @@
 import { normalizeProviderEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { getProvider } from '@/lib/providers'
+import { loadCredential } from '@/lib/server/credentials/credential-repository'
+import { listCredentialIdsByProvider, resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
 import { resolveOllamaRuntimeConfig } from '@/lib/server/ollama-runtime'
-import { decryptKey, loadCredentials } from '@/lib/server/storage'
 
 function clean(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null
@@ -16,14 +17,14 @@ export function resolveProviderCredentialId(input: {
 }): string | null {
   const normalizedId = clean(input.credentialId)
   if (!normalizedId) return null
-  const credentials = loadCredentials()
-  if (normalizedId && credentials[normalizedId]) return normalizedId
+  if (loadCredential(normalizedId)) return normalizedId
 
   const provider = clean(input.provider)
   if (!provider) return normalizedId
 
-  const matchingEntries = Object.entries(credentials)
-    .filter(([, credential]) => credential?.provider === provider)
+  const matchingEntries = listCredentialIdsByProvider(provider)
+    .map((id) => [id, loadCredential(id)] as const)
+    .filter(([, credential]) => Boolean(credential))
 
   if (provider === 'ollama' && clean(input.ollamaMode) === 'cloud' && matchingEntries.length > 0) {
     return [...matchingEntries]
@@ -43,13 +44,7 @@ export function resolveProviderCredentialId(input: {
 function resolveCredentialApiKey(credentialId?: string | null): string | null {
   const normalized = resolveProviderCredentialId({ credentialId })
   if (!normalized) return null
-  const credential = loadCredentials()[normalized]
-  if (!credential?.encryptedKey) return null
-  try {
-    return decryptKey(credential.encryptedKey)
-  } catch {
-    return null
-  }
+  return resolveCredentialSecret(normalized)
 }
 
 export function resolveProviderApiEndpoint(input: {

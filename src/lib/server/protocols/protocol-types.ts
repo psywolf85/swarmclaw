@@ -3,7 +3,10 @@
  * Groups G1 + G2 from protocol-service.ts
  */
 import type {
+  BoardTask,
+  Chatroom,
   MessageToolEvent,
+  Mission,
   ProtocolBranchCase,
   ProtocolPhaseDefinition,
   ProtocolRepeatConfig,
@@ -26,10 +29,10 @@ export const AGENT_TURN_TIMEOUT_MS = 90_000
 export interface ProtocolRunDetail {
   run: ProtocolRun
   template: ProtocolTemplate | null
-  transcript: import('@/types').Chatroom | null
-  parentChatroom: import('@/types').Chatroom | null
-  linkedMission: ReturnType<typeof import('@/lib/server/storage').loadMission>
-  linkedTask: ReturnType<typeof import('@/lib/server/storage').loadTask>
+  transcript: Chatroom | null
+  parentChatroom: Chatroom | null
+  linkedMission: Mission | null
+  linkedTask: BoardTask | null
   events: ProtocolRunEvent[]
 }
 

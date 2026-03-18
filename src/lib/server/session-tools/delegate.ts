@@ -21,7 +21,7 @@ import {
   registerDelegationRuntime,
   startDelegationJob,
 } from '@/lib/server/agents/delegation-jobs'
-import { loadSession } from '@/lib/server/storage'
+import { loadSession } from '@/lib/server/sessions/session-repository'
 import { markProviderFailure, markProviderSuccess } from '../provider-health'
 import { loadRuntimeSettings } from '../runtime/runtime-settings'
 import { getSessionDepth } from '../agents/subagent-runtime'

@@ -11,8 +11,9 @@ import type {
 } from '@/types'
 import { dedup, hmrSingleton } from '@/lib/shared-utils'
 import { expandExtensionIds, getExtensionAliases, normalizeExtensionId } from '@/lib/server/tool-aliases'
-import { loadLearnedSkills, loadSettings, loadSkills } from '@/lib/server/storage'
 import { cosineSimilarity, getEmbedding } from '@/lib/server/embeddings'
+import { loadSettings } from '@/lib/server/settings/settings-repository'
+import { loadLearnedSkills, loadSkills } from '@/lib/server/skills/skill-repository'
 import { discoverSkills, type DiscoveredSkill } from './skill-discovery'
 import { evaluateSkillEligibility } from './skill-eligibility'
 import {

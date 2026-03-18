@@ -1,6 +1,6 @@
 import { getProvider } from '@/lib/providers'
 import type { Connector } from '@/types'
-import { loadAgents } from '../storage'
+import { loadAgents } from '@/lib/server/agents/agent-repository'
 import { syncSessionArchiveMemory } from '@/lib/server/memory/session-archive-memory'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { resolvePairingAccess } from './access'

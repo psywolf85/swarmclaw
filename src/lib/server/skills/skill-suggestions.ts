@@ -5,13 +5,19 @@ import { genId } from '@/lib/id'
 import type { Agent, Session, Skill, SkillSuggestion } from '@/types'
 import { errorMessage } from '@/lib/shared-utils'
 import {
-  loadAgents,
-  loadSessions,
+  loadAgent,
+} from '@/lib/server/agents/agent-repository'
+import {
+  loadSession,
+} from '@/lib/server/sessions/session-repository'
+import {
+  loadSkill,
+  loadSkillSuggestion,
   loadSkillSuggestions,
   loadSkills,
-  saveSkillSuggestions,
-  saveSkills,
-} from '@/lib/server/storage'
+  saveSkill,
+  upsertSkillSuggestion,
+} from '@/lib/server/skills/skill-repository'
 import { buildLLM, type GenerationModelPreference } from '@/lib/server/build-llm'
 import { notify } from '@/lib/server/ws-hub'
 import { resolveAgentRouteCandidates } from '@/lib/server/agents/agent-runtime-config'
@@ -234,11 +240,9 @@ export async function createSkillSuggestionFromSession(
   sessionId: string,
   options?: { generateText?: (prompt: string) => Promise<string> },
 ): Promise<SkillSuggestion> {
-  const sessions = loadSessions()
-  const session = sessions[sessionId] as unknown as Session | undefined
+  const session = loadSession(sessionId)
   if (!session) throw new Error(`Session "${sessionId}" not found.`)
-  const agents = loadAgents()
-  const agent = session.agentId ? agents[session.agentId] : null
+  const agent = session.agentId ? loadAgent(session.agentId) : null
 
   const transcript = buildSessionTranscript(session)
   const sourceMessageCount = getSessionMessageCount(session)
@@ -331,18 +335,16 @@ export async function createSkillSuggestionFromSession(
     updatedAt: now,
   }
 
-  suggestions[suggestion.id] = suggestion
-  saveSkillSuggestions(suggestions)
+  upsertSkillSuggestion(suggestion.id, suggestion)
   notify('skill_suggestions')
   return suggestion
 }
 
 export function materializeSkillSuggestion(id: string): { suggestion: SkillSuggestion; skill: Skill } {
-  const suggestions = loadSkillSuggestions()
-  const suggestion = suggestions[id]
+  const suggestion = loadSkillSuggestion(id)
   if (!suggestion) throw new Error(`Skill suggestion "${id}" not found.`)
   if (suggestion.status === 'approved' && suggestion.createdSkillId) {
-    const existing = loadSkills()[suggestion.createdSkillId]
+    const existing = loadSkill(suggestion.createdSkillId)
     if (existing) return { suggestion, skill: existing }
   }
 
@@ -370,8 +372,7 @@ export function materializeSkillSuggestion(id: string): { suggestion: SkillSugge
       approvedAt: now,
       updatedAt: now,
     }
-    suggestions[id] = approved
-    saveSkillSuggestions(suggestions)
+    upsertSkillSuggestion(id, approved)
     notify('skill_suggestions')
     return { suggestion: approved, skill: existingSkill }
   }
@@ -399,8 +400,7 @@ export function materializeSkillSuggestion(id: string): { suggestion: SkillSugge
     updatedAt: now,
   }
 
-  skills[skill.id] = skill
-  saveSkills(skills)
+  saveSkill(skill.id, skill)
   clearDiscoveredSkillsCache()
 
   const approved: SkillSuggestion = {
@@ -410,16 +410,14 @@ export function materializeSkillSuggestion(id: string): { suggestion: SkillSugge
     approvedAt: now,
     updatedAt: now,
   }
-  suggestions[id] = approved
-  saveSkillSuggestions(suggestions)
+  upsertSkillSuggestion(id, approved)
   notify('skills')
   notify('skill_suggestions')
   return { suggestion: approved, skill }
 }
 
 export function rejectSkillSuggestion(id: string): SkillSuggestion {
-  const suggestions = loadSkillSuggestions()
-  const suggestion = suggestions[id]
+  const suggestion = loadSkillSuggestion(id)
   if (!suggestion) throw new Error(`Skill suggestion "${id}" not found.`)
   const rejected: SkillSuggestion = {
     ...suggestion,
@@ -427,8 +425,7 @@ export function rejectSkillSuggestion(id: string): SkillSuggestion {
     rejectedAt: Date.now(),
     updatedAt: Date.now(),
   }
-  suggestions[id] = rejected
-  saveSkillSuggestions(suggestions)
+  upsertSkillSuggestion(id, rejected)
   notify('skill_suggestions')
   return rejected
 }

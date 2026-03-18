@@ -10,14 +10,12 @@ import type {
   ProtocolStepDefinition,
   ProtocolSwarmConfig,
 } from '@/types'
-import {
-  loadProtocolRuns,
-  loadTask,
-  upsertTask,
-} from '@/lib/server/storage'
+import { loadProtocolRuns } from '@/lib/server/protocols/protocol-run-repository'
+import { loadTask, upsertTask } from '@/lib/server/tasks/task-repository'
 import { notify } from '@/lib/server/ws-hub'
 import { enqueueTask } from '@/lib/server/runtime/queue'
-import { cleanText, now } from '@/lib/server/protocols/protocol-types'
+import type * as ProtocolRunLifecycle from '@/lib/server/protocols/protocol-run-lifecycle'
+import { now } from '@/lib/server/protocols/protocol-types'
 import type { ProtocolRunDeps } from '@/lib/server/protocols/protocol-types'
 import { findRunStep, loadProtocolRunById, normalizeProtocolRun } from '@/lib/server/protocols/protocol-normalization'
 import {
@@ -237,7 +235,8 @@ export function claimSwarmWorkItem(
 }
 
 export function syncSwarmClaimCompletion(taskId: string, deps?: ProtocolRunDeps): void {
-  const { requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof import('@/lib/server/protocols/protocol-run-lifecycle')
+  // Lazy import to avoid circular dependency
+  const { requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof ProtocolRunLifecycle
   const task = loadTask(taskId)
   if (!task?.protocolRunId) return
   const run = loadProtocolRunById(task.protocolRunId)
@@ -302,7 +301,8 @@ export function syncSwarmClaimCompletion(taskId: string, deps?: ProtocolRunDeps)
 }
 
 export function checkSwarmTimeouts(deps?: ProtocolRunDeps): void {
-  const { requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof import('@/lib/server/protocols/protocol-run-lifecycle')
+  // Lazy import to avoid circular dependency
+  const { requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof ProtocolRunLifecycle
   const runs = Object.values(loadProtocolRuns()).map(normalizeProtocolRun)
   const timestamp = now(deps)
   for (const run of runs) {

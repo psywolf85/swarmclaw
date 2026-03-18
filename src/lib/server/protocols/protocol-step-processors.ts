@@ -12,15 +12,18 @@ import type {
   ProtocolRunPhaseState,
   ProtocolStepDefinition,
 } from '@/types'
-import {
-  loadAgents,
-  upsertTask,
-} from '@/lib/server/storage'
+import { errorMessage } from '@/lib/shared-utils'
+import { getAgents } from '@/lib/server/agents/agent-repository'
+import { upsertTask } from '@/lib/server/tasks/task-repository'
 import { notify } from '@/lib/server/ws-hub'
 import { ensureMissionForTask } from '@/lib/server/missions/mission-service'
 import { enqueueTask } from '@/lib/server/runtime/queue'
 import { cleanText, isDiscussionStepKind, now, uniqueIds } from '@/lib/server/protocols/protocol-types'
 import type { ProtocolRunDeps } from '@/lib/server/protocols/protocol-types'
+import type * as ProtocolRunLifecycle from '@/lib/server/protocols/protocol-run-lifecycle'
+import { processForEachStep } from '@/lib/server/protocols/protocol-foreach'
+import { processSubflowStep } from '@/lib/server/protocols/protocol-subflow'
+import { processSwarmStep } from '@/lib/server/protocols/protocol-swarm'
 import { findRunStep } from '@/lib/server/protocols/protocol-normalization'
 import {
   appendProtocolEvent,
@@ -28,7 +31,6 @@ import {
   buildPhasePrompt,
   chooseFacilitator,
   createArtifact,
-  createTranscriptRoom,
   defaultExecuteAgentTurn,
   defaultExtractActionItems,
   persistRun,
@@ -91,6 +93,7 @@ export async function collectResponses(
   let current = run
   const responded = new Set(current.phaseState?.respondedAgentIds || [])
   const cachedResponses = Array.isArray(current.phaseState?.responses) ? [...current.phaseState.responses] : []
+  const participantAgents = getAgents(current.participantAgentIds)
 
   for (const agentId of current.participantAgentIds) {
     if (responded.has(agentId)) continue
@@ -104,8 +107,7 @@ export async function collectResponses(
         prompt: buildPhasePrompt(current, phase, agentId),
       })
     } catch (err: unknown) {
-      const { errorMessage: getErrorMessage } = require('@/lib/shared-utils') as typeof import('@/lib/shared-utils')
-      const errMsg = cleanText(getErrorMessage(err), 200) || 'unknown error'
+      const errMsg = cleanText(errorMessage(err), 200) || 'unknown error'
       appendProtocolEvent(current.id, {
         type: 'warning',
         phaseId: phase.id,
@@ -128,10 +130,9 @@ export async function collectResponses(
       updatedAt: now(deps),
     })
     if (appendImmediately && current.transcriptChatroomId) {
-      const agents = loadAgents()
       appendTranscriptMessage(current.transcriptChatroomId, {
         senderId: agentId,
-        senderName: agents[agentId]?.name || agentId,
+        senderName: participantAgents[agentId]?.name || agentId,
         role: 'assistant',
         text: response.text,
         mentions: [],
@@ -142,17 +143,16 @@ export async function collectResponses(
         type: 'participant_response',
         phaseId: phase.id,
         agentId,
-        summary: `Captured a response from ${agents[agentId]?.name || agentId}.`,
+        summary: `Captured a response from ${participantAgents[agentId]?.name || agentId}.`,
       }, deps)
     }
   }
 
   if (!appendImmediately && current.transcriptChatroomId && current.phaseState?.appendedToTranscript !== true) {
-    const agents = loadAgents()
     for (const response of cachedResponses) {
       appendTranscriptMessage(current.transcriptChatroomId, {
         senderId: response.agentId,
-        senderName: agents[response.agentId]?.name || response.agentId,
+        senderName: participantAgents[response.agentId]?.name || response.agentId,
         role: 'assistant',
         text: response.text,
         mentions: [],
@@ -163,7 +163,7 @@ export async function collectResponses(
         type: 'participant_response',
         phaseId: phase.id,
         agentId: response.agentId,
-        summary: `Captured an independent response from ${agents[response.agentId]?.name || response.agentId}.`,
+        summary: `Captured an independent response from ${participantAgents[response.agentId]?.name || response.agentId}.`,
       }, deps)
     }
     current = persistRun({
@@ -199,7 +199,7 @@ export async function processFacilitatorArtifactPhase(
     prompt: buildPhasePrompt(run, phase, facilitatorId),
   })
   const artifact = createArtifact(run, phase, kind, phase.label, result.text, deps)
-  const agents = loadAgents()
+  const agents = getAgents([facilitatorId])
   if (run.transcriptChatroomId) {
     appendTranscriptMessage(run.transcriptChatroomId, {
       senderId: facilitatorId,
@@ -221,8 +221,11 @@ export async function processEmitTasksPhase(run: ProtocolRun, phase: ProtocolPha
   if (!artifact) return finishPhase(run, phase, deps)
   const extractActionItems = deps?.extractActionItems || defaultExtractActionItems
   const extracted = await extractActionItems({ run, phase, artifact })
-  const agents = loadAgents()
   const fallbackAssignee = chooseFacilitator(run) || run.participantAgentIds[0] || ''
+  const agents = getAgents(uniqueIds([
+    fallbackAssignee,
+    ...extracted.map((item) => item.agentId || ''),
+  ], 64))
   const createdTaskIds: string[] = []
   const linkedMissionId = typeof run.missionId === 'string' ? run.missionId : null
   const taskProjectId = run.config?.taskProjectId || null
@@ -396,6 +399,8 @@ function buildJoinArtifactContent(branches: ProtocolRunParallelBranchState[]): s
 }
 
 export async function processParallelStep(run: ProtocolRun, step: ProtocolStepDefinition, deps?: ProtocolRunDeps): Promise<ProtocolRun> {
+  // Lazy import to avoid circular dependency
+  const { createProtocolRun, requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof ProtocolRunLifecycle
   const parallel = step.parallel
   if (!parallel?.branches?.length) {
     throw new Error(`Parallel step "${step.label}" is missing branches.`)
@@ -416,10 +421,6 @@ export async function processParallelStep(run: ProtocolRun, step: ProtocolStepDe
     summary: `Started parallel step "${step.label}" with ${parallel.branches.length} branches.`,
     data: { joinStepId, branchCount: parallel.branches.length },
   }, deps)
-
-  // Lazy import to avoid circular dependency
-  const { createProtocolRun } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof import('@/lib/server/protocols/protocol-run-lifecycle')
-  const { requestProtocolRunExecution } = require('@/lib/server/protocols/protocol-run-lifecycle') as typeof import('@/lib/server/protocols/protocol-run-lifecycle')
 
   for (const branch of parallel.branches) {
     const participantAgentIds = uniqueIds(
@@ -706,18 +707,9 @@ export async function stepProtocolRun(run: ProtocolRun, deps?: ProtocolRunDeps):
   if (step.kind === 'repeat') return processRepeatStep(run, step, deps)
   if (step.kind === 'parallel') return processParallelStep(run, step, deps)
   if (step.kind === 'join') return processJoinStep(run, step, deps)
-  if (step.kind === 'for_each') {
-    const { processForEachStep } = require('@/lib/server/protocols/protocol-foreach') as typeof import('@/lib/server/protocols/protocol-foreach')
-    return processForEachStep(run, step, deps)
-  }
-  if (step.kind === 'subflow') {
-    const { processSubflowStep } = require('@/lib/server/protocols/protocol-subflow') as typeof import('@/lib/server/protocols/protocol-subflow')
-    return processSubflowStep(run, step, deps)
-  }
-  if (step.kind === 'swarm_claim') {
-    const { processSwarmStep } = require('@/lib/server/protocols/protocol-swarm') as typeof import('@/lib/server/protocols/protocol-swarm')
-    return processSwarmStep(run, step, deps)
-  }
+  if (step.kind === 'for_each') return processForEachStep(run, step, deps)
+  if (step.kind === 'subflow') return processSubflowStep(run, step, deps)
+  if (step.kind === 'swarm_claim') return processSwarmStep(run, step, deps)
   if (step.kind === 'complete') {
     const started = beginStep(run, step, deps)
     const finished = finishStep(started, step, null, deps)

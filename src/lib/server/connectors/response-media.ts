@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { UPLOAD_DIR } from '../storage'
+import { UPLOAD_DIR } from '../upload-path'
 import { safeJsonParseObject } from '../json-utils'
 import type { InboundMessage, InboundMedia } from './types'
 

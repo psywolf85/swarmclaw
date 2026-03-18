@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { ensureGatewayConnected } from '@/lib/server/openclaw/gateway'
 import { mergeHistoryMessages, isValidSessionKey } from '@/lib/server/openclaw/history-merge'
-import { loadSessions, saveSessions } from '@/lib/server/storage'
+import { getSession, saveSession } from '@/lib/server/sessions/session-repository'
 import { notify } from '@/lib/server/ws-hub'
 import type { GatewaySessionPreview } from '@/types'
 import { errorMessage } from '@/lib/shared-utils'
@@ -90,8 +90,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: true, merged: 0 })
     }
 
-    const sessions = loadSessions()
-    const session = sessions[localSessionId]
+    const session = getSession(localSessionId)
     if (!session) {
       return NextResponse.json({ error: 'Local session not found' }, { status: 404 })
     }
@@ -100,8 +99,7 @@ export async function POST(req: Request) {
     const newCount = merged.length - session.messages.length
     session.messages = merged
     session.lastActiveAt = Date.now()
-    sessions[localSessionId] = session
-    saveSessions(sessions)
+    saveSession(localSessionId, session)
     notify('sessions')
 
     return NextResponse.json({ ok: true, merged: newCount })

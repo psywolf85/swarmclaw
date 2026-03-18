@@ -1,4 +1,6 @@
-import { loadAgents, loadSettings, loadCredentials, decryptKey } from './storage'
+import { getAgent } from './agents/agent-repository'
+import { resolveCredentialSecret } from './credentials/credential-service'
+import { loadSettings } from './settings/settings-repository'
 import { getProvider } from '../providers'
 import { log } from '@/lib/server/logger'
 
@@ -9,18 +11,15 @@ const TAG = 'query-expansion'
  * to improve vector database recall (OpenClaw-style).
  */
 export async function expandQuery(query: string): Promise<string[]> {
-  const agents = loadAgents()
   const settings = loadSettings()
   const defaultAgentId = typeof settings.defaultAgentId === 'string' ? settings.defaultAgentId : ''
-  const defaultAgent = defaultAgentId ? agents[defaultAgentId] : null
+  const defaultAgent = defaultAgentId ? getAgent(defaultAgentId) : null
   if (!defaultAgent) return [query]
 
   const providerEntry = getProvider(defaultAgent.provider)
   if (!providerEntry?.handler?.streamChat) return [query]
 
-  const creds = loadCredentials()
-  const cred = creds[defaultAgent.credentialId || '']
-  const apiKey = cred ? decryptKey(cred.encryptedKey) : undefined
+  const apiKey = resolveCredentialSecret(defaultAgent.credentialId) || undefined
 
   const systemPrompt = `You are a search query expansion assistant.
 Given a user's question, generate 3 different semantic search queries that would help find the answer in a vector database.

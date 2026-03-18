@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import { notFound } from '@/lib/server/collection-helpers'
 import fs from 'fs'
 import path from 'path'
-import { UPLOAD_DIR } from '@/lib/server/storage'
 import { MIME_TYPES } from '@/lib/server/mime'
+import { UPLOAD_DIR } from '@/lib/server/upload-path'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ filename: string }> }) {
   const { filename } = await params

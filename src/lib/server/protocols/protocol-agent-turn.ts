@@ -29,14 +29,19 @@ import {
 import { streamAgentChat } from '@/lib/server/chat-execution/stream-agent-chat'
 import { shouldSuppressHiddenControlText, stripHiddenControlTokens } from '@/lib/server/agents/assistant-control'
 import { resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
+import { getAgent, getAgents } from '@/lib/server/agents/agent-repository'
 import { buildLLM } from '@/lib/server/build-llm'
 import {
-  loadAgents,
-  loadChatrooms,
-  patchProtocolRun,
+  loadChatroom,
+  patchChatroom,
   upsertChatroom,
+} from '@/lib/server/chatrooms/chatroom-repository'
+import {
+  loadProtocolRunEventsByRunId,
+  patchProtocolRun,
+  upsertProtocolRun,
   upsertProtocolRunEvent,
-} from '@/lib/server/storage'
+} from '@/lib/server/protocols/protocol-run-repository'
 import { notify } from '@/lib/server/ws-hub'
 import { errorMessage } from '@/lib/shared-utils'
 import { AGENT_TURN_TIMEOUT_MS, cleanText, now } from '@/lib/server/protocols/protocol-types'
@@ -76,22 +81,24 @@ export function appendProtocolEvent(runId: string, event: Omit<ProtocolRunEvent,
 }
 
 export function listEvents(runId: string): ProtocolRunEvent[] {
-  const { loadProtocolRunEventsByRunId } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
   return loadProtocolRunEventsByRunId(runId)
 }
 
 export function appendTranscriptMessage(chatroomId: string, message: Omit<ChatroomMessage, 'id' | 'time'>, deps?: ProtocolRunDeps): ChatroomMessage | null {
-  const chatrooms = loadChatrooms()
-  const chatroom = chatrooms[chatroomId]
-  if (!chatroom) return null
   const nextMessage: ChatroomMessage = {
     ...message,
     id: genId(),
     time: now(deps),
   }
-  chatroom.messages = Array.isArray(chatroom.messages) ? [...chatroom.messages, nextMessage] : [nextMessage]
-  chatroom.updatedAt = nextMessage.time
-  upsertChatroom(chatroomId, chatroom)
+  const updated = patchChatroom(chatroomId, (current) => {
+    if (!current) return null
+    return {
+      ...current,
+      messages: Array.isArray(current.messages) ? [...current.messages, nextMessage] : [nextMessage],
+      updatedAt: nextMessage.time,
+    }
+  })
+  if (!updated) return null
   notify(`chatroom:${chatroomId}`)
   return nextMessage
 }
@@ -184,8 +191,7 @@ export async function defaultExecuteAgentTurn(params: {
   agentId: string
   prompt: string
 }): Promise<ProtocolAgentTurnResult> {
-  const agents = loadAgents() as Record<string, Agent>
-  const agent = agents[params.agentId]
+  const agent = getAgent(params.agentId) as Agent | null
   if (!agent) throw new Error(`Agent not found: ${params.agentId}`)
   let run = params.run
   if (!run.transcriptChatroomId) {
@@ -201,8 +207,12 @@ export async function defaultExecuteAgentTurn(params: {
       updatedAt: Date.now(),
     })
   }
-  const chatroom = loadChatrooms()[run.transcriptChatroomId!]
+  const chatroom = loadChatroom(run.transcriptChatroomId!)
   if (!chatroom) throw new Error(`Structured session transcript room not found: ${run.transcriptChatroomId}`)
+  const agents = {
+    ...getAgents(chatroom.agentIds),
+    [agent.id]: agent,
+  } as Record<string, Agent>
 
   const route = resolvePrimaryAgentRoute(agent)
   const apiKey = resolveApiKey(route?.credentialId || agent.credentialId)
@@ -369,8 +379,7 @@ export function createTranscriptRoom(input: {
   participantAgentIds: string[]
   parentChatroomId?: string | null
 }, deps?: ProtocolRunDeps): Chatroom {
-  const chatrooms = loadChatrooms()
-  const parentChatroom = input.parentChatroomId ? chatrooms[input.parentChatroomId] || null : null
+  const parentChatroom = input.parentChatroomId ? loadChatroom(input.parentChatroomId) : null
   const room: Chatroom = {
     id: genId(),
     name: transcriptRoomName(input.title, parentChatroom),
@@ -404,7 +413,6 @@ export function createArtifact(run: ProtocolRun, phase: ProtocolPhaseDefinition,
 
 export function persistRun(run: ProtocolRun): ProtocolRun {
   const normalized = normalizeProtocolRun(run)
-  const { upsertProtocolRun } = require('@/lib/server/storage') as typeof import('@/lib/server/storage')
   upsertProtocolRun(normalized.id, normalized)
   notify('protocol_runs')
   notify(`protocol_run:${normalized.id}`)

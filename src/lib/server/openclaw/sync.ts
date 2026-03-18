@@ -4,8 +4,11 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { DATA_DIR } from '../data-dir'
 import { normalizeOpenClawAgentId } from '@/lib/openclaw/openclaw-agent-id'
-import { loadSettings, loadAgents, upsertAgent, loadSchedules, upsertSchedules, loadCredentials, decryptKey, encryptKey } from '../storage'
+import { loadAgents, upsertAgent } from '@/lib/server/agents/agent-repository'
+import { decryptKey, encryptKey, loadCredentials, saveCredentials } from '@/lib/server/credentials/credential-repository'
 import { getMemoryDb } from '@/lib/server/memory/memory-db'
+import { loadSchedules, upsertSchedules } from '@/lib/server/schedules/schedule-repository'
+import { loadSettings } from '@/lib/server/settings/settings-repository'
 import type { AppSettings, MemoryEntry, Schedule } from '@/types'
 
 export interface OpenClawSyncConfig {
@@ -289,7 +292,7 @@ export function pullSchedulesFromOpenClaw(): { imported: number } {
     if (existingNames.has(key)) continue
 
     const id = crypto.randomUUID()
-    const schedule = {
+    const schedule: Schedule = {
       id,
       name: job.name,
       agentId: job.agentId || '',
@@ -299,8 +302,8 @@ export function pullSchedulesFromOpenClaw(): { imported: number } {
       status: 'active',
       createdAt: Date.now(),
     }
-    schedules[id] = schedule as any
-    importedEntries.push([id, schedule as any])
+    schedules[id] = schedule
+    importedEntries.push([id, schedule])
     existingNames.add(key)
     imported++
   }
@@ -324,8 +327,7 @@ export async function pullCredentialsFromOpenClaw(): Promise<{ imported: number 
     return { imported: 0 }
   }
 
-  const { loadCredentials: loadCreds, saveCredentials } = await import('../storage')
-  const creds = loadCreds()
+  const creds = loadCredentials()
   const existingProviders = new Set(Object.values(creds).map((c: Record<string, unknown>) => c.provider))
   let imported = 0
 

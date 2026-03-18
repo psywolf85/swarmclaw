@@ -5,7 +5,7 @@ import type {
   ConnectorAccessSnapshot,
   WhatsAppApprovedContact,
 } from '@/types'
-import { loadSettings } from '../storage'
+import { loadSettings } from '../settings/settings-repository'
 import {
   createOrTouchPairingRequest,
   getSenderAddressingOverride,

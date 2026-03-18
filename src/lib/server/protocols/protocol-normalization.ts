@@ -29,7 +29,7 @@ import type {
   ProtocolSwarmConfig,
   ProtocolTemplate,
 } from '@/types'
-import { loadProtocolRun } from '@/lib/server/storage'
+import { loadProtocolRun } from '@/lib/server/protocols/protocol-run-repository'
 import { normalizeStepOutputs } from '@/lib/server/protocols/step-outputs'
 import { cleanText, uniqueIds } from '@/lib/server/protocols/protocol-types'
 

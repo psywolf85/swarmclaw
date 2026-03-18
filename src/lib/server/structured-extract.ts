@@ -1,6 +1,6 @@
 import type { Session } from '@/types'
 import { getProvider, streamChatWithFailover } from '@/lib/providers'
-import { decryptKey, loadCredentials } from './storage'
+import { requireCredentialSecret, resolveCredentialSecret } from './credentials/credential-service'
 import { extractDocumentArtifact, type DocumentArtifact } from './document-utils'
 
 type JsonSchemaLike = Record<string, unknown>
@@ -31,21 +31,10 @@ function resolveApiKey(session: ExtractionSession): string | null {
   if (!provider) throw new Error(`Unknown provider: ${session.provider}`)
   if (provider.requiresApiKey) {
     if (!session.credentialId) throw new Error('No API key configured for this session')
-    const creds = loadCredentials()
-    const cred = creds[session.credentialId]
-    if (!cred?.encryptedKey) throw new Error('API key not found. Please add one in Settings.')
-    return decryptKey(cred.encryptedKey)
+    return requireCredentialSecret(session.credentialId, 'API key not found. Please add one in Settings.')
   }
   if (provider.optionalApiKey && session.credentialId) {
-    const creds = loadCredentials()
-    const cred = creds[session.credentialId]
-    if (cred?.encryptedKey) {
-      try {
-        return decryptKey(cred.encryptedKey)
-      } catch {
-        return null
-      }
-    }
+    return resolveCredentialSecret(session.credentialId)
   }
   return null
 }

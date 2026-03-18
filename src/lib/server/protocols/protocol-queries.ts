@@ -10,15 +10,20 @@ import type {
   ProtocolTemplate,
 } from '@/types'
 import {
-  loadChatrooms,
+  loadChatroom,
+  loadChatroomMany,
+} from '@/lib/server/chatrooms/chatroom-repository'
+import {
   loadMission,
+} from '@/lib/server/missions/mission-repository'
+import {
   loadProtocolRun,
   loadProtocolRuns,
-  loadTask,
   deleteProtocolRun,
   deleteProtocolRunEvent,
-  upsertChatroom,
-} from '@/lib/server/storage'
+} from '@/lib/server/protocols/protocol-run-repository'
+import { loadTask } from '@/lib/server/tasks/task-repository'
+import { upsertChatroom } from '@/lib/server/chatrooms/chatroom-repository'
 import { notify } from '@/lib/server/ws-hub'
 import type { ProtocolRunDetail } from '@/lib/server/protocols/protocol-types'
 import { loadProtocolRunById, normalizeProtocolRun } from '@/lib/server/protocols/protocol-normalization'
@@ -77,8 +82,7 @@ export function deleteProtocolRunById(runId: string): boolean {
 
   // Archive transcript chatroom
   if (run.transcriptChatroomId) {
-    const chatrooms = loadChatrooms()
-    const transcript = chatrooms[run.transcriptChatroomId]
+    const transcript = loadChatroom(run.transcriptChatroomId)
     if (transcript) {
       upsertChatroom(transcript.id, { ...transcript, archivedAt: transcript.archivedAt || Date.now() })
     }
@@ -97,7 +101,9 @@ export function deleteProtocolRunById(runId: string): boolean {
 export function getProtocolRunDetail(runId: string): ProtocolRunDetail | null {
   const run = loadProtocolRunById(runId)
   if (!run) return null
-  const chatrooms = loadChatrooms()
+  const chatrooms = loadChatroomMany(
+    [run.transcriptChatroomId, run.parentChatroomId].filter((value): value is string => Boolean(value)),
+  )
   return {
     run,
     template: loadTemplate(run.templateId),

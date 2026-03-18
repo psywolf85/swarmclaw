@@ -2,8 +2,8 @@ import { NextResponse } from 'next/server'
 import fs from 'fs'
 import path from 'path'
 import { genId } from '@/lib/id'
-import { UPLOAD_DIR } from '@/lib/server/storage'
 import { log } from '@/lib/server/logger'
+import { UPLOAD_DIR } from '@/lib/server/upload-path'
 
 const TAG = 'api-upload'
 

@@ -1,7 +1,8 @@
 import { log } from '@/lib/server/logger'
 import fs from 'node:fs'
 import path from 'node:path'
-import { decryptKey, loadCredentials, loadSettings } from '../storage'
+import { listCredentialIdsByProvider, resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
+import { loadSettings } from '../settings/settings-repository'
 import { mimeFromPath } from './media'
 import type { InboundMessage, InboundMedia } from './types'
 import { errorMessage } from '@/lib/shared-utils'
@@ -90,25 +91,15 @@ function resolveOpenAiApiKey(preferredCredentialId?: string | null): string | nu
   const envKey = String(process.env.SWARMCLAW_OPENAI_STT_API_KEY || process.env.OPENAI_API_KEY || '').trim()
   if (envKey) return envKey
 
-  const creds = loadCredentials() as Record<string, { provider?: string; encryptedKey?: string }>
   const candidates: string[] = []
   if (preferredCredentialId) candidates.push(preferredCredentialId)
-  for (const [id, cred] of Object.entries(creds)) {
-    const provider = String(cred?.provider || '').trim().toLowerCase()
-    if (provider === 'openai') candidates.push(id)
-  }
+  candidates.push(...listCredentialIdsByProvider('openai'))
   const seen = new Set<string>()
   for (const id of candidates) {
     if (!id || seen.has(id)) continue
     seen.add(id)
-    const cred = creds[id]
-    const provider = String(cred?.provider || '').trim().toLowerCase()
-    if (provider !== 'openai') continue
-    if (!cred?.encryptedKey) continue
-    try {
-      const decrypted = decryptKey(cred.encryptedKey).trim()
-      if (decrypted) return decrypted
-    } catch { /* ignore invalid credential */ }
+    const decrypted = resolveCredentialSecret(id)?.trim()
+    if (decrypted) return decrypted
   }
 
   return null

@@ -1,4 +1,5 @@
-import { loadSettings, loadCredentials, decryptKey } from './storage'
+import { resolveCredentialSecret } from './credentials/credential-service'
+import { loadSettings } from './settings/settings-repository'
 import { hmrSingleton } from '@/lib/shared-utils'
 import { log } from '@/lib/server/logger'
 
@@ -47,14 +48,7 @@ export async function getEmbedding(text: string): Promise<number[] | null> {
 
   const model = settings.embeddingModel || 'text-embedding-3-small'
 
-  let apiKey: string | null = null
-  if (settings.embeddingCredentialId) {
-    const creds = loadCredentials()
-    const cred = creds[settings.embeddingCredentialId]
-    if (cred?.encryptedKey) {
-      try { apiKey = decryptKey(cred.encryptedKey) } catch { /* ignore */ }
-    }
-  }
+  const apiKey = resolveCredentialSecret(settings.embeddingCredentialId)
 
   try {
     if (provider === 'local') {

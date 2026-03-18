@@ -1,11 +1,13 @@
 import { ChatAnthropic } from '@langchain/anthropic'
 import { ChatOpenAI } from '@langchain/openai'
-import { loadCredentials, decryptKey, loadAgents, loadSessions } from './storage'
 import { getProviderList } from '../providers'
 import { normalizeOpenClawEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { NON_LANGGRAPH_PROVIDER_IDS } from '../provider-sets'
 import { resolveOllamaRuntimeConfig } from './ollama-runtime'
 import { resolveProviderApiEndpoint, resolveProviderCredentialId } from './provider-endpoint'
+import { getAgent } from './agents/agent-repository'
+import { resolveCredentialSecret } from './credentials/credential-service'
+import { getSession } from './sessions/session-repository'
 import type { Agent } from '@/types'
 
 const OLLAMA_CLOUD_URL = 'https://ollama.com/v1'
@@ -135,15 +137,7 @@ export function buildChatModel(opts: {
 }
 
 function resolveApiKeyFromCredential(credentialId: string | null | undefined): string | null {
-  if (!credentialId) return null
-  const creds = loadCredentials()
-  const cred = creds[credentialId]
-  if (!cred?.encryptedKey) return null
-  try {
-    return decryptKey(cred.encryptedKey)
-  } catch {
-    return null
-  }
+  return resolveCredentialSecret(credentialId)
 }
 
 function normalizePreferenceValue(value: string | null | undefined): string {
@@ -222,12 +216,10 @@ export function resolveGenerationModelConfig(options?: {
   excludeProviders?: string[]
 }): ResolvedGenerationModelConfig {
   const providers = getProviderList()
-  const agents = loadAgents()
-  const sessions = loadSessions()
   const excludeProviders = new Set((options?.excludeProviders || []).map((value) => normalizePreferenceValue(value)).filter(Boolean))
-  const session = options?.sessionId ? sessions[options.sessionId] : null
-  const sessionAgent = session?.agentId ? agents[session.agentId] as Agent | undefined : null
-  const directAgent = options?.agentId ? agents[options.agentId] as Agent | undefined : null
+  const session = options?.sessionId ? getSession(options.sessionId) : null
+  const sessionAgent = session?.agentId ? getAgent(session.agentId) as Agent | null : null
+  const directAgent = options?.agentId ? getAgent(options.agentId) as Agent | null : null
   const resolved = resolvePreferredGenerationConfig(providers, [
     ...(Array.isArray(options?.preferred) ? options?.preferred : options?.preferred ? [options.preferred] : []),
     ...(session ? [{

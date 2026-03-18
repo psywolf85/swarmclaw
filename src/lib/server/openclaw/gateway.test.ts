@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { afterEach, test } from 'node:test'
+import { afterEach, beforeEach, test } from 'node:test'
 
 import type { Agent, GatewayProfile } from '@/types'
 import {
+  deleteAgent,
   encryptKey,
   loadAgents,
   loadCredentials,
@@ -23,6 +24,14 @@ import {
 const originalCredentials = loadCredentials()
 const originalGateways = loadGatewayProfiles()
 const originalAgents = loadAgents({ includeTrashed: true })
+
+beforeEach(() => {
+  saveCredentials({})
+  saveGatewayProfiles({})
+  for (const agentId of Object.keys(loadAgents({ includeTrashed: true }))) {
+    deleteAgent(agentId)
+  }
+})
 
 afterEach(() => {
   disconnectGateway()

@@ -1,6 +1,7 @@
 import { deriveOpenClawWsUrl, normalizeOpenClawEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { wsConnect } from '@/lib/providers/openclaw'
-import { decryptKey, loadCredentials, loadGatewayProfiles, saveGatewayProfiles } from '../storage'
+import { resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
+import { loadGatewayProfiles, saveGatewayProfiles } from '@/lib/server/gateways/gateway-profile-repository'
 import { notify } from '../ws-hub'
 import type { GatewayProfile } from '@/types'
 
@@ -60,16 +61,7 @@ function getErrorMessage(err: unknown): string | undefined {
 }
 
 function resolveCredentialToken(credentialId?: string | null): string | null {
-  const id = normalizeToken(credentialId)
-  if (!id) return null
-  const credentials = loadCredentials()
-  const credential = credentials[id]
-  if (!credential?.encryptedKey) return null
-  try {
-    return decryptKey(credential.encryptedKey)
-  } catch {
-    return null
-  }
+  return resolveCredentialSecret(normalizeToken(credentialId))
 }
 
 function extractModels(payload: unknown): string[] {

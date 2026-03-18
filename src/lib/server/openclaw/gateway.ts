@@ -2,7 +2,8 @@ import { WebSocket } from 'ws'
 import { randomUUID } from 'crypto'
 import { wsConnect } from '@/lib/providers/openclaw'
 import { deriveOpenClawWsUrl } from '@/lib/openclaw/openclaw-endpoint'
-import { loadAgents, loadCredentials, decryptKey } from '../storage'
+import { loadAgent, loadAgents } from '@/lib/server/agents/agent-repository'
+import { resolveCredentialSecret } from '@/lib/server/credentials/credential-service'
 import { notify, notifyWithPayload } from '../ws-hub'
 import { getGatewayProfile, getGatewayProfiles, resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
 import { isAgentDisabled } from '@/lib/server/agents/agent-availability'
@@ -80,16 +81,7 @@ function normalizeWsUrl(raw: string): string {
 }
 
 function resolveTokenForCredential(credentialId?: string | null): string | undefined {
-  const id = typeof credentialId === 'string' && credentialId.trim() ? credentialId.trim() : ''
-  if (!id) return undefined
-  const creds = loadCredentials()
-  const cred = creds[id]
-  if (!cred?.encryptedKey) return undefined
-  try {
-    return decryptKey(cred.encryptedKey)
-  } catch {
-    return undefined
-  }
+  return resolveCredentialSecret(credentialId) || undefined
 }
 
 export function resolveGatewayConfig(target?: {
@@ -110,8 +102,7 @@ export function resolveGatewayConfig(target?: {
 
   const agentId = typeof target?.agentId === 'string' ? target.agentId.trim() : ''
   if (agentId) {
-    const agents = loadAgents({ includeTrashed: true })
-    const agent = agents[agentId] as Agent | undefined
+    const agent = loadAgent(agentId, { includeTrashed: true }) as Agent | null
     const config = agent ? buildGatewayConfigFromAgent(agent, { allowDisabled: true, allowTrashed: true }) : null
     if (config) return config
   }
@@ -236,7 +227,7 @@ export class OpenClawGateway {
   }
 
   private rejectAllPending(reason: string) {
-    for (const [id, p] of this.pending) {
+    for (const p of this.pending.values()) {
       clearTimeout(p.timer)
       p.reject(new Error(reason))
     }

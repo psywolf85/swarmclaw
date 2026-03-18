@@ -3,8 +3,10 @@ import path from 'node:path'
 import type { BoardTask, Connector, MessageToolEvent } from '@/types'
 import { normalizeWhatsappTarget } from '@/lib/server/connectors/response-media'
 import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
+import { loadConnectors } from '@/lib/server/connectors/connector-repository'
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
-import { loadConnectors, loadSessions, UPLOAD_DIR } from '@/lib/server/storage'
+import { loadSessions } from '@/lib/server/sessions/session-repository'
+import { UPLOAD_DIR } from '@/lib/server/upload-path'
 import { errorMessage } from '@/lib/shared-utils'
 import { isMainSession } from '@/lib/server/agents/main-agent-loop'
 import { log } from '@/lib/server/logger'
@@ -446,14 +448,14 @@ export async function notifyConnectorTaskFollowups(params: {
   const targets = collectTaskConnectorFollowupTargets({
     task,
     sessions: sessions as Record<string, SessionLike>,
-    connectors: connectors as any,
+    connectors,
     running: running as RunningConnectorLike[],
   })
   if (!targets.length) return
   const originTarget = resolveTaskOriginConnectorFollowupTarget({
     task,
     sessions: sessions as Record<string, SessionLike>,
-    connectors: connectors as any,
+    connectors,
     running: running as RunningConnectorLike[],
   })
   const preferredTargetKey = originTarget
@@ -473,8 +475,8 @@ export async function notifyConnectorTaskFollowups(params: {
       continue
     }
 
-    const template = typeof (connector as any).config?.taskFollowupTemplate === 'string'
-      ? (connector as any).config.taskFollowupTemplate.trim()
+    const template = typeof connector.config?.taskFollowupTemplate === 'string'
+      ? connector.config.taskFollowupTemplate.trim()
       : ''
     const message = template
       ? fillTaskFollowupTemplate(template, {

@@ -1,8 +1,9 @@
 import fs from 'fs'
 import path from 'path'
 import { genId } from '@/lib/id'
-import { loadAgent, UPLOAD_DIR } from '../storage'
+import { loadAgent } from '@/lib/server/agents/agent-repository'
 import { synthesizeElevenLabsMp3 } from '../elevenlabs'
+import { UPLOAD_DIR } from '../upload-path'
 import { isAudioMime, mimeFromPath } from './media'
 
 export function resolveConnectorVoiceId(params: {
