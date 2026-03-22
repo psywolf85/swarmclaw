@@ -106,7 +106,7 @@ export interface Agent {
     blockedPaths?: string[]
   } | null
 
-  /** Docker container sandbox for shell command execution. */
+  /** Docker-backed browser sandbox settings and legacy execution sandbox compatibility fields. */
   sandboxConfig?: {
     enabled: boolean
     mode?: 'off' | 'non-main' | 'all' // default: 'all' when enabled, modeled after OpenClaw
@@ -140,7 +140,7 @@ export interface Agent {
     } | null
   } | null
 
-  /** Configuration for the `execute` tool (just-bash sandbox or host bash). */
+  /** Configuration for the `execute` tool (just-bash sandbox or explicit host bash). */
   executeConfig?: {
     backend?: 'sandbox' | 'host'
     network?: { enabled: boolean; allowedUrls?: string[] }
@@ -346,4 +346,3 @@ export interface ExternalAgentRuntime {
   createdAt: number
   updatedAt: number
 }
-

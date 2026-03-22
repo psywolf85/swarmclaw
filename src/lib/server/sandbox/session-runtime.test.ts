@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { resolveSandboxRuntimeStatus, resolveSandboxWorkdir } from '@/lib/server/sandbox/session-runtime'
+import { resolveSandboxRuntimeStatus, resolveSandboxSessionContext, resolveSandboxWorkdir } from '@/lib/server/sandbox/session-runtime'
 import type { Session } from '@/types'
 
 test('resolveSandboxRuntimeStatus defaults enabled sandboxes to all sessions', () => {
@@ -47,6 +47,23 @@ test('resolveSandboxRuntimeStatus sandboxes child sessions in non-main mode', ()
   assert.equal(status.sandboxed, true)
   assert.equal(status.scope, 'agent')
   assert.equal(status.scopeKey, 'agent:agent-1')
+})
+
+test('resolveSandboxSessionContext resolves browser-compatible workspace context without starting containers', () => {
+  const context = resolveSandboxSessionContext({
+    config: { enabled: true, scope: 'agent', workdir: '/workspace' },
+    session: {
+      id: 'child-session',
+      agentId: 'agent-1',
+      parentSessionId: 'main-session',
+    } as Session,
+    workspaceDir: '/tmp/project',
+  })
+
+  assert.ok(context)
+  assert.equal(context?.scopeKey, 'agent:agent-1')
+  assert.equal(context?.workspaceDir, '/tmp/project')
+  assert.equal(context?.containerWorkdir, '/workspace')
 })
 
 test('resolveSandboxWorkdir maps nested host paths into the container workspace', () => {

@@ -324,8 +324,6 @@ export function requestedToolNamesFromMessage(message: string): string[] {
     'wallet_tool',
     'http_request',
     'send_file',
-    'sandbox_exec',
-    'sandbox_list_runtimes',
     'schedule_wake',
     'spawn_subagent',
     'ask_human',
@@ -338,6 +336,7 @@ export function requestedToolNamesFromMessage(message: string): string[] {
     'browser',
     'web',
     'shell',
+    'execute',
     'files',
     'edit_file',
     'canvas',
@@ -370,6 +369,7 @@ export function enabledDelegationTools(session: SessionWithTools): DelegateTool[
 export function hasDirectLocalCodingTools(session: SessionWithTools): boolean {
   return [
     'shell',
+    'execute',
     'execute_command',
     'files',
     'edit_file',

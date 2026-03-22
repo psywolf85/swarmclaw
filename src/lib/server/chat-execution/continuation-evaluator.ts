@@ -102,6 +102,13 @@ function checkUnfinishedToolCallsPending(ctx: ContinuationContext): Continuation
   return null
 }
 
+function checkLightweightDirectChat(ctx: ContinuationContext): ContinuationDecision | null {
+  if (ctx.classification?.isLightweightDirectChat !== true) return null
+  if (!ctx.state.fullText.trim()) return null
+  if (ctx.state.hasToolCalls || ctx.state.streamedToolEvents.length > 0) return null
+  return { type: false, requiredToolReminderNames: [] }
+}
+
 function checkLoopDetection(ctx: ContinuationContext): ContinuationDecision | null {
   const isToolFrequency = (ctx.state.loopDetectionTriggered?.detector === 'tool_frequency') || ctx.state.toolFrequencyBlocked
   if (!ctx.state.loopDetectionTriggered && !isToolFrequency) return null
@@ -412,6 +419,7 @@ export function evaluateContinuation(ctx: ContinuationContext): ContinuationDeci
   const checks = [
     checkUnfinishedToolCallsPending,
     checkLoopDetection,
+    checkLightweightDirectChat,
     checkCoordinatorDelegation,
     checkExecutionContinuation,
     checkRequiredTools,

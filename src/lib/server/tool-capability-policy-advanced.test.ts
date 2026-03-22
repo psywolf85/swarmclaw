@@ -92,6 +92,13 @@ describe('strict mode', () => {
     assert.match(d.blockedExtensions[0].reason, /strict policy/)
   })
 
+  it('blocks execute (execution category)', () => {
+    const d = resolveSessionToolPolicy(['execute'], mode)
+    assert.equal(d.blockedExtensions.length, 1)
+    assert.equal(d.blockedExtensions[0].tool, 'execute')
+    assert.match(d.blockedExtensions[0].reason, /strict policy/)
+  })
+
   it('blocks files (filesystem category)', () => {
     const d = resolveSessionToolPolicy(['files'], mode)
     assert.equal(d.blockedExtensions.length, 1)
@@ -168,7 +175,7 @@ describe('safety blocks', () => {
     assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
-  it('safety block on concrete web_search blocks the web_search family', () => {
+  it('safety block on concrete web_search blocks the requested extension', () => {
     const d = resolveSessionToolPolicy(['web_search'], {
       safetyBlockedTools: ['web_search'],
     })
@@ -186,7 +193,7 @@ describe('safety blocks', () => {
     assert.equal(d.blockedExtensions[0].source, 'safety')
   })
 
-  it('safety block on delegate_to_claude_code blocks claude_code', () => {
+  it('safety block on delegate_to_claude_code blocks the requested extension', () => {
     const d = resolveSessionToolPolicy(['claude_code'], {
       safetyBlockedTools: ['delegate_to_claude_code'],
     })

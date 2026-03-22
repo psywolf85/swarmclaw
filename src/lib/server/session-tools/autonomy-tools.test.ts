@@ -52,14 +52,12 @@ describe('durable wait surface', () => {
   })
 })
 
-describe('sandbox surface', () => {
-  it('sandbox execution functions remain for shell integration', () => {
-    const src = readToolSource('sandbox')
-    assert.equal(src.includes('executeSandboxExec'), true)
-    assert.equal(src.includes('executeListRuntimes'), true)
-    assert.equal(src.includes('executeHostNode'), true)
-    // Extension registration removed — sandbox_exec is now provided by shell
-    assert.equal(src.includes('registerBuiltin'), false)
+describe('execute surface', () => {
+  it('keeps just-bash as the sandboxed execution path with explicit host opt-in', () => {
+    const src = readToolSource('execute')
+    assert.equal(src.includes('just-bash'), true)
+    assert.equal(src.includes('normalizeAgentExecuteConfig'), true)
+    assert.equal(src.includes('persistent=true'), true)
   })
 })
 
@@ -81,7 +79,7 @@ describe('delegation job handles', () => {
 
   it('scheduler and daemon recover the durable autonomy jobs', () => {
     const schedulerSrc = fs.readFileSync(path.join(serverDir, 'runtime', 'scheduler.ts'), 'utf-8')
-    const daemonSrc = fs.readFileSync(path.join(serverDir, 'runtime', 'daemon-state.ts'), 'utf-8')
+    const daemonSrc = fs.readFileSync(path.join(serverDir, 'runtime', 'daemon-state', 'core.ts'), 'utf-8')
     assert.equal(schedulerSrc.includes('processDueWatchJobs'), true)
     assert.equal(daemonSrc.includes('recoverStaleDelegationJobs'), true)
   })

@@ -86,7 +86,7 @@ if (!process.env.CI) {
     }
 
     if (!commandExists('docker')) {
-      logNote('Docker was not found. Container sandboxes will fall back to host execution until Docker is installed.')
+      logNote('Docker was not found. Browser sandboxing will use the host Playwright runtime until Docker is installed.')
     }
   }
 }

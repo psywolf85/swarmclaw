@@ -521,6 +521,37 @@ describe('session-run-manager', () => {
       })
     })
 
+    it('exposes the active user-visible turn separately from queued follow-ups', () => {
+      const running = enqueue({
+        sessionId: 'sess-active-turn',
+        message: 'running now',
+        source: 'chat',
+      })
+      const queued = enqueue({
+        sessionId: 'sess-active-turn',
+        message: 'queued next',
+        source: 'chat',
+      })
+
+      const snapshot = mgr.getSessionQueueSnapshot('sess-active-turn')
+      assert.equal(snapshot.activeRunId, running.runId)
+      assert.deepEqual(snapshot.activeTurn, {
+        runId: running.runId,
+        sessionId: 'sess-active-turn',
+        missionId: null,
+        text: 'running now',
+        queuedAt: snapshot.activeTurn?.queuedAt,
+        position: 0,
+        imagePath: undefined,
+        imageUrl: undefined,
+        attachedFiles: undefined,
+        replyToId: undefined,
+        source: 'chat',
+      })
+      assert.deepEqual(snapshot.items.map((item) => item.runId), [queued.runId])
+      assert.equal(snapshot.queueLength, 1)
+    })
+
     it('hides internal queued runs from the user-visible queue snapshot', () => {
       enqueue({ sessionId: 'sess-visible-queue', message: 'running' })
       enqueue({
@@ -538,7 +569,34 @@ describe('session-run-manager', () => {
 
       const snapshot = mgr.getSessionQueueSnapshot('sess-visible-queue')
       assert.equal(snapshot.queueLength, 1)
+      assert.equal(snapshot.activeTurn?.runId, snapshot.activeRunId)
       assert.deepEqual(snapshot.items.map((item) => item.runId), [visible.runId])
+    })
+
+    it('hides internal active runs from the active-turn snapshot field', () => {
+      const { entry, promise } = makeManualQueuedEntry({
+        sessionId: 'sess-hidden-active',
+        runId: 'run-hidden',
+        message: 'heartbeat hidden',
+        internal: true,
+        source: 'heartbeat',
+      })
+      entry.run.status = 'running'
+      entry.run.startedAt = Date.now()
+      const state = getRuntimeState()
+      state.runningByExecution.set(entry.executionKey, entry as unknown)
+      state.runs.set(entry.run.id, entry.run)
+      state.promises.set(entry.run.id, promise)
+      pendingPromises.push(promise.catch(() => {}))
+
+      try {
+        const snapshot = mgr.getSessionQueueSnapshot('sess-hidden-active')
+        assert.equal(snapshot.activeRunId, 'run-hidden')
+        assert.equal(snapshot.activeTurn, null)
+        assert.equal(snapshot.queueLength, 0)
+      } finally {
+        entry.resolve(undefined)
+      }
     })
 
     it('reports heartbeat vs non-heartbeat queued runs', () => {

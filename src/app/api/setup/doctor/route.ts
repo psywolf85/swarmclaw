@@ -217,14 +217,14 @@ export async function GET(req: Request) {
   pushCheck(
     checks,
     'docker',
-    'Docker (sandbox runtime)',
+    'Docker (browser sandbox runtime)',
     docker.available ? 'pass' : 'warn',
     docker.available
-      ? `Docker ${docker.version || ''} is available for container sandbox execution.`.trim()
-      : 'Docker is not available. SwarmClaw will fall back to host execution until Docker Desktop is installed.',
+      ? `Docker ${docker.version || ''} is available for sandbox browser execution.`.trim()
+      : 'Docker is not available. SwarmClaw will use the host Playwright runtime unless Docker Desktop is installed.',
   )
   if (!docker.available) {
-    actions.push('Install Docker Desktop if you want shell, browser, and code execution to stay inside containers by default.')
+    actions.push('Install Docker Desktop if you want Playwright browser sessions to use the sandbox browser runtime.')
   }
 
   const gitRootCheck = run('git', ['rev-parse', '--is-inside-work-tree'], 4_000)

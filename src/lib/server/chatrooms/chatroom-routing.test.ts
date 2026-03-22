@@ -16,6 +16,8 @@ const agents: Record<string, Agent> = {
     model: 'gpt-test',
     systemPrompt: '',
     capabilities: ['deploy', 'infrastructure'],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
   },
   design: {
     id: 'design',
@@ -25,6 +27,8 @@ const agents: Record<string, Agent> = {
     model: 'gpt-test',
     systemPrompt: '',
     capabilities: ['design', 'ui'],
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
   },
 }
 

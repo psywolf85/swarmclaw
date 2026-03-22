@@ -10,9 +10,7 @@ import {
   removeManagedProcess,
   startManagedProcess,
   writeManagedProcessStdin,
-  type SandboxOptions,
 } from '@/lib/server/runtime/process-manager'
-import { ensureSessionSandbox, resolveSandboxWorkdir, type AgentSandboxConfig } from '@/lib/server/sandbox/session-runtime'
 import type { ToolBuildContext } from './context'
 import { safePath, truncate, coerceEnvMap, MAX_OUTPUT } from './context'
 import { checkFileAccess } from './file-access-policy'
@@ -21,7 +19,6 @@ import { registerNativeCapability } from '../native-capabilities'
 import { safeJsonParseObject } from '../json-utils'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage } from '@/lib/shared-utils'
-import { executeSandboxExec, executeListRuntimes, type SandboxContext } from './sandbox'
 
 function resolveShellWorkdir(baseCwd: string, requestedWorkdir?: string, scope?: 'workspace' | 'machine'): string {
   const raw = typeof requestedWorkdir === 'string' ? requestedWorkdir.trim() : ''
@@ -40,12 +37,6 @@ export function rewriteShellWorkspaceAliases(baseCwd: string, command: string): 
   let rewritten = command
   rewritten = rewritten.replace(/(^|[\s"'`(=;])\/workspace(?=\/|\b)/g, `$1${cwd}`)
   rewritten = rewritten.replace(/(^|[\s"'`(=;])workspace\//g, `$1${cwd}/`)
-  return rewritten
-}
-
-export function rewriteShellWorkspaceAliasesForSandbox(command: string): string {
-  let rewritten = command
-  rewritten = rewritten.replace(/(^|[\s"'`(=;])workspace\//g, '$1/workspace/')
   return rewritten
 }
 
@@ -193,60 +184,6 @@ function checkShellFileAccessPolicy(
   return null
 }
 
-async function resolveSandboxOptions(params: {
-  cwd: string
-  workdir?: string
-  session?: Session | null
-  agentId?: string | null
-  sessionId?: string | null
-  env: Record<string, string>
-  config?: AgentSandboxConfig | null
-  filesystemScope?: 'workspace' | 'machine'
-}): Promise<{
-  sandbox?: SandboxOptions
-  hostWorkdir: string
-  workspaceEnv: string
-  sessionCwdEnv: string
-}> {
-  const hostWorkdir = resolveShellWorkdir(params.cwd, params.workdir, params.filesystemScope)
-  const sandboxSession = await ensureSessionSandbox({
-    config: params.config,
-    session: params.session,
-    agentId: params.agentId,
-    sessionId: params.sessionId,
-    workspaceDir: params.cwd,
-  })
-
-  if (!sandboxSession) {
-    return {
-      hostWorkdir,
-      workspaceEnv: params.cwd,
-      sessionCwdEnv: hostWorkdir,
-    }
-  }
-
-  const sandboxHostWorkdir = fs.existsSync(hostWorkdir) && fs.statSync(hostWorkdir).isDirectory()
-    ? hostWorkdir
-    : sandboxSession.workspaceDir
-  const resolved = resolveSandboxWorkdir({
-    workspaceDir: sandboxSession.workspaceDir,
-    hostWorkdir: sandboxHostWorkdir,
-    containerWorkdir: sandboxSession.containerWorkdir,
-  })
-
-  return {
-    hostWorkdir: resolved.hostWorkdir,
-    workspaceEnv: sandboxSession.containerWorkdir,
-    sessionCwdEnv: resolved.containerWorkdir,
-    sandbox: {
-      kind: 'persistent',
-      containerName: sandboxSession.containerName,
-      containerWorkdir: resolved.containerWorkdir,
-      env: params.env,
-    },
-  }
-}
-
 async function executeShellAction(
   args: Record<string, unknown>,
   bctx: {
@@ -255,7 +192,6 @@ async function executeShellAction(
     sessionId?: string | null
     resolveCurrentSession?: () => Session | null
     fileAccessPolicy?: { allowedPaths?: string[]; blockedPaths?: string[] } | null
-    sandboxConfig?: AgentSandboxConfig | null
     filesystemScope?: 'workspace' | 'machine'
     commandTimeoutMs?: number
   },
@@ -284,37 +220,11 @@ async function executeShellAction(
           return 'Error: This command would terminate the SwarmClaw server. Use a more targeted command that only affects your project processes.'
         }
         const envMap = coerceEnvMap(env) || {}
-        let sandbox: SandboxOptions | undefined
-        let hostWorkdir = resolveShellWorkdir(bctx.cwd, workdir, bctx.filesystemScope)
-        let commandForExecution = rewriteShellWorkspaceAliases(bctx.cwd, command)
-        let sandboxMode: 'container' | 'host' | 'host-fallback' = 'host'
-        try {
-          const resolved = await resolveSandboxOptions({
-            cwd: bctx.cwd,
-            workdir,
-            session: bctx.resolveCurrentSession?.() || null,
-            agentId: bctx.agentId || null,
-            sessionId: bctx.sessionId || null,
-            env: envMap,
-            config: bctx.sandboxConfig,
-            filesystemScope: bctx.filesystemScope,
-          })
-          sandbox = resolved.sandbox
-          hostWorkdir = resolved.hostWorkdir
-          if (!envMap.WORKSPACE) envMap.WORKSPACE = resolved.workspaceEnv
-          if (!envMap.SESSION_CWD) envMap.SESSION_CWD = resolved.sessionCwdEnv
-          if (sandbox) {
-            commandForExecution = rewriteShellWorkspaceAliasesForSandbox(command)
-            if (!envMap.HOME) envMap.HOME = resolved.sessionCwdEnv
-            if (!envMap.TMPDIR) envMap.TMPDIR = '/tmp'
-            sandboxMode = 'container'
-          }
-        } catch {
-          sandboxMode = 'host-fallback'
-        }
+        const hostWorkdir = resolveShellWorkdir(bctx.cwd, workdir, bctx.filesystemScope)
+        const commandForExecution = rewriteShellWorkspaceAliases(bctx.cwd, command)
         if (!envMap.WORKSPACE) envMap.WORKSPACE = bctx.cwd
         if (!envMap.SESSION_CWD) envMap.SESSION_CWD = hostWorkdir
-        if (!envMap.SWARMCLAW_SANDBOX_MODE) envMap.SWARMCLAW_SANDBOX_MODE = sandboxMode
+        if (!envMap.SWARMCLAW_SANDBOX_MODE) envMap.SWARMCLAW_SANDBOX_MODE = 'host'
         const effectiveBackground = !!background || (typeof commandForExecution === 'string' && isLikelyServerCommand(commandForExecution))
         const managedCommand = effectiveBackground ? stripManagedBackgroundSuffix(commandForExecution) : commandForExecution
         const result = await startManagedProcess({
@@ -329,7 +239,6 @@ async function executeShellAction(
             : effectiveBackground
               ? undefined          // let process-manager use DEFAULT_TIMEOUT_MS (30 min)
               : (bctx.commandTimeoutMs || 30000),
-          sandbox,
         })
         if (result.status === 'completed') return truncate(result.output || '(no output)', MAX_OUTPUT)
         return JSON.stringify({ status: 'running', processId: result.processId, tail: result.tail || '' }, null, 2)
@@ -344,27 +253,6 @@ async function executeShellAction(
         return killManagedProcess(processId!, killSignal).ok ? `Killed ${processId}` : `Error`
       }
       case 'remove': return removeManagedProcess(processId!).ok ? `Removed ${processId}` : `Error`
-      case 'sandbox_exec': {
-        const sandboxCtx: SandboxContext = {
-          sessionId: bctx.sessionId || undefined,
-          agentId: bctx.agentId || null,
-          cwd: bctx.cwd,
-          config: bctx.sandboxConfig,
-          resolveCurrentSession: bctx.resolveCurrentSession,
-        }
-        return executeSandboxExec(normalized, sandboxCtx)
-      }
-      case 'sandbox_list_runtimes':
-      case 'list_runtimes': {
-        const sandboxCtx: SandboxContext = {
-          sessionId: bctx.sessionId || undefined,
-          agentId: bctx.agentId || null,
-          cwd: bctx.cwd,
-          config: bctx.sandboxConfig,
-          resolveCurrentSession: bctx.resolveCurrentSession,
-        }
-        return executeListRuntimes(sandboxCtx)
-      }
       default: return `Error: Unknown action "${action}"`
     }
   } catch (err: unknown) {
@@ -379,22 +267,20 @@ const ShellExtension: Extension = {
   name: 'Core Shell',
   description: 'Execute shell commands and manage background processes. Use for git, curl, and other CLI tools.',
   hooks: {
-    getCapabilityDescription: () => 'I can run shell commands with the unified `shell` tool. Use action `execute` for commands (including git, curl, and other CLI tools), `sandbox_exec` to run JS/TS in a sandboxed environment, and `list` / `status` / `poll` / `log` for long-lived processes.',
-    getOperatingGuidance: () => ['Shell: use `shell` with `{"action":"execute","command":"..."}` for servers, installs, scripts, git, and curl. Use `background=true` for long-lived processes.', 'Use `shell` with `{"action":"sandbox_exec","language":"javascript","code":"..."}` to run JS/TS in a Docker sandbox when available.', 'Verify servers with `shell` status/log actions and liveness probes before claiming success.', 'Resolve IPs/URLs via shell — never use placeholders. Retry path errors without workdir override.'],
+    getCapabilityDescription: () => 'I can run shell commands with the unified `shell` tool. Use action `execute` for commands (including git, curl, and other CLI tools) and `list` / `status` / `poll` / `log` for long-lived processes.',
+    getOperatingGuidance: () => ['Shell: use `shell` with `{"action":"execute","command":"..."}` for servers, installs, scripts, git, and curl. Use `background=true` for long-lived processes.', 'Use the separate `execute` tool for sandboxed just-bash execution.', 'Verify servers with `shell` status/log actions and liveness probes before claiming success.', 'Resolve IPs/URLs via shell — never use placeholders. Retry path errors without workdir override.'],
   } as ExtensionHooks,
   tools: [
     {
       name: 'shell',
-      description: 'Execute commands and manage processes. Use for git, curl, and other CLI tools. Includes sandbox_exec for running JS/TS in Docker.',
+      description: 'Execute commands and manage processes. Use for git, curl, long-lived servers, and other host CLI tools.',
       parameters: {
         type: 'object',
         properties: {
-          action: { type: 'string', enum: ['execute', 'list', 'status', 'poll', 'log', 'write', 'kill', 'remove', 'sandbox_exec', 'sandbox_list_runtimes'] },
+          action: { type: 'string', enum: ['execute', 'list', 'status', 'poll', 'log', 'write', 'kill', 'remove'] },
           command: { type: 'string' },
           processId: { type: 'string' },
           background: { type: 'boolean' },
-          language: { type: 'string', enum: ['javascript', 'typescript'], description: 'Language for sandbox_exec action' },
-          code: { type: 'string', description: 'Code to execute for sandbox_exec action' },
         },
         required: ['action']
       },
@@ -414,7 +300,6 @@ export function buildShellTools(bctx: ToolBuildContext) {
         cwd: bctx.cwd,
         resolveCurrentSession: bctx.resolveCurrentSession,
         fileAccessPolicy: bctx.fileAccessPolicy,
-        sandboxConfig: bctx.sandboxConfig,
         filesystemScope: bctx.filesystemScope,
         commandTimeoutMs: bctx.commandTimeoutMs,
       }),

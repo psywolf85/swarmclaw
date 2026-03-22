@@ -76,6 +76,8 @@ export async function executePreparedChatTurn(params: {
     isAutoRunNoHistory,
     executionBrief,
     executionBriefContextBlock,
+    classification,
+    promptMode,
   } = prepared
 
   const emit = partialPersistence.emit
@@ -151,6 +153,8 @@ export async function executePreparedChatTurn(params: {
         history: heartbeatHistory ?? applyContextClearBoundary(getSessionMessages(sessionId)),
         signal: abortController.signal,
         source,
+        classification,
+        promptMode,
       })
       fullResponse = result.finalResponse || result.fullText
     } else {

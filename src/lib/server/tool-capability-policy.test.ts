@@ -20,11 +20,12 @@ test('capability policy balanced mode blocks destructive delete_file', () => {
 
 test('capability policy strict mode blocks execution/platform families', () => {
   const decision = resolveSessionToolPolicy(
-    ['shell', 'manage_tasks', 'web_search', 'memory'],
+    ['shell', 'execute', 'manage_tasks', 'web_search', 'memory'],
     { capabilityPolicyMode: 'strict' },
   )
   assert.deepEqual(decision.enabledExtensions, ['web_search', 'memory'])
   assert.equal(decision.blockedExtensions.some((entry) => entry.tool === 'shell'), true)
+  assert.equal(decision.blockedExtensions.some((entry) => entry.tool === 'execute'), true)
   assert.equal(decision.blockedExtensions.some((entry) => entry.tool === 'manage_tasks'), true)
 })
 

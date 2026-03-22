@@ -44,7 +44,7 @@ const TOOL_ALIAS_GROUPS = [
   ['schedule', 'schedule_wake'],
   ['http', 'http_request'],
   ['memory', 'memory_tool'],
-  ['sandbox', 'sandbox_exec', 'sandbox_list_runtimes'],
+  ['execute', 'sandbox'],
   ['wallet', 'wallet_tool'],
   ['monitor', 'monitor_tool'],
   ['sample_ui', 'show_extension_card'],
@@ -70,6 +70,7 @@ const TOOL_CANONICAL_MAP = (() => {
 
 const PROBE_BASE_TOOLS = [
   'shell',
+  'execute',
   'process',
   'files',
   'edit_file',

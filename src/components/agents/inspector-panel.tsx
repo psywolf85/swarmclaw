@@ -16,6 +16,7 @@ import { SandboxEnvPanel } from './sandbox-env-panel'
 import { CronJobForm } from './cron-job-form'
 import { toast } from 'sonner'
 import { StatusDot } from '@/components/ui/status-dot'
+import { normalizeAgentExecuteConfig } from '@/lib/agent-execute-defaults'
 import { normalizeAgentSandboxConfig } from '@/lib/agent-sandbox-defaults'
 import { getEnabledToolIds, getEnabledExtensionIds, getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { searchMemory } from '@/lib/memory'
@@ -1139,7 +1140,8 @@ function ConfigTab({ agent }: { agent: Agent }) {
   const isOpenClaw = agent.provider === 'openclaw'
   const schedules = useAppStore((s) => s.schedules)
   const agentSchedules = Object.values(schedules).filter((s) => s.agentId === agent.id)
-  const [sandboxOpen, setSandboxOpen] = useState(false)
+  const [executeOpen, setExecuteOpen] = useState(false)
+  const [browserSandboxOpen, setBrowserSandboxOpen] = useState(false)
   const [openclawOpen, setOpenclawOpen] = useState(false)
   const [detailsOpen, setDetailsOpen] = useState(false)
 
@@ -1162,9 +1164,14 @@ function ConfigTab({ agent }: { agent: Agent }) {
       {/* Automations section */}
       <AutomationsSection schedules={agentSchedules} agent={agent} />
 
-      {/* Sandbox (collapsible) */}
-      <CollapsibleSection title="Sandbox" open={sandboxOpen} onToggle={() => setSandboxOpen((v) => !v)}>
-        <SandboxConfigSection agent={agent} />
+      {/* Execute (collapsible) */}
+      <CollapsibleSection title="Execute" open={executeOpen} onToggle={() => setExecuteOpen((v) => !v)}>
+        <ExecuteToolConfigSection agent={agent} />
+      </CollapsibleSection>
+
+      {/* Browser sandbox (collapsible) */}
+      <CollapsibleSection title="Browser Sandbox" open={browserSandboxOpen} onToggle={() => setBrowserSandboxOpen((v) => !v)}>
+        <BrowserSandboxSection agent={agent} />
       </CollapsibleSection>
 
       {/* OpenClaw settings (collapsible, OpenClaw only) */}
@@ -1327,13 +1334,85 @@ function AutomationsSection({ schedules, agent }: { schedules: Array<{ id: strin
   )
 }
 
-// ─── Sandbox Config Section ──────────────────────────────────────
+// ─── Execute Config Section ──────────────────────────────────────
 
-function SandboxConfigSection({ agent }: { agent: Agent }) {
+function ExecuteToolConfigSection({ agent }: { agent: Agent }) {
+  const loadAgents = useAppStore((s) => s.loadAgents)
+  const [saving, setSaving] = useState(false)
+  const config = normalizeAgentExecuteConfig(agent.executeConfig)
+
+  const update = useCallback(async (patch: Partial<NonNullable<typeof agent.executeConfig>>) => {
+    setSaving(true)
+    try {
+      const next = {
+        ...config,
+        ...patch,
+        network: {
+          ...(config.network || {}),
+          ...((patch.network as Record<string, unknown> | undefined) || {}),
+        },
+      }
+      await api('PUT', `/agents/${agent.id}`, { executeConfig: next })
+      await loadAgents()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to update execute config')
+    } finally {
+      setSaving(false)
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agent.id, config])
+
+  return (
+    <div className="pt-3 flex flex-col gap-3">
+      <div className="text-[11px] text-text-3/60">
+        `execute` uses just-bash in sandbox mode by default. Host mode is explicit and required for persistent writes.
+      </div>
+      <div>
+        <label className="text-[10px] text-text-3/50 block mb-1">Backend</label>
+        <select
+          value={config.backend || 'sandbox'}
+          onChange={(e) => void update({ backend: e.target.value as 'sandbox' | 'host' })}
+          disabled={saving}
+          className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text outline-none cursor-pointer focus:border-accent-bright/30"
+        >
+          <option value="sandbox">sandbox (just-bash)</option>
+          <option value="host">host (real bash)</option>
+        </select>
+      </div>
+      <div className="flex items-center justify-between">
+        <span className="text-[11px] text-text-3/60">Allow network in sandbox mode</span>
+        <ToggleSwitch
+          on={config.network?.enabled !== false}
+          onChange={() => void update({ network: { ...(config.network || {}), enabled: config.network?.enabled === false } })}
+          disabled={saving}
+        />
+      </div>
+      <div>
+        <label className="text-[10px] text-text-3/50 block mb-1">Timeout (seconds)</label>
+        <input
+          type="number"
+          defaultValue={config.timeout || 30}
+          min={1}
+          max={300}
+          onBlur={(e) => void update({ timeout: Math.max(1, Math.min(300, Number(e.target.value) || 30)) })}
+          className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent-bright/30"
+        />
+      </div>
+      <div className="text-[11px] text-text-3/50">
+        `shell` remains the host command/process tool. Use `execute` for sandboxed one-shot scripts.
+      </div>
+    </div>
+  )
+}
+
+// ─── Browser Sandbox Section ─────────────────────────────────────
+
+function BrowserSandboxSection({ agent }: { agent: Agent }) {
   const loadAgents = useAppStore((s) => s.loadAgents)
   const [saving, setSaving] = useState(false)
   const [dockerAvailable, setDockerAvailable] = useState<boolean | null>(null)
   const config = normalizeAgentSandboxConfig(agent.sandboxConfig)
+  const browserEnabled = config.enabled && config.browser?.enabled !== false
 
   useEffect(() => {
     api<{ docker?: { available: boolean; version?: string | null } }>('GET', '/setup/doctor')
@@ -1344,7 +1423,16 @@ function SandboxConfigSection({ agent }: { agent: Agent }) {
   const update = useCallback(async (patch: Partial<NonNullable<typeof agent.sandboxConfig>>) => {
     setSaving(true)
     try {
-      const next = { ...config, ...patch }
+      const next = {
+        ...config,
+        ...patch,
+        browser: patch.browser === null
+          ? null
+          : {
+              ...(config.browser || {}),
+              ...((patch.browser as Record<string, unknown> | undefined) || {}),
+            },
+      }
       await api('PUT', `/agents/${agent.id}`, { sandboxConfig: next })
       await loadAgents()
     } catch (err: unknown) {
@@ -1358,69 +1446,98 @@ function SandboxConfigSection({ agent }: { agent: Agent }) {
   return (
     <div className="pt-3">
       <div className="flex items-center justify-between mb-3">
-        <span className="text-[12px] text-text-2">Prefer Docker sandboxes</span>
-        <ToggleSwitch on={config.enabled} onChange={() => void update({ enabled: !config.enabled })} disabled={saving} />
+        <span className="text-[12px] text-text-2">Use Docker browser sandbox</span>
+        <ToggleSwitch
+          on={browserEnabled}
+          onChange={() => void update({
+            enabled: !browserEnabled,
+            browser: {
+              ...(config.browser || {}),
+              enabled: !browserEnabled,
+            },
+          })}
+          disabled={saving}
+        />
       </div>
       {dockerAvailable === false && (
         <div className="text-[11px] text-amber-400/80 bg-amber-400/[0.06] rounded-[8px] px-2.5 py-2 mb-3 border border-amber-400/10">
-          Docker is not detected. SwarmClaw will fall back to host execution.
+          Docker is not detected. Browser automation will use the host Playwright runtime.
         </div>
       )}
       {dockerAvailable === true && (
         <div className="text-[11px] text-emerald-400/70 mb-3 flex items-center gap-1.5">
-          <StatusDot status="online" size="sm" /> Docker available
+          <StatusDot status="online" size="sm" /> Docker available for browser sandboxing
         </div>
       )}
-      {config.enabled && (
+      {browserEnabled && (
         <div className="flex flex-col gap-2.5 mt-1">
           <div>
-            <label className="text-[10px] text-text-3/50 block mb-1">Image</label>
-            <input
-              type="text"
-              defaultValue={config.image || 'node:22-slim'}
-              onBlur={(e) => void update({ image: e.target.value.trim() || 'node:22-slim' })}
-              className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent-bright/30"
-            />
+            <label className="text-[10px] text-text-3/50 block mb-1">Scope</label>
+            <select
+              defaultValue={config.scope || 'session'}
+              onChange={(e) => void update({ scope: e.target.value as 'session' | 'agent' })}
+              className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text outline-none cursor-pointer focus:border-accent-bright/30"
+            >
+              <option value="session">session</option>
+              <option value="agent">agent</option>
+            </select>
           </div>
           <div>
-            <label className="text-[10px] text-text-3/50 block mb-1">Network</label>
+            <label className="text-[10px] text-text-3/50 block mb-1">Mode</label>
             <select
-              defaultValue={config.network || 'none'}
-              onChange={(e) => void update({ network: e.target.value as 'none' | 'bridge' })}
+              defaultValue={config.mode === 'non-main' ? 'non-main' : 'all'}
+              onChange={(e) => void update({ mode: e.target.value as 'all' | 'non-main' })}
+              className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text outline-none cursor-pointer focus:border-accent-bright/30"
+            >
+              <option value="all">all sessions</option>
+              <option value="non-main">non-main sessions only</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-text-3/50 block mb-1">Workspace access</label>
+            <select
+              defaultValue={config.workspaceAccess || 'rw'}
+              onChange={(e) => void update({ workspaceAccess: e.target.value as 'ro' | 'rw' })}
+              className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text outline-none cursor-pointer focus:border-accent-bright/30"
+            >
+              <option value="rw">read/write</option>
+              <option value="ro">read-only</option>
+            </select>
+          </div>
+          <div>
+            <label className="text-[10px] text-text-3/50 block mb-1">Browser network</label>
+            <select
+              defaultValue={config.browser?.network || 'bridge'}
+              onChange={(e) => void update({ browser: { ...(config.browser || {}), network: e.target.value as 'none' | 'bridge' } })}
               className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text outline-none cursor-pointer focus:border-accent-bright/30"
             >
               <option value="none">none (isolated)</option>
               <option value="bridge">bridge (internet access)</option>
             </select>
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <label className="text-[10px] text-text-3/50 block mb-1">Memory (MB)</label>
-              <input
-                type="number"
-                defaultValue={config.memoryMb || 512}
-                min={64}
-                max={8192}
-                onBlur={(e) => void update({ memoryMb: Math.max(64, Math.min(8192, Number(e.target.value) || 512)) })}
-                className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent-bright/30"
-              />
-            </div>
-            <div>
-              <label className="text-[10px] text-text-3/50 block mb-1">CPUs</label>
-              <input
-                type="number"
-                defaultValue={config.cpus || 1.0}
-                min={0.25}
-                max={8}
-                step={0.25}
-                onBlur={(e) => void update({ cpus: Math.max(0.25, Math.min(8, Number(e.target.value) || 1)) })}
-                className="w-full rounded-[8px] border border-white/[0.06] bg-black/[0.14] px-2.5 py-1.5 text-[12px] text-text font-mono outline-none focus:border-accent-bright/30"
-              />
-            </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-text-3/60">Headless browser</span>
+            <ToggleSwitch
+              on={config.browser?.headless !== false}
+              onChange={() => void update({ browser: { ...(config.browser || {}), headless: config.browser?.headless === false } })}
+              disabled={saving}
+            />
           </div>
           <div className="flex items-center justify-between">
-            <span className="text-[11px] text-text-3/60">Read-only root filesystem</span>
-            <ToggleSwitch on={config.readonlyRoot ?? false} onChange={() => void update({ readonlyRoot: !config.readonlyRoot })} disabled={saving} />
+            <span className="text-[11px] text-text-3/60">Enable noVNC observer</span>
+            <ToggleSwitch
+              on={config.browser?.enableNoVnc !== false}
+              onChange={() => void update({ browser: { ...(config.browser || {}), enableNoVnc: config.browser?.enableNoVnc === false } })}
+              disabled={saving}
+            />
+          </div>
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] text-text-3/60">Mount uploads into sandbox browser</span>
+            <ToggleSwitch
+              on={config.browser?.mountUploads !== false}
+              onChange={() => void update({ browser: { ...(config.browser || {}), mountUploads: config.browser?.mountUploads === false } })}
+              disabled={saving}
+            />
           </div>
         </div>
       )}

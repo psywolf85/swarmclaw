@@ -66,7 +66,8 @@ interface ChatState {
   agentStatus: { goal?: string; status?: string; summary?: string; nextAction?: string } | null
 
   messages: Message[]
-  setMessages: (msgs: Message[]) => void
+  messageStartIndex: number
+  setMessages: (msgs: Message[], options?: { startIndex?: number; totalMessages?: number }) => void
 
   toolEvents: ToolEvent[]
   clearToolEvents: () => void
@@ -136,6 +137,10 @@ interface ChatState {
   loadMoreMessages: () => Promise<void>
 }
 
+/** Safety-net timeout for "sending" queue items. Normally cleaned up by
+ * matchesPersistedQueuedMessage well before this — only fires if matching fails. */
+const SENDING_ITEM_TIMEOUT_MS = 60_000
+
 const CONTROL_TOKEN_PREFIX_RE = /^\s*(?:NO_MESSAGE|HEARTBEAT_OK)(?:(?=[\s.,:;!?()[\]{}"'`-]|$)|(?=[A-Z]))\s*/i
 const CONTROL_TOKEN_LINE_RE = /(^|\n)\s*(?:NO_MESSAGE|HEARTBEAT_OK)\s*(\n|$)/gi
 
@@ -163,6 +168,29 @@ function reconcileMessagesForState(
     ? assistantRenderId
     : null
   return { messages, assistantRenderId: nextAssistantRenderId }
+}
+
+function attachedFilesEqual(left: string[] | undefined, right: string[] | undefined): boolean {
+  if (!left?.length && !right?.length) return true
+  if ((left?.length || 0) !== (right?.length || 0)) return false
+  for (let index = 0; index < (left?.length || 0); index += 1) {
+    if (left?.[index] !== right?.[index]) return false
+  }
+  return true
+}
+
+function matchesPersistedQueuedMessage(message: Message, queued: QueuedSessionMessage): boolean {
+  if (message.role !== 'user') return false
+  const messageRunId = typeof message.runId === 'string' && message.runId.trim() ? message.runId : null
+  const queuedRunId = typeof queued.runId === 'string' && queued.runId.trim() ? queued.runId : null
+  if (messageRunId && queuedRunId) return messageRunId === queuedRunId
+  return (
+    message.text === queued.text
+    && message.replyToId === queued.replyToId
+    && message.imagePath === queued.imagePath
+    && message.imageUrl === queued.imageUrl
+    && attachedFilesEqual(message.attachedFiles, queued.attachedFiles)
+  )
 }
 
 function syncSessionQueueState(sessionId: string, params: {
@@ -203,13 +231,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   displayText: '',
   agentStatus: null,
   messages: [],
-  setMessages: (msgs) => set((s) => {
+  messageStartIndex: 0,
+  setMessages: (msgs, options) => set((s) => {
     const next = reconcileMessagesForState(msgs, s.messages, s.assistantRenderId)
     // Clear "sending" queue items whose text now appears in the message list
     const queuedMessages = s.queuedMessages.filter((item) => {
       if (!item.sending) return true
-      if (next.messages.some((m) => m.role === 'user' && m.text === item.text)) return false
-      if (Date.now() - item.queuedAt > 15_000) return false
+      if (next.messages.some((message) => matchesPersistedQueuedMessage(message, item))) return false
+      if (Date.now() - item.queuedAt > SENDING_ITEM_TIMEOUT_MS) return false
       return true
     })
     const patch: Partial<ChatState> = {
@@ -217,9 +246,29 @@ export const useChatStore = create<ChatState>((set, get) => ({
       assistantRenderId: next.assistantRenderId,
       queuedMessages,
     }
+    if (typeof options?.startIndex === 'number' && Number.isFinite(options.startIndex)) {
+      patch.messageStartIndex = Math.max(0, Math.trunc(options.startIndex))
+    } else if (next.messages.length === 0) {
+      patch.messageStartIndex = 0
+    }
     if (s.toolEvents.length > 0) patch.toolEvents = []
-    if (s.hasMoreMessages) patch.hasMoreMessages = false
-    if (s.totalMessages !== next.messages.length) patch.totalMessages = next.messages.length
+    if (next.messages.length === 0) {
+      patch.hasMoreMessages = false
+    } else if (
+      typeof options?.startIndex === 'number'
+      && Number.isFinite(options.startIndex)
+      && Math.trunc(options.startIndex) === 0
+      && typeof options?.totalMessages === 'number'
+      && Number.isFinite(options.totalMessages)
+      && Math.max(0, Math.trunc(options.totalMessages)) === next.messages.length
+    ) {
+      patch.hasMoreMessages = false
+    }
+    if (typeof options?.totalMessages === 'number' && Number.isFinite(options.totalMessages)) {
+      patch.totalMessages = Math.max(0, Math.trunc(options.totalMessages))
+    } else if (next.messages.length === 0 && s.totalMessages !== 0) {
+      patch.totalMessages = 0
+    }
     return patch
   }),
   toolEvents: [],
@@ -253,8 +302,8 @@ export const useChatStore = create<ChatState>((set, get) => ({
       const messages = s.messages
       const cleaned = next.filter((item) => {
         if (!item.sending || item.sessionId !== sessionId) return true
-        if (messages.some((m) => m.role === 'user' && m.text === item.text)) return false
-        if (Date.now() - item.queuedAt > 15_000) return false
+        if (messages.some((message) => matchesPersistedQueuedMessage(message, item))) return false
+        if (Date.now() - item.queuedAt > SENDING_ITEM_TIMEOUT_MS) return false
         return true
       })
       return { queuedMessages: cleaned }
@@ -675,7 +724,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       if (msgsRes.ok) {
         const msgs = await msgsRes.json()
-        get().setMessages(msgs)
+        get().setMessages(msgs, { startIndex: 0, totalMessages: msgs.length })
       }
       // Re-send with the new text
       await get().sendMessage(newText)
@@ -703,7 +752,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
       if (msgsRes.ok) {
         const msgs = await msgsRes.json()
-        get().setMessages(msgs)
+        get().setMessages(msgs, { startIndex: 0, totalMessages: msgs.length })
       }
       // Re-send the last user message through the normal SSE flow
       if (imagePath) {
@@ -817,15 +866,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadingMore: false,
   totalMessages: 0,
   loadMoreMessages: async () => {
-    const { messages, loadingMore, hasMoreMessages, totalMessages } = get()
+    const { loadingMore, hasMoreMessages, messageStartIndex } = get()
     if (loadingMore || !hasMoreMessages) return
     const sessionId = selectActiveSessionId(useAppStore.getState())
     if (!sessionId) return
     set({ loadingMore: true })
     try {
       const key = getStoredAccessKey()
-      // Find the earliest message's original index (startIndex tracked on initial load)
-      const currentStartIndex = totalMessages - messages.length
+      const currentStartIndex = messageStartIndex
       const res = await fetch(`/api/chats/${sessionId}/messages?limit=100&before=${currentStartIndex}`, {
         headers: key ? { 'X-Access-Key': key } : undefined,
       })
@@ -840,6 +888,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return {
             messages: next.messages,
             assistantRenderId: next.assistantRenderId,
+            messageStartIndex: data.startIndex,
             hasMoreMessages: data.hasMore,
             totalMessages: data.total,
             loadingMore: false,

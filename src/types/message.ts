@@ -19,6 +19,7 @@ export interface MessageSemanticsSummary {
   isDeliverableTask: boolean
   isBroadGoal: boolean
   isResearchSynthesis: boolean
+  isLightweightDirectChat?: boolean
   hasHumanSignals: boolean
   hasSignificantEvent: boolean
   wantsScreenshots?: boolean

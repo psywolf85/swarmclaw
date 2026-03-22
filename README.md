@@ -190,6 +190,20 @@ The building blocks are the same: **agents, tools, memory, delegation, schedules
 
 ## Release Notes
 
+### v1.2.7 Highlights
+
+- **Tool primitives**: consolidated 50+ narrow tools into 6 action-based primitives — `execute`, `files`, `memory`, `platform`, `skills`, and `credential-env` — with skill teach files so agents learn usage patterns on demand.
+- **Type system decomposition**: split the monolithic 3500-line types file into 16 focused domain modules (`agent.ts`, `session.ts`, `message.ts`, `run.ts`, etc.) with full backward-compatible re-exports.
+- **Lightweight direct chat**: message classifier detects simple conversational turns and fast-paths them with minimal prompt assembly and reduced thinking budget.
+- **Prompt mode resolution**: root sessions receive full system prompts while delegated and lightweight turns get streamlined minimal prompts.
+- **Execute tool config UI**: inspector panel now has separate configuration sections for the execute tool (sandbox/host backend, network, timeout) and browser sandbox.
+- **Chat store pagination**: proper `messageStartIndex` tracking, improved queued-message deduplication, and active-turn transcript merging.
+- **Per-session WebSocket notifications**: message mutations now broadcast to session-specific topics for more targeted UI updates.
+- **Tool capability policy refactoring**: consolidated matching logic with extension ID canonicalization for reliable policy resolution.
+- **Validation schemas**: new `AgentExecuteConfigSchema` for Zod-based execute config validation.
+- **Bug fix — custom provider resolution**: fixed "Unknown provider" error when using custom providers in chat execution.
+- **Lint baseline maintained** at 364 violations (no regressions).
+
 ### v1.2.5 Highlights
 
 - **Working memory hierarchy**: agents maintain structured working state (facts, plans, decisions, blockers, evidence) that persists across turns and survives context compaction.
@@ -236,22 +250,6 @@ The building blocks are the same: **agents, tools, memory, delegation, schedules
 - **SKILL.md v2.0.0**: comprehensive CLI documentation covering 40+ command groups with examples and usage patterns.
 - **New dev scripts**: added `type-check`, `test`, and `format` scripts to `package.json` for streamlined development workflows.
 
-### v1.1.9 Highlights
-
-- **Docker build stability**: limit Next.js page data workers to 1 in build mode to prevent `SQLITE_BUSY` contention.
-- **Async file I/O in providers**: Anthropic and OpenAI providers now use `fs.promises` for non-blocking attachment reads.
-- **Anthropic request timeout**: 60s timeout on Anthropic API requests prevents indefinite hangs.
-- **Graceful crash handling**: instrumentation now catches EPIPE and suppresses expected LangGraph unhandled rejections.
-- **Log tail optimization**: `/api/logs` reads only the last 256 KB instead of loading the entire log file.
-- **Thread session fast path**: `ensureAgentThreadSession` uses single-row lookup instead of full table scan when `threadSessionId` is set.
-- **Memory graph performance**: force-directed simulation writes to DOM imperatively instead of re-rendering React state per frame; stops when kinetic energy settles.
-- **Reduced polling frequency**: chat area WS polling intervals relaxed (messages/runs 2s to 10s, browser 5s to 30s) to lower server load.
-- **Chat list indexing**: connector lookup indexed by `agentId` for O(1) instead of O(n) per session filter.
-- **Sidebar skill badges**: skill draft count displayed as a badge on the Skills nav item.
-- **Route loading states**: added `loading.tsx` skeleton pages for activity, home, logs, memory, and tasks routes.
-- **Command palette cleanup**: fixed missing `setOpen` dependencies and removed unused props.
-- **Playwright proxy hardening**: improved stdio pipe handling for dev server restarts.
-- **Scheduler and run ledger fixes**: improved scheduler reliability and run ledger state tracking.
 
 ## What SwarmClaw Focuses On
 
@@ -350,7 +348,7 @@ Then open `http://localhost:3456`.
 
 - Node.js 22.6+
 - npm 10+ or another supported package manager
-- Docker Desktop is recommended for sandbox/browser execution
+- Docker Desktop is recommended for sandbox browser execution
 - Optional provider CLIs if you want delegated CLI backends such as Claude Code, Codex, OpenCode, or Gemini
 
 ## Security Notes

@@ -21,22 +21,15 @@ import { normalizeToolInputArgs } from './normalize-tool-args'
 import { buildCredentialEnv, redactSecrets } from './credential-env'
 import type { ToolBuildContext } from './context'
 import { truncate, MAX_OUTPUT } from './context'
+import {
+  DEFAULT_AGENT_EXECUTE_CONFIG,
+  normalizeAgentExecuteConfig,
+  type AgentExecuteConfig,
+} from '@/lib/agent-execute-defaults'
 
 const TAG = 'execute'
 
-/** Agent-level configuration for the execute tool */
-export interface ExecuteConfig {
-  backend: 'sandbox' | 'host'
-  network?: { enabled: boolean; allowedUrls?: string[] }
-  runtimes?: { python?: boolean; javascript?: boolean; sqlite?: boolean }
-  timeout?: number
-  credentials?: string[]
-}
-
-const DEFAULT_EXECUTE_CONFIG: ExecuteConfig = {
-  backend: 'sandbox',
-  timeout: 30,
-}
+export type ExecuteConfig = AgentExecuteConfig
 
 // ---------------------------------------------------------------------------
 // Sandbox backend — just-bash with OverlayFS
@@ -56,7 +49,7 @@ async function executeSandbox(
     mountPoint: '/workspace',
   })
 
-  const timeoutMs = (config.timeout ?? 30) * 1000
+  const timeoutMs = (config.timeout ?? DEFAULT_AGENT_EXECUTE_CONFIG.timeout ?? 30) * 1000
 
   // Build credential env vars
   const { env: credEnv, secrets } = buildCredentialEnv(config.credentials ?? [])
@@ -130,7 +123,7 @@ async function executeSandbox(
     clearTimeout(timer)
     const msg = errorMessage(err)
     if (msg.includes('abort') || msg.includes('cancel') || msg.includes('Timeout')) {
-      return { stdout: '', stderr: `Execution timed out after ${config.timeout ?? 30}s`, exit_code: 124 }
+      return { stdout: '', stderr: `Execution timed out after ${config.timeout ?? DEFAULT_AGENT_EXECUTE_CONFIG.timeout ?? 30}s`, exit_code: 124 }
     }
     return { stdout: '', stderr: `Execution error: ${redactSecrets(msg, secrets)}`, exit_code: 1 }
   }
@@ -149,7 +142,7 @@ async function executeHost(
   cwd: string,
   config: ExecuteConfig,
 ): Promise<{ stdout: string; stderr: string; exit_code: number }> {
-  const timeoutMs = (config.timeout ?? 30) * 1000
+  const timeoutMs = (config.timeout ?? DEFAULT_AGENT_EXECUTE_CONFIG.timeout ?? 30) * 1000
 
   // Build credential env vars
   const { env: credEnv, secrets } = buildCredentialEnv(config.credentials ?? [])
@@ -222,15 +215,16 @@ async function executeAction(
     return 'Error: `code` parameter is required. Provide the bash script to execute.'
   }
 
-  const config: ExecuteConfig = {
-    ...DEFAULT_EXECUTE_CONFIG,
-    ...ctx.executeConfig,
-  }
+  const config = normalizeAgentExecuteConfig(ctx.executeConfig)
 
   const persistent = normalized.persistent === true
   const timeoutOverride = typeof normalized.timeout === 'number' ? normalized.timeout : undefined
   if (timeoutOverride) {
     config.timeout = Math.min(Math.max(timeoutOverride, 1), 300) // Clamp 1-300s
+  }
+
+  if (persistent && config.backend !== 'host') {
+    return 'Error: `persistent=true` requires `executeConfig.backend = "host"` for this agent.'
   }
 
   log.info(TAG, `Executing code (backend=${config.backend}, persistent=${persistent})`, {
@@ -242,7 +236,7 @@ async function executeAction(
   try {
     let result: { stdout: string; stderr: string; exit_code: number }
 
-    if (config.backend === 'host' || persistent) {
+    if (config.backend === 'host') {
       // Host backend for persistent mode or explicit host config
       result = await executeHost(code, ctx.cwd, config)
     } else {
@@ -289,7 +283,7 @@ const ExecuteExtension: Extension = {
         'Execute a bash script. Supports curl, jq, awk, sed, grep, and 70+ Unix commands. ' +
         'Credentials are injected as environment variables (e.g., $API_KEY). ' +
         'By default runs sandboxed — workspace files are readable, writes stay in memory. ' +
-        'Set persistent=true for real filesystem writes (if the agent has host access).',
+        'Set persistent=true for real filesystem writes only when the agent is configured for host execution.',
       parameters: {
         type: 'object',
         properties: {
@@ -319,10 +313,7 @@ export function buildExecuteTools(bctx: ToolBuildContext) {
   // Resolve execute config from the agent
   const session = bctx.resolveCurrentSession?.()
   const agent = session?.agent as (Agent & { executeConfig?: ExecuteConfig }) | undefined
-  const executeConfig: ExecuteConfig = {
-    ...DEFAULT_EXECUTE_CONFIG,
-    ...agent?.executeConfig,
-  }
+  const executeConfig = normalizeAgentExecuteConfig(agent?.executeConfig)
 
   return [
     tool(

@@ -10,6 +10,7 @@ import { selectActiveSessionId } from '@/stores/slices/session-slice'
 import { api } from '@/lib/app/api-client'
 import { buildStreamingAwareMessageList } from '@/lib/chat/chat-streaming-state'
 import { dedupeMessagesForDisplay } from '@/lib/chat/chat-display'
+import { mergeQueuedTranscriptMessages } from '@/lib/chat/queued-message-queue'
 import { shouldShowDateSeparator } from '@/lib/chat/message-list-utils'
 import { errorMessage } from '@/lib/shared-utils'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
@@ -190,7 +191,9 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const assistantRenderId = useChatStore((s) => s.assistantRenderId)
   const thinkingStartTime = useChatStore((s) => s.thinkingStartTime)
   const hasLiveArtifacts = useChatStore(selectHasLiveArtifacts)
+  const messageStartIndex = useChatStore((s) => s.messageStartIndex)
   const setMessages = useChatStore((s) => s.setMessages)
+  const queuedMessages = useChatStore((s) => s.queuedMessages)
   const retryLastMessage = useChatStore((s) => s.retryLastMessage)
   const editAndResend = useChatStore((s) => s.editAndResend)
   const sendMessage = useChatStore((s) => s.sendMessage)
@@ -234,20 +237,23 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   // Use refs for callbacks so transcriptNodes memo doesn't bust on every messages change
   const messagesCallbackRef = useRef(messages)
   messagesCallbackRef.current = messages
+  const messageStartIndexRef = useRef(messageStartIndex)
+  messageStartIndexRef.current = messageStartIndex
   const sessionIdRef = useRef(sessionId)
   sessionIdRef.current = sessionId
 
-  const toggleBookmark = useCallback(async (index: number) => {
+  const toggleBookmark = useCallback(async (absoluteIndex: number) => {
     const sid = sessionIdRef.current
     const msgs = messagesCallbackRef.current
+    const localIndex = absoluteIndex - messageStartIndexRef.current
     if (!sid) return
-    const msg = msgs[index]
+    const msg = msgs[localIndex]
     if (!msg) return
     const next = !msg.bookmarked
     try {
-      await api('PUT', `/chats/${sid}/messages`, { messageIndex: index, bookmarked: next })
+      await api('PUT', `/chats/${sid}/messages`, { messageIndex: absoluteIndex, bookmarked: next })
       const updated = [...msgs]
-      updated[index] = { ...updated[index], bookmarked: next }
+      updated[localIndex] = { ...updated[localIndex], bookmarked: next }
       setMessages(updated)
     } catch (err: unknown) {
       console.error('Failed to toggle bookmark:', errorMessage(err))
@@ -298,21 +304,26 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
     return dedupeMessagesForDisplay(displayedMessages)
   }, [messages, showAlerts, showOk])
 
+  const displayedMessages = useMemo(
+    () => mergeQueuedTranscriptMessages(baseDisplayedMessages, queuedMessages, sessionId),
+    [baseDisplayedMessages, queuedMessages, sessionId],
+  )
+
   const latestPersistedStreamingMessage = useMemo(() => {
-    for (let i = baseDisplayedMessages.length - 1; i >= 0; i -= 1) {
-      const candidate = baseDisplayedMessages[i]
+    for (let i = displayedMessages.length - 1; i >= 0; i -= 1) {
+      const candidate = displayedMessages[i]
       if (candidate.role === 'assistant' && candidate.streaming === true) {
         return candidate
       }
     }
     return null
-  }, [baseDisplayedMessages])
+  }, [displayedMessages])
 
   const currentRunHasCompletedAssistant = useMemo(
     () => (
       streaming
       && thinkingStartTime > 0
-      && baseDisplayedMessages.some((message) => (
+      && displayedMessages.some((message) => (
         message.role === 'assistant'
         && message.streaming !== true
         && message.kind !== 'system'
@@ -321,7 +332,7 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
         && message.time >= thinkingStartTime
       ))
     ),
-    [baseDisplayedMessages, streaming, thinkingStartTime],
+    [displayedMessages, streaming, thinkingStartTime],
   )
 
   const showLiveStreamRow = streaming
@@ -330,14 +341,14 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
     && (hasLiveArtifacts || !!latestPersistedStreamingMessage)
 
   const streamingAwareMessages = useMemo(() => (
-    buildStreamingAwareMessageList(baseDisplayedMessages, {
+    buildStreamingAwareMessageList(displayedMessages, {
       localStreaming: streaming,
       hasLiveArtifacts,
       assistantRenderId,
       showLiveRow: showLiveStreamRow,
       syntheticAssistant: latestPersistedStreamingMessage,
     })
-  ), [assistantRenderId, baseDisplayedMessages, hasLiveArtifacts, latestPersistedStreamingMessage, showLiveStreamRow, streaming])
+  ), [assistantRenderId, displayedMessages, hasLiveArtifacts, latestPersistedStreamingMessage, showLiveStreamRow, streaming])
 
   const filteredMessages = useMemo(() => {
     let nextMessages = bookmarkFilter
@@ -367,23 +378,26 @@ export function MessageList({ messages, streaming, connectorFilter = null, loadi
   const originalIndexMap = useMemo(() => {
     const indexMap = new Map<Message, number>()
     messages.forEach((msg, index) => {
-      indexMap.set(msg, index)
+      indexMap.set(msg, messageStartIndex + index)
     })
     return indexMap
-  }, [messages])
+  }, [messageStartIndex, messages])
 
-  const handleDeleteMessage = useCallback(async (messageIndex: number) => {
+  const handleDeleteMessage = useCallback(async (absoluteIndex: number) => {
     const sid = sessionIdRef.current
     const msgs = messagesCallbackRef.current
-    if (!sid || messageIndex < 0) return
+    const localIndex = absoluteIndex - messageStartIndexRef.current
+    if (!sid || absoluteIndex < 0 || localIndex < 0) return
     try {
-      await api('DELETE', `/chats/${sid}/messages`, { messageIndex })
-      setMessages(msgs.filter((_: Message, idx: number) => idx !== messageIndex))
+      await api('DELETE', `/chats/${sid}/messages`, { messageIndex: absoluteIndex })
+      setMessages(
+        msgs.filter((_: Message, idx: number) => idx !== localIndex),
+        { totalMessages: Math.max(0, totalMessages - 1) },
+      )
     } catch {
       // best-effort
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [setMessages, totalMessages])
 
   // Snapshot the settled count at memo time so it's captured in the closure.
   // Messages up to this count appear instantly; only new ones get entrance animations.

@@ -107,6 +107,11 @@ function syncSessionMeta(sessionId: string): void {
   })
 }
 
+function notifyMessageTopics(sessionId: string, action: string): void {
+  notify('messages', action, sessionId)
+  notify(`messages:${sessionId}`, action)
+}
+
 // ---------------------------------------------------------------------------
 // Lazy migration — copies blob messages → table on first access
 // ---------------------------------------------------------------------------
@@ -229,7 +234,7 @@ export function appendMessage(sessionId: string, message: Message): number {
     const seq = nextSeq(sessionId)
     stmts().insert.run(sessionId, seq, JSON.stringify(message))
     syncSessionMeta(sessionId)
-    notify('messages', 'append', sessionId)
+    notifyMessageTopics(sessionId, 'append')
     return seq
   }, { sessionId })
 }
@@ -247,7 +252,7 @@ export function appendMessages(sessionId: string, messages: Message[]): void {
       }
     })
     syncSessionMeta(sessionId)
-    notify('messages', 'append', sessionId)
+    notifyMessageTopics(sessionId, 'append')
   }, { sessionId, count: messages.length })
 }
 
@@ -256,7 +261,7 @@ export function replaceMessageAt(sessionId: string, seq: number, message: Messag
   perf.measureSync('message-repo', 'replaceMessageAt', () => {
     stmts().update.run(JSON.stringify(message), sessionId, seq)
     syncSessionMeta(sessionId)
-    notify('messages', 'update', sessionId)
+    notifyMessageTopics(sessionId, 'update')
   }, { sessionId, seq })
 }
 
@@ -265,7 +270,7 @@ export function truncateAfter(sessionId: string, seq: number): void {
   perf.measureSync('message-repo', 'truncateAfter', () => {
     stmts().deleteAfter.run(sessionId, seq)
     syncSessionMeta(sessionId)
-    notify('messages', 'truncate', sessionId)
+    notifyMessageTopics(sessionId, 'truncate')
   }, { sessionId, seq })
 }
 
@@ -274,7 +279,7 @@ export function clearMessages(sessionId: string): void {
   perf.measureSync('message-repo', 'clearMessages', () => {
     stmts().deleteAll.run(sessionId)
     syncSessionMeta(sessionId)
-    notify('messages', 'clear', sessionId)
+    notifyMessageTopics(sessionId, 'clear')
   }, { sessionId })
 }
 
@@ -289,7 +294,7 @@ export function replaceAllMessages(sessionId: string, messages: Message[]): void
       }
     })
     syncSessionMeta(sessionId)
-    notify('messages', 'replace', sessionId)
+    notifyMessageTopics(sessionId, 'replace')
   }, { sessionId, count: messages.length })
 }
 

@@ -1,4 +1,4 @@
-import type { SessionQueueSnapshot, SessionQueuedTurn } from '@/types'
+import type { Message, SessionQueueSnapshot, SessionQueuedTurn } from '@/types'
 
 export interface QueuedSessionMessage extends SessionQueuedTurn {
   optimistic?: boolean
@@ -38,7 +38,23 @@ export function createOptimisticQueuedMessage(
 }
 
 export function snapshotToQueuedMessages(snapshot: SessionQueueSnapshot): QueuedSessionMessage[] {
-  return snapshot.items.map((item) => ({ ...item }))
+  const activeRunId = typeof snapshot.activeRunId === 'string' && snapshot.activeRunId.trim()
+    ? snapshot.activeRunId
+    : null
+  const nextItems: QueuedSessionMessage[] = []
+  if (snapshot.activeTurn && activeRunId && snapshot.activeTurn.runId === activeRunId) {
+    nextItems.push({
+      ...snapshot.activeTurn,
+      sending: true,
+    })
+  }
+  const seenRunIds = new Set(nextItems.map((item) => item.runId))
+  for (const item of snapshot.items) {
+    if (seenRunIds.has(item.runId)) continue
+    nextItems.push({ ...item })
+    seenRunIds.add(item.runId)
+  }
+  return nextItems
 }
 
 interface ReplaceQueuedMessagesOptions {
@@ -60,11 +76,17 @@ export function replaceQueuedMessagesForSession(
   const activeRunId = typeof options.activeRunId === 'string' && options.activeRunId.trim()
     ? options.activeRunId
     : null
+  // Preserve existing "sending" items not covered by the new snapshot —
+  // they'll be cleaned up later by setMessages or the timeout.
+  const existingSending = queue.filter((item) =>
+    item.sessionId === sessionId && item.sending && !nextRunIds.has(item.runId),
+  )
   const consumed = previousForSession
     .filter((item) => !item.optimistic && !nextRunIds.has(item.runId) && activeRunId === item.runId)
     .map((item) => ({ ...item, sending: true }))
   return [
     ...otherSessions,
+    ...existingSending,
     ...consumed,
     ...nextItems,
   ]
@@ -78,6 +100,59 @@ export function listQueuedMessagesForSession(
   return queue
     .filter((item) => item.sessionId === sessionId)
     .sort((left, right) => left.position - right.position || left.queuedAt - right.queuedAt)
+}
+
+export function buildQueuedTranscriptMessages(
+  queue: QueuedSessionMessage[],
+  sessionId: string | null | undefined,
+): Message[] {
+  return listQueuedMessagesForSession(queue, sessionId)
+    .filter((item) => item.sending === true)
+    .map((item) => ({
+      role: 'user',
+      text: item.text,
+      time: item.queuedAt,
+      kind: 'chat',
+      clientRenderId: `queued:${item.runId}`,
+      imagePath: item.imagePath,
+      imageUrl: item.imageUrl,
+      attachedFiles: item.attachedFiles,
+      replyToId: item.replyToId,
+      runId: item.runId,
+    }))
+}
+
+export function mergeQueuedTranscriptMessages(
+  messages: Message[],
+  queue: QueuedSessionMessage[],
+  sessionId: string | null | undefined,
+): Message[] {
+  const queuedTranscript = buildQueuedTranscriptMessages(queue, sessionId)
+  if (queuedTranscript.length === 0) return messages
+  const merged = [...messages]
+  for (const queuedMessage of queuedTranscript) {
+    const queuedRunId = typeof queuedMessage.runId === 'string' && queuedMessage.runId.trim()
+      ? queuedMessage.runId
+      : null
+    if (queuedRunId && merged.some((message) => message.role === 'user' && message.runId === queuedRunId)) {
+      continue
+    }
+    // Place queued user message before its corresponding assistant response
+    // (same runId), otherwise append after the last persisted message.
+    const sameRunAssistantIndex = queuedRunId
+      ? merged.findIndex((msg) => msg.role === 'assistant' && msg.runId === queuedRunId)
+      : -1
+    if (sameRunAssistantIndex >= 0) {
+      merged.splice(sameRunAssistantIndex, 0, queuedMessage)
+    } else {
+      const lastPersistedIndex = merged.findLastIndex(
+        (msg) => !msg.clientRenderId?.startsWith('queued:'),
+      )
+      const insertAt = lastPersistedIndex >= 0 ? lastPersistedIndex + 1 : merged.length
+      merged.splice(insertAt, 0, queuedMessage)
+    }
+  }
+  return merged
 }
 
 export function removeQueuedMessageById(

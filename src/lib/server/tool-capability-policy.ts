@@ -1,5 +1,6 @@
 import type { AppSettings } from '@/types'
 import { dedup } from '@/lib/shared-utils'
+import { canonicalizeExtensionId } from './tool-aliases'
 
 export type CapabilityPolicyMode = 'permissive' | 'balanced' | 'strict'
 
@@ -37,6 +38,7 @@ interface ToolDescriptor {
 
 const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   shell: { categories: ['execution'], concreteTools: ['shell', 'execute_command'] },
+  execute: { categories: ['execution'], concreteTools: ['execute'] },
   process: { categories: ['execution'], concreteTools: ['process', 'process_tool'] },
   files: { categories: ['filesystem'], concreteTools: ['files', 'read_file', 'write_file', 'list_files', 'send_file'] },
   read_file: { categories: ['filesystem'], concreteTools: ['read_file'] },
@@ -57,7 +59,6 @@ const TOOL_DESCRIPTORS: Record<string, ToolDescriptor> = {
   opencode_cli: { categories: ['delegation', 'execution'], concreteTools: ['delegate_to_opencode_cli'] },
   gemini_cli: { categories: ['delegation', 'execution'], concreteTools: ['delegate_to_gemini_cli'] },
   memory: { categories: ['memory'], concreteTools: ['memory', 'memory_tool', 'memory_search', 'memory_get', 'memory_store', 'memory_update', 'context_status', 'context_summarize'] },
-  // sandbox_exec/sandbox_list_runtimes routed through shell; git uses shell
   // http_request consolidated into web 'api' action — no separate descriptor
   canvas: { categories: ['filesystem'], concreteTools: ['canvas'] },
   wallet: { categories: ['outbound'], concreteTools: ['wallet', 'wallet_tool'] },
@@ -118,6 +119,55 @@ function normalizeList(value: unknown): string[] {
   return dedup(names)
 }
 
+function getDescriptor(toolName: string): ToolDescriptor | undefined {
+  const normalized = normalizeName(toolName)
+  if (!normalized) return undefined
+  return TOOL_DESCRIPTORS[normalized] || TOOL_DESCRIPTORS[normalizeName(canonicalizeExtensionId(normalized))]
+}
+
+function addComparableName(names: Set<string>, value: string | null | undefined): void {
+  const normalized = normalizeName(value)
+  if (!normalized) return
+  names.add(normalized)
+  const canonical = normalizeName(canonicalizeExtensionId(normalized))
+  if (canonical) names.add(canonical)
+  for (const mappedTool of CONCRETE_TOOL_TO_SESSION_TOOLS.get(normalized) || []) {
+    names.add(mappedTool)
+  }
+}
+
+function collectRequestedExtensionNames(toolName: string, descriptor?: ToolDescriptor): string[] {
+  const names = new Set<string>()
+  addComparableName(names, toolName)
+  for (const concreteName of descriptor?.concreteTools || []) {
+    addComparableName(names, concreteName)
+  }
+  return Array.from(names)
+}
+
+function entryMatchesSessionTool(entry: string, sessionTool: string): boolean {
+  const normalizedEntry = normalizeName(entry)
+  const normalizedTool = normalizeName(sessionTool)
+  if (!normalizedEntry || !normalizedTool) return false
+  if (normalizedEntry === normalizedTool) return true
+  if (!CONCRETE_TOOL_TO_SESSION_TOOLS.has(normalizedEntry)) {
+    return normalizeName(canonicalizeExtensionId(normalizedEntry)) === normalizedTool
+  }
+  return false
+}
+
+function matchesConcreteToolSetting(configuredNames: Set<string>, concreteToolName: string): boolean {
+  const normalizedName = normalizeName(concreteToolName)
+  if (!normalizedName || configuredNames.size === 0) return false
+  if (configuredNames.has(normalizedName)) return true
+  for (const sessionTool of CONCRETE_TOOL_TO_SESSION_TOOLS.get(normalizedName) || []) {
+    for (const entry of configuredNames) {
+      if (entryMatchesSessionTool(entry, sessionTool)) return true
+    }
+  }
+  return false
+}
+
 function getSettingsList(settings: Record<string, unknown>, key: string): string[] {
   return normalizeList(settings[key])
 }
@@ -138,29 +188,11 @@ function modeBlocksTool(mode: CapabilityPolicyMode, toolName: string, descriptor
 }
 
 function safetyMatchesTool(safetyBlocked: Set<string>, toolName: string, descriptor?: ToolDescriptor): boolean {
-  if (safetyBlocked.has(toolName)) return true
-  if (!descriptor) return false
-  for (const concreteName of descriptor.concreteTools) {
-    if (safetyBlocked.has(concreteName)) return true
-  }
-  if (toolName === 'memory' && safetyBlocked.has('memory_tool')) return true
-  if (toolName === 'manage_connectors' && safetyBlocked.has('connector_message_tool')) return true
-  if (toolName === 'manage_sessions' && (
-    safetyBlocked.has('sessions_tool')
-    || safetyBlocked.has('search_history_tool')
-    || safetyBlocked.has('whoami_tool')
-  )) return true
-  if (toolName === 'claude_code' && safetyBlocked.has('delegate_to_claude_code')) return true
-  if (toolName === 'codex_cli' && safetyBlocked.has('delegate_to_codex_cli')) return true
-  if (toolName === 'opencode_cli' && safetyBlocked.has('delegate_to_opencode_cli')) return true
-  if (toolName === 'gemini_cli' && safetyBlocked.has('delegate_to_gemini_cli')) return true
-  return false
+  return collectRequestedExtensionNames(toolName, descriptor).some((name) => safetyBlocked.has(name))
 }
 
 function policyMatchesTool(blockedNames: Set<string>, toolName: string, descriptor?: ToolDescriptor): boolean {
-  if (blockedNames.has(toolName)) return true
-  if (!descriptor) return false
-  return descriptor.concreteTools.some((concreteName) => blockedNames.has(concreteName))
+  return collectRequestedExtensionNames(toolName, descriptor).some((name) => blockedNames.has(name))
 }
 
 function categoryBlockReason(blockedCategories: Set<string>, descriptor?: ToolDescriptor): string | null {
@@ -232,7 +264,7 @@ export function resolveSessionToolPolicy(
   const blockedExtensions: CapabilityPolicyBlock[] = []
 
   for (const extensionName of requestedExtensions) {
-    const descriptor = TOOL_DESCRIPTORS[extensionName]
+    const descriptor = getDescriptor(extensionName)
     const settingsReason = settingsBlockReason(extensionName, normalizedSettings)
 
     if (settingsReason) {
@@ -296,24 +328,19 @@ export function resolveConcreteToolPolicyBlock(
 
   if (settingsReason) return settingsReason
 
-  if (safetyBlocked.has(name)) return 'blocked by safety policy'
-
   const mappedTools = CONCRETE_TOOL_TO_SESSION_TOOLS.get(name) || []
-  const safetyBlockedFamily = mappedTools.find((tool) => safetyBlocked.has(tool))
-  if (safetyBlockedFamily) return `blocked because "${safetyBlockedFamily}" is safety-blocked`
-
-  if (policyBlockedNames.has(name)) return 'blocked by explicit policy rule'
-  const policyBlockedFamily = mappedTools.find((tool) => policyBlockedNames.has(tool) && !policyAllowedNames.has(tool))
-  if (policyBlockedFamily) {
-    return `blocked because "${policyBlockedFamily}" is policy-blocked`
+  if (matchesConcreteToolSetting(safetyBlocked, name)) return 'blocked by safety policy'
+  const explicitlyAllowed = matchesConcreteToolSetting(policyAllowedNames, name)
+  if (matchesConcreteToolSetting(policyBlockedNames, name) && !explicitlyAllowed) {
+    return 'blocked by explicit policy rule'
   }
 
   if (mappedTools.length > 0) {
-    const enabledRoot = mappedTools.find((tool) => decision.enabledExtensions.includes(tool))
+    const enabledRoot = mappedTools.find((tool) => decision.enabledExtensions.some((entry) => entryMatchesSessionTool(entry, tool)))
     if (enabledRoot) return null
 
     const blockedRoot = mappedTools
-      .map((tool) => decision.blockedExtensions.find((entry) => entry.tool === tool))
+      .map((tool) => decision.blockedExtensions.find((entry) => entryMatchesSessionTool(entry.tool, tool)))
       .find(Boolean)
     if (blockedRoot) return blockedRoot.reason
 

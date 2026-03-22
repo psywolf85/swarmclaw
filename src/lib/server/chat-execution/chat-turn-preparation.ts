@@ -76,6 +76,7 @@ import {
 import { checkAgentBudgetLimits } from '@/lib/server/cost'
 import {
   classifyMessage,
+  type MessageClassification,
   toMessageSemanticsSummary,
 } from '@/lib/server/chat-execution/message-classifier'
 import {
@@ -87,6 +88,7 @@ import {
 } from '@/lib/server/chat-execution/chat-execution-utils'
 import { loadEstopState } from '@/lib/server/runtime/estop'
 import { buildToolSection, joinPromptSegments } from '@/lib/server/chat-execution/prompt-builder'
+import { resolvePromptMode, type PromptMode } from '@/lib/server/chat-execution/prompt-mode'
 import { isDirectConnectorSession } from '@/lib/server/connectors/session-kind'
 import type { ExecuteChatTurnInput } from '@/lib/server/chat-execution/chat-execution'
 
@@ -320,13 +322,17 @@ function buildLightHeartbeatSystemPrompt(session: Session): string | undefined {
   return parts.join('\n\n')
 }
 
-function buildAgentSystemPrompt(session: Session): string | undefined {
+function buildAgentSystemPrompt(
+  session: Session,
+  options?: { lightweightDirectChat?: boolean },
+): string | undefined {
   if (!session.agentId) return undefined
   const agent = getAgent(session.agentId)
   if (!agent) return undefined
 
   const settings = loadSettings()
   const allowSilentReplies = isDirectConnectorSession(session)
+  const lightweightDirectChat = options?.lightweightDirectChat === true
   const parts: string[] = []
   const enabledExtensions = listUniversalToolAccessExtensionIds(
     getEnabledCapabilityIds(session).length > 0 ? getEnabledCapabilityIds(session) : getEnabledCapabilityIds(agent),
@@ -341,7 +347,7 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   if (agent.description) identityLines.push(`Description: ${agent.description}`)
   identityLines.push('I should always embody this identity. I am not just an "Assistant" — I am a persistent companion with my own soul and presence.')
   parts.push(identityLines.join('\n'))
-  const continuityBlock = buildIdentityContinuityContext(session, agent)
+  const continuityBlock = lightweightDirectChat ? null : buildIdentityContinuityContext(session, agent)
   if (continuityBlock) parts.push(continuityBlock)
 
   const runtimeLines = [
@@ -358,50 +364,57 @@ function buildAgentSystemPrompt(session: Session): string | undefined {
   if (agent.soul) parts.push(`## Soul\n${agent.soul}`)
   if (agent.systemPrompt) parts.push(`## System Prompt\n${agent.systemPrompt}`)
 
-  try {
-    const runtimeSkills = resolveRuntimeSkills({
-      cwd: session.cwd,
-      enabledExtensions,
-      agentId: agent.id,
-      sessionId: session.id,
-      userId: session.user,
-      agentSkillIds: agent.skillIds || [],
-      storedSkills: loadSkills(),
-      selectedSkillId: session.skillRuntimeState?.selectedSkillId || null,
-    })
-    parts.push(...buildRuntimeSkillPromptBlocks(runtimeSkills))
-  } catch {
-    // Runtime skills are non-critical during prompt assembly.
-  }
+  if (!lightweightDirectChat) {
+    try {
+      const runtimeSkills = resolveRuntimeSkills({
+        cwd: session.cwd,
+        enabledExtensions,
+        agentId: agent.id,
+        sessionId: session.id,
+        userId: session.user,
+        agentSkillIds: agent.skillIds || [],
+        storedSkills: loadSkills(),
+        selectedSkillId: session.skillRuntimeState?.selectedSkillId || null,
+      })
+      parts.push(...buildRuntimeSkillPromptBlocks(runtimeSkills))
+    } catch {
+      // Runtime skills are non-critical during prompt assembly.
+    }
 
-  try {
-    const wsCtx = buildWorkspaceContext({ cwd: session.cwd })
-    if (wsCtx.block) parts.push(wsCtx.block)
-  } catch {
-    // Workspace context is non-critical.
+    try {
+      const wsCtx = buildWorkspaceContext({ cwd: session.cwd })
+      if (wsCtx.block) parts.push(wsCtx.block)
+    } catch {
+      // Workspace context is non-critical.
+    }
   }
 
   const thinkingHint = [
     '## Output Format',
     'If your model supports internal reasoning/thinking, put all internal analysis inside <think>...</think> tags.',
     'Your final response to the user should be clear and concise.',
+    ...(lightweightDirectChat
+      ? ['This is a lightweight direct chat turn. Reply naturally in 1-3 short sentences. Do not delegate, plan, or narrate tools unless the user adds a concrete task that needs that escalation.']
+      : []),
     allowSilentReplies
       ? 'When you truly have nothing to say, respond with ONLY: NO_MESSAGE'
       : 'For direct user chats, always send a visible reply. Never answer with NO_MESSAGE or HEARTBEAT_OK unless this is an explicit heartbeat poll.',
   ]
   parts.push(thinkingHint.join('\n'))
 
-  if (enabledExtensions.length === 0) {
-    parts.push(buildNoToolsGuidance().join('\n'))
-  } else {
-    parts.push(buildEnabledToolsAutonomyGuidance().join('\n'))
+  if (!lightweightDirectChat) {
+    if (enabledExtensions.length === 0) {
+      parts.push(buildNoToolsGuidance().join('\n'))
+    } else {
+      parts.push(buildEnabledToolsAutonomyGuidance().join('\n'))
+    }
+    const toolSectionLines = buildToolSection(enabledExtensions)
+    if (toolSectionLines.length > 0) parts.push(['## Tool Discipline', ...toolSectionLines].join('\n'))
+    const operatingGuidance = collectCapabilityOperatingGuidance(enabledExtensions)
+    if (operatingGuidance.length > 0) parts.push(['## Tool Guidance', ...operatingGuidance].join('\n'))
+    const capabilityLines = collectCapabilityDescriptions(enabledExtensions)
+    if (capabilityLines.length > 0) parts.push(['## Tool Capabilities', ...capabilityLines].join('\n'))
   }
-  const toolSectionLines = buildToolSection(enabledExtensions)
-  if (toolSectionLines.length > 0) parts.push(['## Tool Discipline', ...toolSectionLines].join('\n'))
-  const operatingGuidance = collectCapabilityOperatingGuidance(enabledExtensions)
-  if (operatingGuidance.length > 0) parts.push(['## Tool Guidance', ...operatingGuidance].join('\n'))
-  const capabilityLines = collectCapabilityDescriptions(enabledExtensions)
-  if (capabilityLines.length > 0) parts.push(['## Tool Capabilities', ...capabilityLines].join('\n'))
 
   parts.push([
     '## Heartbeats',
@@ -470,6 +483,8 @@ export interface PreparedExecutableChatTurn {
   runStartedAt: number
   runMessageStartIndex: number
   toolPolicy: ReturnType<typeof resolveSessionToolPolicy>
+  classification: MessageClassification | null
+  promptMode: PromptMode
 }
 
 export type PreparedChatTurn = PreparedBlockedChatTurn | PreparedExecutableChatTurn
@@ -620,6 +635,24 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
     }
   }
 
+  const turnHistory = getMessages(sessionId)
+  const classification = !internal
+    ? await classifyMessage({
+        sessionId,
+        agentId: session.agentId || null,
+        message,
+        history: turnHistory,
+      }).catch(() => null as MessageClassification | null)
+    : null
+  const lightweightDirectChat = classification?.isLightweightDirectChat === true
+    && !internal
+    && source === 'chat'
+    && !isDirectConnectorSession(sessionForRun)
+  const promptMode = resolvePromptMode(sessionForRun, { preferMinimalPrompt: lightweightDirectChat })
+  if (lightweightDirectChat && sessionForRun.thinkingLevel !== 'minimal') {
+    sessionForRun = { ...sessionForRun, thinkingLevel: 'minimal' }
+  }
+
   if (isHeartbeatRun && input.modelOverride) {
     sessionForRun = { ...sessionForRun, model: input.modelOverride }
   }
@@ -632,7 +665,10 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
   if (extensionsForRun.length > 0) {
     const modelResolvePrompt = heartbeatLightContext
       ? (joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), executionBriefContextBlock) || '')
-      : (joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), executionBriefContextBlock) || '')
+      : (joinSystemPromptBlocks(
+          buildAgentSystemPrompt(sessionForRun, { lightweightDirectChat }),
+          executionBriefContextBlock,
+        ) || '')
     const modelResolve = await runCapabilityBeforeModelResolve(
       {
         session: sessionForRun,
@@ -724,14 +760,7 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
   if (shouldPersistUserMessage) {
     const [linkAnalysis, semantics] = await Promise.all([
       !internal ? runLinkUnderstanding(message) : Promise.resolve([]),
-      classifyMessage({
-        sessionId,
-        agentId: session.agentId || null,
-        message,
-        history: getMessages(sessionId),
-      })
-        .then((classification) => toMessageSemanticsSummary(classification))
-        .catch(() => undefined),
+      Promise.resolve(toMessageSemanticsSummary(classification)),
     ])
     const guardedUserText = guardUntrustedText({
       text: message,
@@ -745,6 +774,7 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
         role: 'user',
         text: guardedUserText,
         time: Date.now(),
+        runId: lifecycleRunId,
         imagePath: imagePath || undefined,
         imageUrl: imageUrl || undefined,
         attachedFiles: attachedFiles?.length ? attachedFiles : undefined,
@@ -805,7 +835,12 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
 
   const systemPrompt = heartbeatLightContext
     ? joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), executionBriefContextBlock)
-    : (hasExtensions ? undefined : joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), executionBriefContextBlock))
+    : (hasExtensions
+        ? undefined
+        : joinSystemPromptBlocks(
+            buildAgentSystemPrompt(sessionForRun, { lightweightDirectChat }),
+            executionBriefContextBlock,
+          ))
 
   return {
     kind: 'ready',
@@ -837,5 +872,7 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
     runStartedAt,
     runMessageStartIndex,
     toolPolicy,
+    classification,
+    promptMode,
   }
 }

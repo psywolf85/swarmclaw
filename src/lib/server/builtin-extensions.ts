@@ -1,4 +1,5 @@
 import '@/lib/server/session-tools/shell'
+import '@/lib/server/session-tools/execute'
 import '@/lib/server/session-tools/file'
 import '@/lib/server/session-tools/edit_file'
 import '@/lib/server/session-tools/web'

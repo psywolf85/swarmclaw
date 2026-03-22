@@ -25,7 +25,7 @@ import {
   removeBrowserSessionRecord,
   upsertBrowserSessionRecord,
 } from '../browser-state'
-import { ensureSessionSandbox } from '@/lib/server/sandbox/session-runtime'
+import { resolveSandboxSessionContext } from '@/lib/server/sandbox/session-runtime'
 import {
   destroySandboxBrowser,
   ensureSandboxBrowser,
@@ -328,7 +328,7 @@ export function buildWebTools(bctx: ToolBuildContext): StructuredToolInterface[]
       if (sandboxRuntimePromise) return sandboxRuntimePromise
       sandboxRuntimePromise = (async () => {
         try {
-          const sandbox = await ensureSessionSandbox({
+          const sandbox = resolveSandboxSessionContext({
             config: bctx.sandboxConfig,
             session: currentSession,
             agentId: currentSession.agentId ?? ctx?.agentId ?? null,

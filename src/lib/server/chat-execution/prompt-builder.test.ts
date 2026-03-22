@@ -26,4 +26,32 @@ describe('buildAgenticExecutionPolicy', () => {
     assert.ok(prompt.includes('use the concrete tool now'))
     assert.ok(prompt.includes('prefer the direct `manage_*` tool'))
   })
+
+  it('adds lightweight direct-chat guidance when classification marks the turn as lightweight', () => {
+    const prompt = buildAgenticExecutionPolicy({
+      enabledExtensions: ['memory', 'files', 'delegate'],
+      loopMode: 'bounded',
+      heartbeatPrompt: 'HEARTBEAT',
+      heartbeatIntervalSec: 120,
+      userMessage: 'Hello',
+      history: [],
+      classification: {
+        taskIntent: 'general',
+        isDeliverableTask: false,
+        isBroadGoal: false,
+        isLightweightDirectChat: true,
+        walletIntent: 'none',
+        hasHumanSignals: false,
+        hasSignificantEvent: false,
+        isResearchSynthesis: false,
+        workType: 'general',
+        explicitToolRequests: [],
+        confidence: 0.98,
+      },
+    })
+
+    assert.ok(prompt.includes('## Lightweight Chat'))
+    assert.ok(prompt.includes('Reply naturally and briefly.'))
+    assert.ok(prompt.includes('prefer 1-3 short sentences'))
+  })
 })

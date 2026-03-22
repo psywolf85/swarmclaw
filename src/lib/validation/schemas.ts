@@ -41,6 +41,21 @@ const AgentSandboxConfigSchema = z.object({
   prune: AgentSandboxPruneSchema,
 }).nullable().optional()
 
+const AgentExecuteConfigSchema = z.object({
+  backend: z.enum(['sandbox', 'host']).optional(),
+  network: z.object({
+    enabled: z.boolean(),
+    allowedUrls: z.array(z.string()).optional(),
+  }).optional(),
+  runtimes: z.object({
+    python: z.boolean().optional(),
+    javascript: z.boolean().optional(),
+    sqlite: z.boolean().optional(),
+  }).optional(),
+  timeout: z.number().int().positive().optional(),
+  credentials: z.array(z.string()).optional(),
+}).nullable().optional()
+
 const AgentRoutingTargetSchema = z.object({
   id: z.string().min(1),
   label: z.string().optional(),
@@ -110,6 +125,7 @@ export const AgentCreateSchema = z.object({
   avatarSeed: z.string().optional(),
   avatarUrl: z.string().nullable().optional().default(null),
   sandboxConfig: AgentSandboxConfigSchema,
+  executeConfig: AgentExecuteConfigSchema,
   autoRecovery: z.boolean().optional().default(false),
   monthlyBudget: z.number().positive().nullable().optional().default(null),
   dailyBudget: z.number().positive().nullable().optional().default(null),

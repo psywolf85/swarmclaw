@@ -75,6 +75,7 @@ const nextConfig: NextConfig = {
     '@slack/bolt', '@slack/web-api', '@slack/socket-mode',
     '@whiskeysockets/baileys',
     'qrcode',
+    'just-bash',
   ],
   allowedDevOrigins: getAllowedDevOrigins(),
 };

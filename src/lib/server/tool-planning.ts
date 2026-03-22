@@ -58,6 +58,17 @@ const CORE_TOOL_PLANNING: Record<string, LegacyToolPlanningEntry[]> = {
       requestMatchers: [],
     },
   ],
+  execute: [
+    {
+      toolName: 'execute',
+      capabilities: ['runtime.execute'],
+      disciplineGuidance: [
+        'For `execute`, pass the full bash script in `{"code":"..."}`. Use it for sandboxed command execution, curl-based fetches, and one-shot scripts.',
+        'Use `persistent=true` only when the agent is explicitly configured for host execution. Otherwise use `files` for persistent writes.',
+      ],
+      requestMatchers: [],
+    },
+  ],
   web: [
     {
       toolName: 'web_search',

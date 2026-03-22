@@ -340,8 +340,7 @@ describe('complex expansion scenarios', () => {
   it('sandbox aliases expand', () => {
     const result = expandExtensionIds(['sandbox'])
     assert.ok(result.includes('sandbox'))
-    assert.ok(result.includes('sandbox_exec'))
-    assert.ok(result.includes('sandbox_list_runtimes'))
+    assert.ok(result.includes('execute'))
   })
 
   it('files expands to include read_file, write_file, etc.', () => {

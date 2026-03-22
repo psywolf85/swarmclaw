@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAt": "2026-03-22T13:08:27.646Z",
-  "totalIssues": 377,
+  "generatedAt": "2026-03-22T16:34:54.193Z",
+  "totalIssues": 364,
   "uniqueIssues": 124,
   "issues": [
     {
@@ -37,7 +37,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 2
+      "count": 1
     },
     {
       "filePath": "src/app/api/mcp-servers/route.ts",
@@ -415,7 +415,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 15
+      "count": 14
     },
     {
       "filePath": "src/lib/server/connectors/manager-roundtrip.test.ts",
@@ -436,7 +436,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 2
+      "count": 1
     },
     {
       "filePath": "src/lib/server/connectors/openclaw.test.ts",
@@ -457,7 +457,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 3
+      "count": 1
     },
     {
       "filePath": "src/lib/server/connectors/slack.ts",
@@ -485,14 +485,14 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 20
+      "count": 16
     },
     {
       "filePath": "src/lib/server/connectors/teams.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 7
+      "count": 6
     },
     {
       "filePath": "src/lib/server/connectors/telegram.ts",
@@ -506,14 +506,14 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 14
+      "count": 12
     },
     {
       "filePath": "src/lib/server/connectors/whatsapp.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 10
+      "count": 9
     },
     {
       "filePath": "src/lib/server/evm-swap.ts",
@@ -642,13 +642,6 @@
       "count": 5
     },
     {
-      "filePath": "src/lib/server/runtime/process-manager.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 2
-    },
-    {
       "filePath": "src/lib/server/runtime/queue-followups.test.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
@@ -709,21 +702,21 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 15
+      "count": 14
     },
     {
       "filePath": "src/lib/server/session-tools/edit_file.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 3
+      "count": 2
     },
     {
       "filePath": "src/lib/server/session-tools/index.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 5
+      "count": 3
     },
     {
       "filePath": "src/lib/server/session-tools/manage-schedules.test.ts",
@@ -737,7 +730,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 2
+      "count": 1
     },
     {
       "filePath": "src/lib/server/session-tools/openclaw-workspace.ts",
@@ -751,7 +744,21 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 2
+      "count": 1
+    },
+    {
+      "filePath": "src/lib/server/session-tools/platform-tool.ts",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'_ctx' is defined but never used.",
+      "count": 8
+    },
+    {
+      "filePath": "src/lib/server/session-tools/platform-tool.ts",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'_params' is defined but never used.",
+      "count": 3
     },
     {
       "filePath": "src/lib/server/session-tools/platform.ts",
@@ -779,7 +786,7 @@
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
-      "count": 4
+      "count": 2
     },
     {
       "filePath": "src/lib/server/session-tools/wallet-tool.test.ts",
@@ -849,13 +856,6 @@
       "ruleId": "@typescript-eslint/no-unused-vars",
       "severity": 1,
       "message": "'get' is defined but never used.",
-      "count": 1
-    },
-    {
-      "filePath": "src/views/settings/section-heartbeat.tsx",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
       "count": 1
     },
     {

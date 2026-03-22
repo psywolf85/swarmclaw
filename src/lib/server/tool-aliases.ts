@@ -1,5 +1,6 @@
 const EXTENSION_ALIAS_GROUPS: string[][] = [
-  ['shell', 'execute_command', 'process_tool', 'git', 'sandbox', 'sandbox_exec', 'sandbox_list_runtimes'],
+  ['shell', 'execute_command', 'process_tool', 'git'],
+  ['execute', 'sandbox'],
   ['files', 'read_file', 'write_file', 'list_files', 'copy_file', 'move_file', 'delete_file', 'send_file'],
   ['edit_file'],
   ['web', 'web_search', 'web_fetch', 'http_request', 'http'],

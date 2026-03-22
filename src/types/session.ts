@@ -1,7 +1,7 @@
 import type { ProviderId, OllamaMode } from './provider'
 import type { ConnectorPlatform } from './connector'
 import type { Message } from './message'
-import type { MissionSummary, MissionStatus, MissionPhase, MissionWaitState } from './mission'
+import type { MissionSummary } from './mission'
 
 export type SessionResetMode = 'idle' | 'daily' | 'isolated'
 export type SessionResetType = 'direct' | 'group' | 'thread' | 'main'

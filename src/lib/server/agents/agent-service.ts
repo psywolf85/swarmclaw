@@ -1,5 +1,6 @@
 import { genId } from '@/lib/id'
 import { resolveAgentToolSelection } from '@/lib/agent-default-tools'
+import { normalizeAgentExecuteConfig } from '@/lib/agent-execute-defaults'
 import { normalizeAgentSandboxConfig } from '@/lib/agent-sandbox-defaults'
 import { normalizeCapabilitySelection } from '@/lib/capability-selection'
 import { normalizeProviderEndpoint } from '@/lib/openclaw/openclaw-endpoint'
@@ -180,6 +181,7 @@ export function createAgent(input: {
     sessionDailyResetAt: typeof body.sessionDailyResetAt === 'string' ? body.sessionDailyResetAt : null,
     sessionResetTimezone: typeof body.sessionResetTimezone === 'string' ? body.sessionResetTimezone : null,
     sandboxConfig: normalizeAgentSandboxConfig(body.sandboxConfig),
+    executeConfig: body.executeConfig === null ? null : normalizeAgentExecuteConfig(body.executeConfig),
     createdAt: now,
     updatedAt: now,
   }
@@ -224,6 +226,9 @@ export function updateAgent(agentId: string, body: Record<string, unknown>): Age
     }
     if (body.sandboxConfig !== undefined) {
       agent.sandboxConfig = normalizeAgentSandboxConfig(body.sandboxConfig)
+    }
+    if (body.executeConfig !== undefined) {
+      agent.executeConfig = body.executeConfig === null ? null : normalizeAgentExecuteConfig(body.executeConfig)
     }
     if (
       body.provider !== undefined

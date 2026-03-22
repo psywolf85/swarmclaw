@@ -20,7 +20,11 @@ export type PromptMode = 'full' | 'minimal' | 'none'
  *   proactive memory, thinking guidance
  * - `none` — reserved for bare identity (light heartbeat path)
  */
-export function resolvePromptMode(session: Session): PromptMode {
+export function resolvePromptMode(
+  session: Session,
+  options?: { preferMinimalPrompt?: boolean },
+): PromptMode {
   if (session.parentSessionId) return 'minimal'
+  if (options?.preferMinimalPrompt) return 'minimal'
   return 'full'
 }

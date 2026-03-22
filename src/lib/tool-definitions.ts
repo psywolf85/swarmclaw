@@ -16,6 +16,7 @@ export interface ToolDefinition {
  */
 export const AVAILABLE_TOOLS: ToolDefinition[] = [
   { id: 'shell', label: 'Shell', description: 'Execute commands in the working directory and manage background processes' },
+  { id: 'execute', label: 'Execute', description: 'Run sandboxed bash scripts with just-bash, with optional host execution when explicitly enabled' },
   { id: 'files', label: 'Files', description: 'Complete file management: read, write, list, move, copy, delete, and send' },
   { id: 'edit_file', label: 'Edit File', description: 'Surgical search-and-replace within files' },
   { id: 'web', label: 'Web', description: 'Search the web, fetch content, and make HTTP API calls' },

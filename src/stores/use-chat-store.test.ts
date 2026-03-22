@@ -451,6 +451,103 @@ describe('useChatStore control-token hygiene', () => {
     assert.equal(useAppStore.getState().sessions['session-1']?.currentRunId, 'run-active')
   })
 
+  it('hydrates the active turn from the backend queue snapshot as a sending placeholder', async () => {
+    const now = Date.now()
+    const session = makeSession()
+    useAppStore.setState({
+      agents: { 'agent-1': makeAgent() },
+      sessions: { [session.id]: session },
+      currentAgentId: 'agent-1',
+    })
+    useChatStore.setState({
+      messages: [],
+      pendingFiles: [],
+      replyingTo: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamSource: null,
+      assistantRenderId: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 0,
+    })
+
+    global.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/chats/session-1/queue') {
+        return jsonResponse({
+          sessionId: 'session-1',
+          activeRunId: 'run-active',
+          activeTurn: {
+            runId: 'run-active',
+            sessionId: 'session-1',
+            text: 'Already running',
+            queuedAt: now,
+            position: 0,
+          },
+          queueLength: 1,
+          items: [
+            { runId: 'run-queued-2', sessionId: 'session-1', text: 'Then refine it', queuedAt: now + 1, position: 1 },
+          ],
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    await useChatStore.getState().loadQueuedMessages('session-1')
+
+    const state = useChatStore.getState()
+    assert.deepEqual(
+      state.queuedMessages.map((item) => [item.runId, item.sending === true]),
+      [['run-active', true], ['run-queued-2', false]],
+    )
+    assert.equal(useAppStore.getState().sessions['session-1']?.queuedCount, 1)
+    assert.equal(useAppStore.getState().sessions['session-1']?.currentRunId, 'run-active')
+  })
+
+  it('clears sending placeholders when a persisted user message with the same runId arrives', () => {
+    useChatStore.setState({
+      messages: [],
+      assistantRenderId: null,
+      queuedMessages: [
+        { runId: 'run-active', sessionId: 'session-1', text: 'Already running', queuedAt: 9, position: 0, sending: true },
+      ],
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamSource: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 0,
+    })
+
+    useChatStore.getState().setMessages([
+      { role: 'user', text: 'Already running', time: 10, runId: 'run-active' },
+    ])
+
+    const state = useChatStore.getState()
+    assert.equal(state.queuedMessages.length, 0)
+    assert.equal(state.messages[0]?.runId, 'run-active')
+  })
+
   it('removes optimistic queued items again when the backend enqueue fails', async () => {
     const session = makeSession()
     useAppStore.setState({
@@ -532,5 +629,139 @@ describe('useChatStore control-token hygiene', () => {
     const state = useChatStore.getState()
     assert.equal(state.assistantRenderId, 'render-1')
     assert.equal(state.messages[1]?.clientRenderId, 'render-1')
+  })
+
+  it('preserves transcript totals on local message updates for paginated windows', () => {
+    useChatStore.setState({
+      messages: [
+        { role: 'user', text: 'Ninth', time: 9, bookmarked: false },
+        { role: 'assistant', text: 'Tenth', time: 10 },
+      ],
+      messageStartIndex: 8,
+      assistantRenderId: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamSource: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: true,
+      loadingMore: false,
+      totalMessages: 10,
+    })
+
+    useChatStore.getState().setMessages([
+      { role: 'user', text: 'Ninth', time: 9, bookmarked: true },
+      { role: 'assistant', text: 'Tenth', time: 10 },
+    ])
+
+    const state = useChatStore.getState()
+    assert.equal(state.messageStartIndex, 8)
+    assert.equal(state.totalMessages, 10)
+    assert.equal(state.hasMoreMessages, true)
+    assert.equal(state.messages[0]?.bookmarked, true)
+  })
+
+  it('does not timeout sending items before 60 seconds', () => {
+    const thirtySecondsAgo = Date.now() - 30_000
+    useChatStore.setState({
+      messages: [],
+      assistantRenderId: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamSource: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [
+        { runId: 'run-old', sessionId: 'session-1', text: 'Waiting', queuedAt: thirtySecondsAgo, position: 0, sending: true },
+      ],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: false,
+      loadingMore: false,
+      totalMessages: 0,
+    })
+
+    // setMessages with no matching persisted message — item should survive
+    useChatStore.getState().setMessages([
+      { role: 'user', text: 'Unrelated', time: Date.now() },
+    ])
+
+    const state = useChatStore.getState()
+    assert.equal(state.queuedMessages.length, 1)
+    assert.equal(state.queuedMessages[0]?.runId, 'run-old')
+  })
+
+  it('tracks messageStartIndex when loading more paginated history', async () => {
+    const session = makeSession()
+    useAppStore.setState({
+      agents: { 'agent-1': makeAgent() },
+      sessions: { [session.id]: session },
+      currentAgentId: 'agent-1',
+    })
+    useChatStore.setState({
+      messages: [
+        { role: 'user', text: 'Ninth', time: 9 },
+        { role: 'assistant', text: 'Tenth', time: 10 },
+      ],
+      messageStartIndex: 8,
+      pendingFiles: [],
+      replyingTo: null,
+      toolEvents: [],
+      streamText: '',
+      displayText: '',
+      streaming: false,
+      streamingSessionId: null,
+      streamSource: null,
+      assistantRenderId: null,
+      streamPhase: 'thinking',
+      streamToolName: '',
+      thinkingText: '',
+      thinkingStartTime: 0,
+      queuedMessages: [],
+      agentStatus: null,
+      lastUsage: null,
+      hasMoreMessages: true,
+      loadingMore: false,
+      totalMessages: 10,
+    })
+
+    global.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url === '/api/chats/session-1/messages?limit=100&before=8') {
+        return jsonResponse({
+          messages: [
+            { role: 'user', text: 'Seventh', time: 7 },
+            { role: 'assistant', text: 'Eighth', time: 8 },
+          ],
+          total: 10,
+          hasMore: true,
+          startIndex: 6,
+        })
+      }
+      throw new Error(`Unexpected fetch: ${url}`)
+    }) as unknown as typeof fetch
+
+    await useChatStore.getState().loadMoreMessages()
+
+    const state = useChatStore.getState()
+    assert.equal(state.messageStartIndex, 6)
+    assert.equal(state.totalMessages, 10)
+    assert.deepEqual(
+      state.messages.map((message) => message.text),
+      ['Seventh', 'Eighth', 'Ninth', 'Tenth'],
+    )
   })
 })

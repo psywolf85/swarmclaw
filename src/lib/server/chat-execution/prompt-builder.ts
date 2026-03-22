@@ -75,7 +75,6 @@ function buildExtensionCapabilityLines(enabledExtensions: string[], opts?: { del
 
 const DISPLAY_TOOL_ALIASES: Record<string, string[]> = {
   files: ['send_file'],
-  shell: ['sandbox_exec', 'sandbox_list_runtimes'],
 }
 
 function buildExactToolNameList(enabledExtensions: string[]): string[] {
@@ -158,6 +157,7 @@ export function buildToolDisciplineLines(enabledExtensions: string[]): string[] 
     ...(researchSearchTools.length || researchFetchTools.length ? [...researchSearchTools, ...researchFetchTools] : []),
     ...httpTools,
     ...(uniqueTools.includes('shell') ? ['shell'] : []),
+    ...(uniqueTools.includes('execute') ? ['execute'] : []),
     ...(uniqueTools.includes('browser') ? ['browser'] : []),
   ]))
   if (alternateResearchTools.length >= 2) {
@@ -330,6 +330,7 @@ export function buildAgenticExecutionPolicy(opts: {
   const hasManageSessions = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_sessions')
   const hasManageTasks = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_tasks')
   const hasManageSkills = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_skills')
+  const lightweightDirectChat = opts.classification?.isLightweightDirectChat === true && !opts.isDirectConnectorSession
   const hasDelegationTools = opts.enabledExtensions.some((toolId) => {
     const canonical = canonicalizeExtensionId(toolId) || toolId
     return canonical === 'delegate' || canonical === 'spawn_subagent'
@@ -358,6 +359,15 @@ export function buildAgenticExecutionPolicy(opts: {
       ? 'Loop: ONGOING — keep iterating until done, blocked, or limits reached.'
       : 'Loop: BOUNDED — execute multiple steps but finish within recursion budget.',
   )
+
+  if (lightweightDirectChat) {
+    parts.push(
+      '## Lightweight Chat',
+      'This turn is a lightweight direct chat. Reply naturally and briefly.',
+      'Do not delegate, create tasks, outline a workflow, or narrate tools unless the user adds a concrete task that actually requires that escalation.',
+      'For greetings, acknowledgements, and simple social questions, a short human-sounding answer is sufficient.',
+    )
+  }
 
   if (hasTooling) {
     parts.push(
@@ -444,6 +454,9 @@ export function buildAgenticExecutionPolicy(opts: {
     ]),
     'Keep responses concise. Bullet points over prose. After file operations, confirm the result briefly (path and status) without echoing the full file contents.',
     'Do not end every reply with a question. Only ask when a specific missing detail blocks progress. When a task is done, state the result and stop.',
+    ...(lightweightDirectChat
+      ? ['For this turn, prefer 1-3 short sentences over bullets, planning, or process narration.']
+      : []),
     opts.responseStyle === 'concise'
       ? `IMPORTANT: Be extremely concise.${opts.responseMaxChars ? ` Keep responses under ${opts.responseMaxChars} characters.` : ' Target under 500 characters.'} Lead with the answer, skip preamble.`
       : opts.responseStyle === 'detailed'

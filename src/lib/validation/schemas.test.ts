@@ -57,4 +57,20 @@ describe('AgentCreateSchema', () => {
     assert.equal(parsed.orchestratorMaxCyclesPerDay, 12)
     assert.equal(parsed.sessionResetMode, 'isolated')
   })
+
+  it('accepts executeConfig for sandboxed execute defaults', () => {
+    const parsed = AgentCreateSchema.parse({
+      name: 'Builder',
+      provider: 'openai',
+      executeConfig: {
+        backend: 'sandbox',
+        network: { enabled: true },
+        timeout: 45,
+      },
+    })
+
+    assert.equal(parsed.executeConfig?.backend, 'sandbox')
+    assert.equal(parsed.executeConfig?.network?.enabled, true)
+    assert.equal(parsed.executeConfig?.timeout, 45)
+  })
 })

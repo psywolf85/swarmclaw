@@ -115,10 +115,9 @@ describe('buildSessionTools signature', () => {
     await built.cleanup()
   })
 
-  it('sandbox execution functions are still importable for shell integration', async () => {
-    const sandbox = await import('./sandbox')
-    assert.equal(typeof sandbox.executeSandboxExec, 'function')
-    assert.equal(typeof sandbox.executeListRuntimes, 'function')
+  it('execute tool builder is importable', async () => {
+    const execute = await import('./execute')
+    assert.equal(typeof execute.buildExecuteTools, 'function')
   })
 })
 

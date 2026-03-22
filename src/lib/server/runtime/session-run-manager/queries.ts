@@ -49,12 +49,27 @@ function toQueuedTurn(entry: SessionRunQueueEntry, index: number): SessionQueued
   }
 }
 
+function toActiveTurn(entry: SessionRunQueueEntry): SessionQueuedTurn {
+  return {
+    ...toQueuedTurn(entry, 0),
+    position: 0,
+  }
+}
+
+function visibleActiveTurnForSession(sessionId: string): SessionQueuedTurn | null {
+  const running = Array.from(state.runningByExecution.values())
+    .find((entry) => entry.run.sessionId === sessionId && entry.run.status === 'running')
+  if (!running || running.run.internal === true) return null
+  return toActiveTurn(running)
+}
+
 export function getSessionQueueSnapshot(sessionId: string): SessionQueueSnapshot {
   const execution = getSessionExecutionState(sessionId)
   const visibleQueued = visibleQueuedEntriesForSession(sessionId)
   return {
     sessionId,
     activeRunId: execution.runningRunId || null,
+    activeTurn: visibleActiveTurnForSession(sessionId),
     queueLength: visibleQueued.length,
     items: visibleQueued.map((entry, index) => toQueuedTurn(entry, index)),
   }

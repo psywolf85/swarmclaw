@@ -204,6 +204,7 @@ export const SETUP_PROVIDERS: SetupProviderOption[] = [
 export const STARTER_AGENT_TOOLS = [
   'memory',
   'files',
+  'execute',
   'web_search',
   'web_fetch',
   'browser',
@@ -363,6 +364,7 @@ export interface StarterKit {
 const PERSONAL_AGENT_TOOLS = [
   'memory',
   'files',
+  'execute',
   'web_search',
   'web_fetch',
   'browser',
@@ -374,6 +376,7 @@ const PERSONAL_AGENT_TOOLS = [
 const RESEARCH_AGENT_TOOLS = [
   'memory',
   'files',
+  'execute',
   'web_search',
   'web_fetch',
   'browser',
@@ -384,6 +387,7 @@ const RESEARCH_AGENT_TOOLS = [
 const BUILDER_AGENT_TOOLS = [
   'memory',
   'files',
+  'execute',
   'web_search',
   'web_fetch',
   'browser',
@@ -397,6 +401,7 @@ const OPERATOR_AGENT_TOOLS = STARTER_AGENT_TOOLS
 const OPENCLAW_AGENT_TOOLS = [
   'memory',
   'files',
+  'execute',
   'web_search',
   'web_fetch',
   'browser',

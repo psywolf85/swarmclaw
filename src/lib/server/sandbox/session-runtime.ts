@@ -236,66 +236,18 @@ export function resolveSandboxWorkdir(params: {
   }
 }
 
-export async function ensureSessionSandbox(params: {
+export function resolveSandboxSessionContext(params: {
   config: AgentSandboxConfig | null | undefined
   session?: Session | null
   agentId?: string | null
   sessionId?: string | null
   workspaceDir: string
-}): Promise<SandboxSessionContext | null> {
+}): SandboxSessionContext | null {
   const status = resolveSandboxRuntimeStatus(params)
   if (!status.sandboxed || !status.config || !status.scopeKey) return null
-  await maybePruneSandboxes(params.config)
-
-  const docker = detectDocker()
-  if (!docker.available) {
-    throw new Error('Sandbox is enabled but Docker is not available. Install Docker Desktop or disable the sandbox in agent settings.')
-  }
-
-  const containerName = `${status.config.containerPrefix}${slugifyScopeKey(status.scopeKey)}`.slice(0, 63)
-  const configHash = computeSandboxConfigHash({
-    config: status.config,
-    workspaceDir: params.workspaceDir,
-    scopeKey: status.scopeKey,
-  })
-
-  const current = await inspectDockerContainer(containerName)
-  const currentHash = current.exists ? await readDockerLabel(containerName, 'swarmclaw.configHash') : null
-  if (current.exists && currentHash && currentHash !== configHash) {
-    await execDocker(['rm', '-f', containerName], true)
-  }
-
-  const next = current.exists && currentHash === configHash
-    ? current
-    : { exists: false, running: false }
-
-  if (!next.exists) {
-    await execDocker(buildSandboxCreateArgs({
-      containerName,
-      scopeKey: status.scopeKey,
-      configHash,
-      config: status.config,
-      workspaceDir: params.workspaceDir,
-    }))
-    await execDocker(['start', containerName])
-    if (status.config.setupCommand) {
-      await execDocker(['exec', '-i', containerName, '/bin/sh', '-lc', status.config.setupCommand])
-    }
-  } else if (!next.running) {
-    await execDocker(['start', containerName])
-  }
-
-  await upsertSandboxRegistryEntry({
-    containerName,
-    scopeKey: status.scopeKey,
-    createdAtMs: Date.now(),
-    lastUsedAtMs: Date.now(),
-    image: status.config.image,
-    configHash,
-  })
 
   return {
-    containerName,
+    containerName: `${status.config.containerPrefix}${slugifyScopeKey(status.scopeKey)}`.slice(0, 63),
     containerWorkdir: status.config.workdir,
     workspaceDir: params.workspaceDir,
     workspaceAccess: status.config.workspaceAccess,
@@ -304,4 +256,64 @@ export async function ensureSessionSandbox(params: {
     scopeKey: status.scopeKey,
     config: status.config,
   }
+}
+
+export async function ensureSessionSandbox(params: {
+  config: AgentSandboxConfig | null | undefined
+  session?: Session | null
+  agentId?: string | null
+  sessionId?: string | null
+  workspaceDir: string
+}): Promise<SandboxSessionContext | null> {
+  const context = resolveSandboxSessionContext(params)
+  if (!context) return null
+  await maybePruneSandboxes(params.config)
+
+  const docker = detectDocker()
+  if (!docker.available) {
+    throw new Error('Sandbox is enabled but Docker is not available. Install Docker Desktop or disable the sandbox in agent settings.')
+  }
+
+  const configHash = computeSandboxConfigHash({
+    config: context.config,
+    workspaceDir: params.workspaceDir,
+    scopeKey: context.scopeKey,
+  })
+
+  const current = await inspectDockerContainer(context.containerName)
+  const currentHash = current.exists ? await readDockerLabel(context.containerName, 'swarmclaw.configHash') : null
+  if (current.exists && currentHash && currentHash !== configHash) {
+    await execDocker(['rm', '-f', context.containerName], true)
+  }
+
+  const next = current.exists && currentHash === configHash
+    ? current
+    : { exists: false, running: false }
+
+  if (!next.exists) {
+    await execDocker(buildSandboxCreateArgs({
+      containerName: context.containerName,
+      scopeKey: context.scopeKey,
+      configHash,
+      config: context.config,
+      workspaceDir: params.workspaceDir,
+    }))
+    await execDocker(['start', context.containerName])
+    if (context.config.setupCommand) {
+      await execDocker(['exec', '-i', context.containerName, '/bin/sh', '-lc', context.config.setupCommand])
+    }
+  } else if (!next.running) {
+    await execDocker(['start', context.containerName])
+  }
+
+  await upsertSandboxRegistryEntry({
+    containerName: context.containerName,
+    scopeKey: context.scopeKey,
+    createdAtMs: Date.now(),
+    lastUsedAtMs: Date.now(),
+    image: context.config.image,
+    configHash,
+  })
+
+  return context
 }

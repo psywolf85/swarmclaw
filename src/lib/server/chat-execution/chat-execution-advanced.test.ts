@@ -470,7 +470,7 @@ describe('hasDirectLocalCodingTools', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['files'] }), true)
   })
 
-  it('returns true for sandbox extension', () => {
+  it('returns true for legacy sandbox alias', () => {
     assert.equal(hasDirectLocalCodingTools({ tools: ['sandbox'] }), true)
   })
 })

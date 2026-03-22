@@ -57,6 +57,7 @@ export function ChatArea() {
   const refreshSession = useAppStore((s) => s.refreshSession)
   const appSettings = useAppStore((s) => s.appSettings)
   const messages = useChatStore((s) => s.messages)
+  const messageStartIndex = useChatStore((s) => s.messageStartIndex)
   const setMessages = useChatStore((s) => s.setMessages)
   const streaming = useChatStore((s) => s.streaming)
   const streamingSessionId = useChatStore((s) => s.streamingSessionId)
@@ -179,15 +180,15 @@ export function ChatArea() {
     const preserveLocalStream = chatState.streaming && chatState.streamingSessionId === requestedSessionId
     // Clear stale messages immediately so the skeleton loader shows instead of
     // the previous chat's messages flashing briefly during the fetch.
-    if (!preserveLocalStream) setMessages([])
+    if (!preserveLocalStream) setMessages([], { startIndex: 0, totalMessages: 0 })
     setMessagesLoading(true)
     if (!preserveLocalStream) {
       useChatStore.setState({ streaming: false, streamingSessionId: null, streamSource: null, streamText: '', assistantRenderId: null, toolEvents: [] })
     }
     fetchMessagesPaginated(requestedSessionId, 100).then((data) => {
       if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
-      setMessages(data.messages)
-      useChatStore.setState({ hasMoreMessages: data.hasMore, totalMessages: data.total })
+      setMessages(data.messages, { startIndex: data.startIndex, totalMessages: data.total })
+      useChatStore.setState({ hasMoreMessages: data.hasMore })
     }).catch((err) => {
       if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
       console.error('Failed to load messages:', err)
@@ -197,6 +198,12 @@ export function ChatArea() {
         fallbackSession?.messages?.length
           ? fallbackSession.messages
           : (fallbackLastMessage ? [fallbackLastMessage] : []),
+        {
+          startIndex: 0,
+          totalMessages: fallbackSession?.messages?.length
+            ? fallbackSession.messages.length
+            : (fallbackLastMessage ? 1 : 0),
+        },
       )
     }).finally(() => {
       if (cancelled || selectActiveSessionId(useAppStore.getState()) !== requestedSessionId) return
@@ -268,6 +275,8 @@ export function ChatArea() {
   const shouldPollMessages = !!sessionId && (isServerActive || isOngoingMonitored)
   const messagesRef = useRef(messages)
   messagesRef.current = messages
+  const messageStartIndexRef = useRef(messageStartIndex)
+  messageStartIndexRef.current = messageStartIndex
   const isServerActiveRef = useRef(isServerActive)
   isServerActiveRef.current = isServerActive
   const ttsEnabledRef = useRef(ttsEnabled)
@@ -287,8 +296,9 @@ export function ChatArea() {
       if (currentChatState.streaming && currentChatState.streamingSessionId === sessionId && currentChatState.streamSource === 'local') return
       const previous = messagesRef.current
       if (messagesDiffer(msgs, previous)) {
-        const newMsgs = msgs.length > previous.length ? msgs.slice(previous.length) : []
-        setMessages(msgs)
+        const previousEndIndex = messageStartIndexRef.current + previous.length
+        const newMsgs = msgs.length > previousEndIndex ? msgs.slice(previousEndIndex) : []
+        setMessages(msgs, { startIndex: 0, totalMessages: msgs.length })
         if (ttsEnabledRef.current && typeof document !== 'undefined' && document.visibilityState === 'visible') {
           const latestAssistant = [...newMsgs].reverse().find((m) => {
             if (m.role !== 'assistant') return false
@@ -305,15 +315,34 @@ export function ChatArea() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId])
 
+  // Targeted message fetch that bypasses the streaming guard — used by
+  // refreshQueue to ensure persisted messages appear before sending queue
+  // items are cleaned up by timeout.
+  const syncMessagesForQueue = useCallback(async () => {
+    if (!sessionId) return
+    try {
+      const msgs = await fetchMessages(sessionId)
+      if (messagesDiffer(msgs, messagesRef.current)) {
+        setMessages(msgs, { startIndex: 0, totalMessages: msgs.length })
+      }
+    } catch (err) { console.error('Failed to sync messages for queue:', err) }
+  }, [sessionId, setMessages])
+
   const refreshQueue = useCallback(async () => {
     if (!sessionId) return
     try {
       await loadQueuedMessages(sessionId)
+      // If there are "sending" queue items, fetch messages so persisted
+      // versions appear before the queue item gets cleaned up.
+      const chatState = useChatStore.getState()
+      const hasSendingItems = chatState.queuedMessages.some(
+        (item) => item.sessionId === sessionId && item.sending,
+      )
+      if (hasSendingItems) void syncMessagesForQueue()
       // Bridge the gap between "queue item disappears" and "isServerActive propagates".
       // If the server picked up a queued run, immediately show the thinking indicator
       // so users don't see a blank gap waiting for loadSessions to propagate.
       const refreshedSession = useAppStore.getState().sessions[sessionId]
-      const chatState = useChatStore.getState()
       if (
         refreshedSession?.currentRunId
         && !chatState.streaming
@@ -324,7 +353,7 @@ export function ChatArea() {
     } catch (err) {
       console.error('Failed to refresh queue:', err)
     }
-  }, [loadQueuedMessages, sessionId, startServerStreamingPlaceholder])
+  }, [loadQueuedMessages, syncMessagesForQueue, sessionId, startServerStreamingPlaceholder])
 
   // Subscribe to WS messages for this session — always subscribe when session exists,
   // only enable fallback polling when actively needed
@@ -369,7 +398,7 @@ export function ChatArea() {
       && (state.streamingSessionId === sessionId || state.streamingSessionId == null)
     ) {
       // Server finished — clear all streaming state and fetch final messages
-      fetchMessages(sessionId).then(setMessages).catch(() => {})
+      fetchMessages(sessionId).then((msgs) => setMessages(msgs, { startIndex: 0, totalMessages: msgs.length })).catch(() => {})
       markSessionLocallyIdle(sessionId)
       useChatStore.setState({ streaming: false, streamingSessionId: null, streamSource: null, streamText: '', displayText: '', assistantRenderId: null, streamPhase: 'thinking', streamToolName: '', thinkingText: '', thinkingStartTime: 0 })
     }
@@ -404,7 +433,7 @@ export function ChatArea() {
     setConfirmClear(false)
     if (!sessionId) return
     await clearMessages(sessionId)
-    setMessages([])
+    setMessages([], { startIndex: 0, totalMessages: 0 })
     await refreshSession(sessionId)
   }, [refreshSession, sessionId, setMessages])
 

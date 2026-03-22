@@ -190,6 +190,7 @@ interface StreamAgentChatOpts {
   fallbackCredentialIds?: string[]
   signal?: AbortSignal
   promptMode?: PromptMode
+  classification?: MessageClassification | null
   /** Run source (e.g. 'heartbeat', 'chat', 'scheduler') — used for heartbeat-specific tuning. */
   source?: string
 }
@@ -223,10 +224,23 @@ export async function streamAgentChat(opts: StreamAgentChatOpts): Promise<Stream
 
 async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAgentChatResult> {
   const startTs = Date.now()
-  const { session, message, imagePath, imageUrl, attachedFiles, apiKey, systemPrompt, executionBrief, extraSystemContext, write, history, fallbackCredentialIds, signal } = opts
+  const {
+    session,
+    message,
+    imagePath,
+    imageUrl,
+    attachedFiles,
+    apiKey,
+    systemPrompt,
+    executionBrief,
+    extraSystemContext,
+    write,
+    history,
+    fallbackCredentialIds,
+    signal,
+    classification: providedClassification,
+  } = opts
   const isHeartbeat = isHeartbeatSource(opts.source)
-  const promptMode: PromptMode = opts.promptMode ?? resolvePromptMode(session)
-  const isMinimalPrompt = promptMode === 'minimal'
   const isConnectorSession = isDirectConnectorSession(session)
   const rawExtensions = getEnabledCapabilityIds(session)
   const hasShellCapability = rawExtensions.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
@@ -241,12 +255,32 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   const sessionAgent = session.agentId ? getAgent(session.agentId) : null
 
+  const classificationPromise = providedClassification !== undefined
+    ? Promise.resolve(providedClassification)
+    : classifyMessage({
+        sessionId: session.id,
+        agentId: session.agentId,
+        message,
+        history,
+      }).catch(() => null as MessageClassification | null)
+  const classification = await classificationPromise
+  const lightweightDirectChat = classification?.isLightweightDirectChat === true
+    && !isConnectorSession
+    && !isHeartbeat
+  const promptMode: PromptMode = opts.promptMode ?? resolvePromptMode(session, {
+    preferMinimalPrompt: lightweightDirectChat,
+  })
+  const isMinimalPrompt = promptMode === 'minimal'
+
   // Resolve agent's thinking level for provider-native params
   let agentThinkingLevel: 'minimal' | 'low' | 'medium' | 'high' | undefined
   if (session.thinkingLevel) {
     agentThinkingLevel = session.thinkingLevel
   } else if (sessionAgent) {
     agentThinkingLevel = sessionAgent.thinkingLevel
+  }
+  if (lightweightDirectChat) {
+    agentThinkingLevel = 'minimal'
   }
 
   const llm = buildChatModel({
@@ -295,16 +329,6 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
     if (!Number.isFinite(parsed)) return DEFAULT_HEARTBEAT_INTERVAL_SEC
     return Math.max(0, Math.min(3600, Math.trunc(parsed)))
   })()
-
-  // -------------------------------------------------------------------------
-  // Start message classification in the background (LLM-based, ~200-800ms)
-  // -------------------------------------------------------------------------
-  const classificationPromise = classifyMessage({
-    sessionId: session.id,
-    agentId: session.agentId,
-    message,
-    history,
-  }).catch(() => null as MessageClassification | null)
 
   // -------------------------------------------------------------------------
   // System prompt assembly (stays inline — many async calls + local state)
@@ -426,8 +450,6 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   const suggestionsBlock = buildSuggestionsSection(settings.suggestionsEnabled, isMinimalPrompt)
   if (suggestionsBlock) promptParts.push(suggestionsBlock)
 
-  // Await classification before building the agentic execution policy
-  const classification = await classificationPromise
   const delegationAdvisory = sessionAgent && agentDelegationEnabled
     ? resolveDelegationAdvisory({
         currentAgent: sessionAgent,
@@ -1138,7 +1160,14 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
       }
 
       // Async LLM-based incomplete-action check: catches "I'll run the deployment:" with no tool calls
-      if (!shouldContinue && outcome && !state.hasToolCalls && state.fullText.trim().length > 0 && state.fullText.trim().length < 500) {
+      if (
+        !shouldContinue
+        && outcome
+        && !state.hasToolCalls
+        && classification?.isLightweightDirectChat !== true
+        && state.fullText.trim().length > 0
+        && state.fullText.trim().length < 500
+      ) {
         const completeness = await evaluateResponseCompleteness({
           sessionId: session.id,
           agentId: session.agentId,

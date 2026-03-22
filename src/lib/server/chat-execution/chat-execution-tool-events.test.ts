@@ -259,6 +259,7 @@ describe('hasDirectLocalCodingTools', () => {
   it('treats shell and file tooling as local coding capability', () => {
     assert.equal(hasDirectLocalCodingTools({ extensions: ['files'] }), true)
     assert.equal(hasDirectLocalCodingTools({ extensions: ['shell'] }), true)
+    assert.equal(hasDirectLocalCodingTools({ extensions: ['execute'] }), true)
     assert.equal(hasDirectLocalCodingTools({ extensions: ['edit_file'] }), true)
     assert.equal(hasDirectLocalCodingTools({ extensions: ['delegate'] }), false)
   })

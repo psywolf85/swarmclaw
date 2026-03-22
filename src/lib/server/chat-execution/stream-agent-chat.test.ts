@@ -65,14 +65,13 @@ const streamContinuationSource = _readSibling('stream-continuation.ts')
 const streamSources = `${streamAgentChatSource}\n${streamContinuationSource}`
 
 describe('buildToolDisciplineLines', () => {
-  it('lists exact callable tool names for extension families like sandbox and browser', () => {
+  it('lists exact callable tool names for legacy sandbox aliases and browser', () => {
     const lines = buildToolAvailabilityLines(['sandbox', 'browser', 'manage_schedules'])
 
     assert.equal(lines[0], 'Tool names are case-sensitive. Call tools exactly as listed.')
     assert.ok(lines.includes('- `browser`'))
+    assert.ok(lines.includes('- `execute`'))
     assert.ok(lines.includes('- `manage_schedules`'))
-    assert.ok(lines.includes('- `sandbox_exec`'))
-    assert.ok(lines.includes('- `sandbox_list_runtimes`'))
   })
 
   it('tells the agent to use direct platform tools when manage_platform is absent', () => {
@@ -1033,7 +1032,7 @@ describe('shouldForceDeliverableFollowthrough', () => {
           { name: 'web', input: '{"action":"fetch","url":"https://example.com/topic"}', output: '<html>topic</html>' },
         ],
         history: [
-          { role: 'user', text: 'Research 3 topics, take screenshots, write markdown and PDF files, then build a site for each topic.' },
+          { role: 'user', text: 'Research 3 topics, take screenshots, write markdown and PDF files, then build a site for each topic.', time: Date.now() },
         ],
       }),
       true,
@@ -1275,6 +1274,7 @@ describe('parseClassificationResponse', () => {
 
 describe('message classifier adapter functions', () => {
   const deliverableClassification: MessageClassification = {
+    taskIntent: 'general',
     isDeliverableTask: true,
     isBroadGoal: true,
     walletIntent: 'none',
@@ -1286,6 +1286,7 @@ describe('message classifier adapter functions', () => {
   }
 
   const walletClassification: MessageClassification = {
+    taskIntent: 'general',
     isDeliverableTask: false,
     isBroadGoal: false,
     walletIntent: 'transactional',
@@ -1297,6 +1298,7 @@ describe('message classifier adapter functions', () => {
   }
 
   const humanSignalClassification: MessageClassification = {
+    taskIntent: 'general',
     isDeliverableTask: false,
     isBroadGoal: false,
     walletIntent: 'none',

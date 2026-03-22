@@ -92,6 +92,7 @@ export interface SessionQueuedTurn {
 export interface SessionQueueSnapshot {
   sessionId: string
   activeRunId: string | null
+  activeTurn?: SessionQueuedTurn | null
   queueLength: number
   items: SessionQueuedTurn[]
 }

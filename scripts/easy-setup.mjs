@@ -130,7 +130,7 @@ function main() {
 
   runOptional('node', ['./scripts/ensure-sandbox-browser-image.mjs'])
   if (!commandExists('docker')) {
-    log('Docker not detected. SwarmClaw will fall back to host execution until Docker Desktop is installed.')
+    log('Docker not detected. SwarmClaw will use the host Playwright runtime until Docker Desktop is installed.')
   }
 
   if (productionMode) {
