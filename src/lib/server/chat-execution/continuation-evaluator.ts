@@ -42,6 +42,8 @@ export interface ContinuationContext {
   sessionExtensions: string[]
   isConnectorSession: boolean
   isCoordinatorAgent: boolean
+  delegationEnabled: boolean
+  delegationPreferenceActive: boolean
   history: Message[]
   session: { cwd: string }
   write: (data: string) => void
@@ -279,6 +281,7 @@ function checkAttachmentFollowthrough(ctx: ContinuationContext): ContinuationDec
     enabledExtensions: ctx.sessionExtensions,
     hasToolCalls: ctx.state.hasToolCalls,
     hasAttachmentContext: ctx.hasAttachmentContext,
+    classification: ctx.classification,
   })) return null
   const count = ctx.limits.increment('attachment_followthrough')
   const { max } = ctx.limits.getStatus('attachment_followthrough')
@@ -335,7 +338,7 @@ function checkToolErrorFollowthrough(ctx: ContinuationContext): ContinuationDeci
 }
 
 function checkCoordinatorDelegation(ctx: ContinuationContext): ContinuationDecision | null {
-  if (!ctx.isCoordinatorAgent) return null
+  if (!ctx.delegationEnabled || !ctx.delegationPreferenceActive) return null
   if (!ctx.limits.canContinue('coordinator_delegation_nudge')) return null
   // Skip if already delegated
   const delegationTools = ['spawn_subagent', 'manage_protocols']

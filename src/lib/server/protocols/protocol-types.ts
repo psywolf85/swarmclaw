@@ -118,9 +118,9 @@ export function now(deps?: ProtocolRunDeps): number {
   return deps?.now ? deps.now() : Date.now()
 }
 
-export function cleanText(value: unknown, max = 1200): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : ''
-}
+import { cleanText } from '@/lib/server/text-normalization'
+
+export { cleanText }
 
 export function uniqueIds(values: unknown, maxItems = 64): string[] {
   const source = Array.isArray(values) ? values : []

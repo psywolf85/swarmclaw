@@ -202,10 +202,11 @@ export function shouldForceAttachmentFollowthrough(params: {
   enabledExtensions: string[]
   hasToolCalls: boolean
   hasAttachmentContext: boolean
+  classification?: MessageClassification | null
 }): boolean {
   if (!params.hasAttachmentContext) return false
   if (params.hasToolCalls) return false
-  const decision = routeTaskIntent(params.userMessage, params.enabledExtensions, null)
+  const decision = routeTaskIntent(params.userMessage, params.enabledExtensions, null, params.classification ?? null)
   if (decision.intent !== 'research' && decision.intent !== 'browsing') return false
   return decision.preferredTools.some((toolName) => extensionIdMatches(params.enabledExtensions, toolName))
 }
@@ -326,6 +327,13 @@ export function buildAgenticExecutionPolicy(opts: {
   const extensionLines = isMinimal ? [] : buildExtensionCapabilityLines(opts.enabledExtensions, { delegationEnabled: opts.delegationEnabled, agentId: opts.agentId })
   const toolDisciplineLines = buildToolSection(opts.enabledExtensions)
   const hasMemoryTools = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'memory')
+  const hasManageSessions = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_sessions')
+  const hasManageTasks = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_tasks')
+  const hasManageSkills = opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_skills')
+  const hasDelegationTools = opts.enabledExtensions.some((toolId) => {
+    const canonical = canonicalizeExtensionId(toolId) || toolId
+    return canonical === 'delegate' || canonical === 'spawn_subagent'
+  })
 
   const parts: string[] = []
 
@@ -351,6 +359,33 @@ export function buildAgenticExecutionPolicy(opts: {
       : 'Loop: BOUNDED — execute multiple steps but finish within recursion budget.',
   )
 
+  if (hasTooling) {
+    parts.push(
+      '## Routing Matrix',
+      'Current-thread facts already visible in this chat: answer directly from the thread before using tools.',
+      hasMemoryTools
+        ? 'Facts from previous conversations: start with `memory_search`, then `memory_get` only for a targeted follow-up read.'
+        : 'Facts from previous conversations: rely on the visible thread only and state when memory tools are unavailable.',
+      hasManageSessions
+        ? 'Harness/session context, lineage, project attachment, or enabled-tool questions: use `sessions_tool` action `identity`.'
+        : 'Harness/session introspection is limited here; rely on the runtime orientation block and visible context.',
+      hasManageSessions
+        ? 'Earlier messages from this same session that are not already visible in the thread: use `sessions_tool` action `history`.'
+        : 'Do not claim hidden session history is checked when `sessions_tool` is unavailable.',
+      hasManageTasks
+        ? 'Durable backlog or resumable progress tracking: use `manage_tasks` for multi-turn work, delegation, or explicit task-board requests.'
+        : 'Do not create pseudo-task workflows in prose when task tooling is unavailable.',
+      hasManageSkills
+        ? 'Missing capability, workflow, or environment setup blocker: use `manage_skills` before repeating generic exploration.'
+        : 'If a capability is genuinely missing, say so plainly instead of pretending a skill install happened.',
+      hasDelegationTools
+        ? 'Multi-step specialist work: delegate or spawn a subagent instead of doing the whole chain yourself.'
+        : 'If delegation tools are unavailable, execute directly with the tools you do have.',
+      'For direct reversible execution, use the concrete tool now instead of creating a task or stopping at advice.',
+      'When both `manage_platform` and a direct `manage_*` tool are available, prefer the direct `manage_*` tool.',
+    )
+  }
+
   // Sections skipped in minimal mode
   if (!isMinimal) {
     if (hasMemoryTools) {
@@ -374,7 +409,7 @@ export function buildAgenticExecutionPolicy(opts: {
         'Prefer `use_skill` action `run` for executable skills and `use_skill` action `load` only when the skill is guidance-only.',
       )
     }
-    if (opts.enabledExtensions.some((toolId) => (canonicalizeExtensionId(toolId) || toolId) === 'manage_skills')) {
+    if (hasManageSkills) {
       parts.push(
         '## Skill Resolution',
         'When you are blocked on a missing capability, binary, or environment setup, call `manage_skills` before repeating generic exploration.',

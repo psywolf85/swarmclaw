@@ -1,9 +1,6 @@
 import type { MessageToolEvent } from '@/types'
 import { canonicalizeExtensionId } from '@/lib/server/tool-aliases'
 import { extractSuggestions } from '@/lib/server/suggestions'
-import {
-  looksLikeExternalWalletTask,
-} from '@/lib/server/chat-execution/stream-continuation'
 import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 import {
   buildSuccessfulMemoryMutationResponse,
@@ -82,7 +79,8 @@ export function shouldForceExternalServiceSummary(params: {
   toolEventCount: number
   classification?: MessageClassification | null
 }): boolean {
-  const walletDetected = params.classification ? params.classification.walletIntent !== 'none' : looksLikeExternalWalletTask(params.userMessage)
+  const walletDetected = params.classification?.walletIntent !== undefined
+    && params.classification.walletIntent !== 'none'
   if (!walletDetected) return false
   if (!params.hasToolCalls || params.toolEventCount === 0) return false
   const trimmed = params.finalResponse.trim()

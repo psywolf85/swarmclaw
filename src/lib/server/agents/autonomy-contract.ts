@@ -1,4 +1,5 @@
 import type { GoalContract } from '@/types'
+import { cleanText } from '@/lib/server/text-normalization'
 
 const PLAN_LINE_RE = /\[MAIN_LOOP_PLAN\]\s*(\{[^\n]*\})/i
 const REVIEW_LINE_RE = /\[MAIN_LOOP_REVIEW\]\s*(\{[^\n]*\})/i
@@ -13,10 +14,6 @@ export interface MainLoopReviewMeta {
   note?: string
   confidence?: number
   needs_replan?: boolean
-}
-
-function cleanText(value: string, max = 400): string {
-  return (value || '').replace(/\s+/g, ' ').trim().slice(0, max)
 }
 
 function uniqueStrings(input: string[]): string[] {

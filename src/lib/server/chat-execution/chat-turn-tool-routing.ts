@@ -22,6 +22,7 @@ import { log } from '@/lib/server/logger'
 import { rankDelegatesByHealth } from '@/lib/server/provider-health'
 import { routeTaskIntent, type CapabilityRoutingDecision } from '@/lib/server/capability-router'
 import { canonicalizeExtensionId, extensionIdMatches } from '@/lib/server/tool-aliases'
+import { classifyMessage, type MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 import {
   buildDirectMemoryRecallResponse,
   classifyDirectMemoryIntent,
@@ -37,7 +38,6 @@ import {
   findFirstUrl,
   hasToolEnabled,
   hasDirectLocalCodingTools,
-  isMemoryListIntent,
   requestedToolNamesFromMessage,
   translateRequestedToolInvocation,
 } from '@/lib/server/chat-execution/chat-execution-utils'
@@ -61,6 +61,7 @@ export interface ToolRoutingContext {
   source: string
   toolEvents: MessageToolEvent[]
   emit: (ev: SSEEvent) => void
+  classification?: MessageClassification | null
 }
 
 export interface ToolRoutingResult {
@@ -126,6 +127,16 @@ async function resolveDirectMemoryIntentWithTimeout(
   }
 }
 
+async function resolveTurnClassification(ctx: ToolRoutingContext): Promise<MessageClassification | null> {
+  if (ctx.classification !== undefined) return ctx.classification ?? null
+  if (ctx.internal || ctx.source !== 'chat') return null
+  return classifyMessage({
+    sessionId: ctx.sessionId,
+    agentId: ctx.session.agentId || null,
+    message: ctx.message,
+  }).catch(() => null)
+}
+
 export async function runExclusiveDirectMemoryPreflight(
   ctx: ToolRoutingContext,
   hooks?: ToolRoutingHooks,
@@ -148,14 +159,18 @@ export async function runExclusiveDirectMemoryPreflight(
     ? 'memory_store'
     : directMemoryIntent.action === 'update'
       ? 'memory_update'
-      : 'memory_search'
+      : directMemoryIntent.action === 'list'
+        ? 'memory_tool'
+        : 'memory_search'
 
   const args: Record<string, unknown> = directMemoryIntent.action === 'recall'
     ? { query: directMemoryIntent.query, scope: 'auto' }
-    : {
-        value: directMemoryIntent.value,
-        ...(directMemoryIntent.title ? { title: directMemoryIntent.title } : {}),
-      }
+    : directMemoryIntent.action === 'list'
+      ? { action: 'list', key: '', scope: 'auto' }
+      : {
+          value: directMemoryIntent.value,
+          ...(directMemoryIntent.title ? { title: directMemoryIntent.title } : {}),
+        }
 
   const result = await invokeTool(
     ctx,
@@ -188,6 +203,15 @@ export async function runExclusiveDirectMemoryPreflight(
       calledNames,
       fullResponse: String(result.toolOutputText || '').trim(),
       errorMessage: String(result.toolOutputText || '').trim() || undefined,
+      missedRequestedTools: [],
+    }
+  }
+
+  if (directMemoryIntent.action === 'list') {
+    return {
+      calledNames,
+      fullResponse: String(result.toolOutputText || '').trim() || 'No memories found.',
+      errorMessage: undefined,
       missedRequestedTools: [],
     }
   }
@@ -494,12 +518,13 @@ export async function runPostLlmToolRouting(
   const unavailableRequestedTools = new Map<string, string>()
   let fullResponse = currentResponse
   let errorMessage = currentError
+  const classification = await resolveTurnClassification(ctx)
 
   const requestedToolNames = (!ctx.internal && ctx.source === 'chat')
     ? requestedToolNamesFromMessage(ctx.message)
     : []
   const routingDecision: CapabilityRoutingDecision | null = (!ctx.internal && ctx.source === 'chat')
-    ? routeTaskIntent(ctx.message, ctx.enabledExtensions, ctx.appSettings)
+    ? routeTaskIntent(ctx.message, ctx.enabledExtensions, ctx.appSettings, classification)
     : null
 
   // --- Forced connector_message_tool ---
@@ -609,6 +634,22 @@ export async function runPostLlmToolRouting(
     }
   }
 
+  if (directMemoryIntent?.action === 'list') {
+    const result = await invokeTool(
+      ctx,
+      'memory_tool',
+      { action: 'list', key: '', scope: 'auto' },
+      'Forced memory list invocation failed',
+      calledNames,
+    )
+    if (result.blockedReason) policyBlockedTools.set('memory_tool', result.blockedReason)
+    if (result.unavailableReason) unavailableRequestedTools.set('memory_tool', result.unavailableReason)
+    if (result.invoked) {
+      fullResponse = String(result.toolOutputText || '').trim() || 'No memories found.'
+      errorMessage = undefined
+    }
+  }
+
   // --- Auto-delegation for coding intent ---
   const hasDelegationCall = FORCED_DELEGATION_TOOLS.some((t) => calledNames.has(t))
   const enabledDelegates = enabledDelegationTools(ctx.session)
@@ -688,16 +729,6 @@ export async function runPostLlmToolRouting(
       const result = await invokeTool(ctx, 'web_search', { query: ctx.effectiveMessage.trim(), maxResults: 5 }, 'Auto web_search routing failed', calledNames)
       if (result.responseOverride) fullResponse = result.responseOverride
     }
-  }
-
-  if (canAutoRoute && calledNames.size === 0 && hasToolEnabled(ctx.session, 'memory') && isMemoryListIntent(ctx.message)) {
-    const result = await invokeTool(
-      ctx, 'memory_tool',
-      { action: 'list', key: '', scope: 'auto' },
-      'Auto memory listing failed',
-      calledNames,
-    )
-    if (result.responseOverride) fullResponse = result.responseOverride
   }
 
   const explicitArtifactTarget = extractExplicitArtifactTarget(ctx.message)

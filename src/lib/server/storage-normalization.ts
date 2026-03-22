@@ -369,6 +369,47 @@ function normalizeStoredDelegationJobRecord(value: unknown): unknown {
   return job
 }
 
+function normalizeStoredRuntimeRunRecord(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const run = value as StoredObject
+
+  if (typeof run.kind !== 'string' || !run.kind.trim()) run.kind = 'session_turn'
+  if (run.ownerType === undefined) run.ownerType = 'session'
+  if (run.ownerId === undefined) {
+    const sessionId = typeof run.sessionId === 'string' && run.sessionId.trim() ? run.sessionId.trim() : ''
+    run.ownerId = sessionId || null
+  }
+  if (run.parentExecutionId === undefined) run.parentExecutionId = null
+  if (run.recoveryPolicy === undefined) {
+    const source = typeof run.source === 'string' ? run.source.trim().toLowerCase() : ''
+    run.recoveryPolicy = source === 'heartbeat'
+      || source === 'heartbeat-wake'
+      || source === 'schedule'
+      || source === 'task'
+      || source === 'delegation'
+      || source === 'subagent'
+      ? 'restart_recoverable'
+      : 'ephemeral'
+  }
+
+  return run
+}
+
+function normalizeStoredRuntimeRunEventRecord(value: unknown): unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return value
+  const event = value as StoredObject
+
+  if (typeof event.kind !== 'string' || !event.kind.trim()) event.kind = 'session_turn'
+  if (event.ownerType === undefined) event.ownerType = 'session'
+  if (event.ownerId === undefined) {
+    const sessionId = typeof event.sessionId === 'string' && event.sessionId.trim() ? event.sessionId.trim() : ''
+    event.ownerId = sessionId || null
+  }
+  if (event.parentExecutionId === undefined) event.parentExecutionId = null
+
+  return event
+}
+
 // --- Main dispatch function ---
 
 export interface NormalizationResult {
@@ -393,6 +434,7 @@ export function normalizeStoredRecord(
     && table !== 'mission_events' && table !== 'delegation_jobs'
     && table !== 'schedules' && table !== 'sessions'
     && table !== 'provider_configs'
+    && table !== 'runtime_runs' && table !== 'runtime_run_events'
   ) {
     return { value, changed: false }
   }
@@ -517,6 +559,14 @@ function normalizeStoredRecordInner(
     return normalizeStoredDelegationJobRecord(value)
   }
 
+  if (table === 'runtime_runs') {
+    return normalizeStoredRuntimeRunRecord(value)
+  }
+
+  if (table === 'runtime_run_events') {
+    return normalizeStoredRuntimeRunEventRecord(value)
+  }
+
   if (table === 'schedules') {
     return normalizeStoredScheduleRecord(value, loadItem)
   }
@@ -547,11 +597,36 @@ function normalizeStoredRecordInner(
   if ('plugins' in session) delete session.plugins
   if ('mainLoopState' in session) delete session.mainLoopState
   if ('missionSummary' in session) delete session.missionSummary
+  // Messages are now stored in session_messages table — ensure default empty array
+  if (!Array.isArray(session.messages)) session.messages = []
+  // Default messageCount for pre-migration blobs
+  if (typeof session.messageCount !== 'number') {
+    session.messageCount = (session.messages as unknown[]).length
+  }
   // Default geminiSessionId for new field
   if (session.geminiSessionId === undefined) session.geminiSessionId = null
   // Default injectedMemoryIds for proactive recall dedup
   if (!session.injectedMemoryIds || typeof session.injectedMemoryIds !== 'object') {
     session.injectedMemoryIds = {}
+  }
+  // Validate runContext if present — leave null/undefined alone (created on demand)
+  if (session.runContext != null) {
+    if (typeof session.runContext !== 'object' || Array.isArray(session.runContext)) {
+      session.runContext = null
+    } else {
+      const rc = session.runContext as Record<string, unknown>
+      if (typeof rc.objective !== 'string' && rc.objective !== null) rc.objective = null
+      if (!Array.isArray(rc.constraints)) rc.constraints = []
+      if (!Array.isArray(rc.keyFacts)) rc.keyFacts = []
+      if (!Array.isArray(rc.discoveries)) rc.discoveries = []
+      if (!Array.isArray(rc.failedApproaches)) rc.failedApproaches = []
+      if (!Array.isArray(rc.currentPlan)) rc.currentPlan = []
+      if (!Array.isArray(rc.completedSteps)) rc.completedSteps = []
+      if (!Array.isArray(rc.blockers)) rc.blockers = []
+      if (typeof rc.parentContext !== 'string' && rc.parentContext !== null) rc.parentContext = null
+      if (typeof rc.updatedAt !== 'number') rc.updatedAt = Date.now()
+      if (typeof rc.version !== 'number') rc.version = 0
+    }
   }
   return session
 }

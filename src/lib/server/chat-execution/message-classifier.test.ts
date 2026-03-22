@@ -23,12 +23,14 @@ after(() => {
 
 describe('parseClassificationResponse', () => {
   const validJson = JSON.stringify({
+    taskIntent: 'general',
     isDeliverableTask: true,
     isBroadGoal: false,
     walletIntent: 'none',
     hasHumanSignals: false,
     hasSignificantEvent: false,
     isResearchSynthesis: false,
+    workType: 'general',
     explicitToolRequests: [],
     confidence: 0.9,
   })
@@ -39,6 +41,8 @@ describe('parseClassificationResponse', () => {
     assert.equal(result!.isDeliverableTask, true)
     assert.equal(result!.isBroadGoal, false)
     assert.equal(result!.walletIntent, 'none')
+    assert.equal(result!.taskIntent, 'general')
+    assert.equal(result!.workType, 'general')
     assert.equal(result!.confidence, 0.9)
     assert.deepEqual(result!.explicitToolRequests, [])
   })
@@ -55,12 +59,14 @@ describe('parseClassificationResponse', () => {
 
   it('tolerates extra keys in JSON', () => {
     const withExtra = JSON.stringify({
+      taskIntent: 'general',
       isDeliverableTask: true,
       isBroadGoal: false,
       walletIntent: 'none',
       hasHumanSignals: false,
       hasSignificantEvent: false,
       isResearchSynthesis: false,
+      workType: 'general',
       explicitToolRequests: ['shell'],
       confidence: 0.85,
       extraKey: 'should be ignored',
@@ -97,9 +103,10 @@ describe('isDeliverableTask', () => {
   })
 
   it('falls back to regex when classification is null', () => {
-    // A message that looks like a deliverable task
-    const result = mod.isDeliverableTask(null, 'Create a detailed marketing report with competitor analysis and market sizing. Include charts and recommendations for Q3 strategy across all regions.')
-    assert.equal(typeof result, 'boolean')
+    assert.equal(
+      mod.isDeliverableTask(null, 'Create a detailed marketing report with competitor analysis and market sizing.'),
+      false,
+    )
   })
 })
 
@@ -114,8 +121,10 @@ describe('isBroadGoal', () => {
   })
 
   it('falls back to regex when classification is null', () => {
-    const result = mod.isBroadGoal(null, 'I want to build a complete e-commerce platform with user authentication, product catalog, shopping cart, and payment processing')
-    assert.equal(typeof result, 'boolean')
+    assert.equal(
+      mod.isBroadGoal(null, 'I want to build a complete e-commerce platform with user authentication, product catalog, shopping cart, and payment processing'),
+      false,
+    )
   })
 })
 
@@ -137,8 +146,7 @@ describe('hasWalletIntent', () => {
   })
 
   it('falls back to regex when classification is null', () => {
-    const result = mod.hasWalletIntent(null, 'check my wallet balance')
-    assert.equal(typeof result, 'boolean')
+    assert.equal(mod.hasWalletIntent(null, 'check my wallet balance'), false)
   })
 })
 
@@ -154,8 +162,7 @@ describe('hasTransactionalWalletIntent', () => {
   })
 
   it('falls back to regex when classification is null', () => {
-    const result = mod.hasTransactionalWalletIntent(null, 'swap 1 ETH for USDC')
-    assert.equal(typeof result, 'boolean')
+    assert.equal(mod.hasTransactionalWalletIntent(null, 'swap 1 ETH for USDC'), false)
   })
 })
 
@@ -169,11 +176,8 @@ describe('hasHumanSignals', () => {
     assert.equal(mod.hasHumanSignals(makeClassification({ hasHumanSignals: false }), ''), false)
   })
 
-  it('regex detects personal text', () => {
-    assert.equal(mod.hasHumanSignals(null, 'my birthday is next week'), true)
-  })
-
-  it('regex returns false for task-only text', () => {
+  it('returns false when classification is null', () => {
+    assert.equal(mod.hasHumanSignals(null, 'my birthday is next week'), false)
     assert.equal(mod.hasHumanSignals(null, 'deploy the app'), false)
   })
 })
@@ -188,12 +192,9 @@ describe('hasSignificantEvent', () => {
     assert.equal(mod.hasSignificantEvent(makeClassification({ hasSignificantEvent: false }), ''), false)
   })
 
-  it('regex detects significant events', () => {
-    assert.equal(mod.hasSignificantEvent(null, 'I just got promoted at work'), true)
-    assert.equal(mod.hasSignificantEvent(null, 'my graduation ceremony is on Friday'), true)
-  })
-
-  it('regex returns false for non-event text', () => {
+  it('returns false when classification is null', () => {
+    assert.equal(mod.hasSignificantEvent(null, 'I just got promoted at work'), false)
+    assert.equal(mod.hasSignificantEvent(null, 'my graduation ceremony is on Friday'), false)
     assert.equal(mod.hasSignificantEvent(null, 'fix the login bug'), false)
   })
 })
@@ -208,9 +209,9 @@ describe('isResearchSynthesis', () => {
     assert.equal(mod.isResearchSynthesis(makeClassification({ isResearchSynthesis: false }), null), false)
   })
 
-  it('falls back to routingIntent when classification is null', () => {
-    assert.equal(mod.isResearchSynthesis(null, 'research'), true)
-    assert.equal(mod.isResearchSynthesis(null, 'browsing'), true)
+  it('returns false when classification is null', () => {
+    assert.equal(mod.isResearchSynthesis(null, 'research'), false)
+    assert.equal(mod.isResearchSynthesis(null, 'browsing'), false)
     assert.equal(mod.isResearchSynthesis(null, 'coding'), false)
     assert.equal(mod.isResearchSynthesis(null, null), false)
   })
@@ -223,12 +224,14 @@ describe('isResearchSynthesis', () => {
 describe('classifyMessage', () => {
   it('returns valid classification from mock generateText', async () => {
     const mockResponse = JSON.stringify({
+      taskIntent: 'coding',
       isDeliverableTask: true,
       isBroadGoal: false,
       walletIntent: 'none',
       hasHumanSignals: false,
       hasSignificantEvent: false,
       isResearchSynthesis: false,
+      workType: 'coding',
       explicitToolRequests: ['shell'],
       confidence: 0.95,
     })
@@ -240,7 +243,9 @@ describe('classifyMessage', () => {
 
     assert.ok(result)
     assert.equal(result!.isDeliverableTask, true)
+    assert.equal(result!.taskIntent, 'coding')
     assert.equal(result!.walletIntent, 'none')
+    assert.equal(result!.workType, 'coding')
     assert.deepEqual(result!.explicitToolRequests, ['shell'])
   })
 
@@ -276,12 +281,14 @@ describe('classifyMessage', () => {
   it('caches results for the same message', async () => {
     let callCount = 0
     const mockResponse = JSON.stringify({
+      taskIntent: 'general',
       isDeliverableTask: false,
       isBroadGoal: false,
       walletIntent: 'none',
       hasHumanSignals: false,
       hasSignificantEvent: false,
       isResearchSynthesis: false,
+      workType: 'general',
       explicitToolRequests: [],
       confidence: 0.8,
     })
@@ -316,12 +323,17 @@ describe('classifyMessage', () => {
 
 function makeClassification(overrides: Partial<import('@/lib/server/chat-execution/message-classifier').MessageClassification>): import('@/lib/server/chat-execution/message-classifier').MessageClassification {
   return {
+    taskIntent: 'general',
     isDeliverableTask: false,
     isBroadGoal: false,
     walletIntent: 'none',
     hasHumanSignals: false,
     hasSignificantEvent: false,
     isResearchSynthesis: false,
+    workType: 'general',
+    wantsScreenshots: false,
+    wantsOutboundDelivery: false,
+    wantsVoiceDelivery: false,
     explicitToolRequests: [],
     confidence: 0.9,
     ...overrides,

@@ -9,7 +9,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!result.ok) {
     return result.status === 404
       ? notFound()
-      : NextResponse.json({ error: result.error }, { status: result.status })
+      : NextResponse.json(result.payload, { status: result.status })
   }
-  return NextResponse.json({ message: result.message })
+  return NextResponse.json(result.payload)
 }

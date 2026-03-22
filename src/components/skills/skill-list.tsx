@@ -1,11 +1,11 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAppStore } from '@/stores/use-app-store'
-import { useWs } from '@/hooks/use-ws'
 import type { Skill } from '@/types'
 import { SkillsWorkspace } from './skills-workspace'
+import { useSkillsQuery } from '@/features/skills/queries'
 
 export function SkillList({ inSidebar }: { inSidebar?: boolean }) {
   if (!inSidebar) return <SkillsWorkspace />
@@ -15,29 +15,16 @@ export function SkillList({ inSidebar }: { inSidebar?: boolean }) {
 function SidebarSkillList() {
   const router = useRouter()
   const searchParams = useSearchParams()
-  const skills = useAppStore((s) => s.skills)
-  const loadSkills = useAppStore((s) => s.loadSkills)
   const activeProjectFilter = useAppStore((s) => s.activeProjectFilter)
   const setEditingSkillId = useAppStore((s) => s.setEditingSkillId)
   const setSkillSheetOpen = useAppStore((s) => s.setSkillSheetOpen)
+  const skillsQuery = useSkillsQuery()
+  const skills = useMemo(() => skillsQuery.data ?? {}, [skillsQuery.data])
 
   const [query, setQuery] = useState('')
-  const [ready, setReady] = useState(false)
 
   const activeTab = searchParams.get('tab') === 'clawhub' ? 'clawhub' : 'skills'
   const selectedSkillId = activeTab === 'skills' ? searchParams.get('skill') : null
-
-  useEffect(() => {
-    let active = true
-    void loadSkills().finally(() => {
-      if (active) setReady(true)
-    })
-    return () => {
-      active = false
-    }
-  }, [loadSkills])
-
-  useWs('skills', () => { void loadSkills() })
 
   const setPageState = useCallback((patch: Record<string, string | null | undefined>) => {
     const next = new URLSearchParams(searchParams.toString())
@@ -92,7 +79,7 @@ function SidebarSkillList() {
       </div>
 
       <div className="mt-3 flex-1 overflow-y-auto">
-        {!ready ? (
+        {skillsQuery.isPending ? (
           <div className="flex items-center justify-center py-10 text-[12px] text-text-3/65">
             <span className="mr-3 h-4 w-4 animate-spin rounded-full border-2 border-white/[0.12] border-t-accent-bright" />
             Loading skills...

@@ -32,6 +32,7 @@ import {
   runDaemonConnectorAction,
 } from '@/lib/server/daemon/controller'
 import { log } from '@/lib/server/logger'
+import { serviceFail, serviceOk } from '@/lib/server/service-result'
 import { notify } from '@/lib/server/ws-hub'
 import { errorMessage } from '@/lib/shared-utils'
 import type {
@@ -40,6 +41,7 @@ import type {
   ConnectorAccessMutationResponse,
   ConnectorHealthEvent,
 } from '@/types'
+import type { ServiceResult } from '@/lib/server/service-result'
 import type { DaemonConnectorRuntimeState } from '@/lib/server/daemon/types'
 
 function cloneConnector<T extends Connector>(connector: T): T {
@@ -175,10 +177,10 @@ export async function autoStartConnectorIfNeeded(connector: Connector, body: Rec
   }
 }
 
-export async function updateConnectorFromRoute(id: string, body: Record<string, unknown>) {
+export async function updateConnectorFromRoute(id: string, body: Record<string, unknown>): Promise<ServiceResult<Connector>> {
   await ensureDaemonProcessRunning('api/connectors/[id]:put')
   const connector = loadConnector(id)
-  if (!connector) return { ok: false as const, status: 404 as const }
+  if (!connector) return serviceFail(404, 'Connector not found')
 
   if (body.action === 'start' || body.action === 'stop' || body.action === 'repair') {
     try {
@@ -194,15 +196,11 @@ export async function updateConnectorFromRoute(id: string, body: Record<string, 
       }
     } catch (err: unknown) {
       log.error('connectors', `Action failed for connector ${id}`, errorMessage(err))
-      const fresh = loadConnector(id)
-      return {
-        ok: false as const,
-        status: 500 as const,
-        payload: fresh || { error: 'Connector action failed' },
-      }
+      return serviceFail(500, 'Connector action failed')
     }
     notify('connectors')
-    return { ok: true as const, payload: await getConnectorWithRuntime(id) }
+    const updated = await getConnectorWithRuntime(id)
+    return serviceOk(updated || connector)
   }
 
   const next = cloneConnector(connector)
@@ -237,12 +235,12 @@ export async function updateConnectorFromRoute(id: string, body: Record<string, 
   }
 
   notify('connectors')
-  return { ok: true as const, payload: await getConnectorWithRuntime(id) || next }
+  return serviceOk(await getConnectorWithRuntime(id) || next)
 }
 
-export async function deleteConnectorFromRoute(id: string) {
+export async function deleteConnectorFromRoute(id: string): Promise<ServiceResult<{ ok: true }>> {
   const connector = loadConnector(id)
-  if (!connector) return { ok: false as const }
+  if (!connector) return serviceFail(404, 'Connector not found')
   try {
     await runDaemonConnectorAction(id, 'stop', 'api/connectors/[id]:delete')
   } catch (err: unknown) {
@@ -256,7 +254,7 @@ export async function deleteConnectorFromRoute(id: string) {
   }
   deleteConnector(id)
   notify('connectors')
-  return { ok: true as const, payload: { ok: true } }
+  return serviceOk({ ok: true as const })
 }
 
 export function getConnectorHealthForApi(id: string): { events: ConnectorHealthEvent[]; uptimePercent: number } | null {
@@ -299,16 +297,16 @@ function computeUptime(events: ConnectorHealthEvent[]): number {
 export async function updateConnectorAccess(
   connectorId: string,
   body: Record<string, unknown>,
-): Promise<{ ok: false; status: 404 | 400; payload?: Record<string, unknown> } | { ok: true; payload: ConnectorAccessMutationResponse }> {
+): Promise<ServiceResult<ConnectorAccessMutationResponse>> {
   await ensureDaemonProcessRunning('api/connectors/[id]/access:put')
   const connector = loadConnector(connectorId)
-  if (!connector) return { ok: false, status: 404 }
+  if (!connector) return serviceFail(404, 'Connector not found')
   const current = cloneConnector(connector)
 
   try {
     const action = typeof body.action === 'string' ? body.action.trim().toLowerCase() as ConnectorAccessMutationAction : null
     if (!action) {
-      return { ok: false, status: 400, payload: { error: 'Missing access action' } }
+      return serviceFail(400, 'Missing access action')
     }
     let connectorChanged = false
     let responseSenderId = typeof body.senderId === 'string' ? body.senderId.trim() : ''
@@ -371,7 +369,7 @@ export async function updateConnectorAccess(
         if (typeof body.code === 'string' && body.code.trim()) {
           const approved = approvePairingCode(current.id, body.code)
           if (!approved.ok) {
-            return { ok: false, status: 400, payload: { error: approved.reason || 'Pairing approval failed.' } }
+            return serviceFail(400, approved.reason || 'Pairing approval failed.')
           }
           if (approved.senderId) {
             responseSenderId = approved.senderId
@@ -382,7 +380,7 @@ export async function updateConnectorAccess(
           const senderId = requireSenderId(body)
           const approved = approvePendingSender(current.id, senderId)
           if (!approved.ok) {
-            return { ok: false, status: 400, payload: { error: approved.reason || 'Pairing approval failed.' } }
+            return serviceFail(400, approved.reason || 'Pairing approval failed.')
           }
           connectorChanged = removeConnectorSenderListEntry(current, 'denyFrom', senderId) || connectorChanged
           summary = `Approved pairing for ${normalizeSenderId(senderId)} on "${current.name}".`
@@ -398,7 +396,7 @@ export async function updateConnectorAccess(
       case 'set_owner': {
         const senderId = requireSenderId(body)
         const normalized = normalizeSenderId(senderId)
-        if (!normalized) return { ok: false, status: 400, payload: { error: 'Could not normalize owner sender ID' } }
+        if (!normalized) return serviceFail(400, 'Could not normalize owner sender ID')
         current.config.ownerSenderId = normalized
         connectorChanged = true
         connectorChanged = removeConnectorSenderListEntry(current, 'denyFrom', normalized) || connectorChanged
@@ -428,7 +426,7 @@ export async function updateConnectorAccess(
         break
       }
       default:
-        return { ok: false, status: 400, payload: { error: `Unsupported access action: ${action}` } }
+        return serviceFail(400, `Unsupported access action: ${action}`)
     }
 
     if (connectorChanged) persistConnector(current)
@@ -441,18 +439,15 @@ export async function updateConnectorAccess(
       detail: { action },
     })
     notify('connectors')
-    return {
+    return serviceOk({
       ok: true,
-      payload: {
-        ok: true,
-        snapshot: buildConnectorAccessSnapshot({
-          connector: current,
-          senderId: responseSenderId || null,
-          senderIdAlt: responseSenderIdAlt || null,
-        }),
-      },
-    }
+      snapshot: buildConnectorAccessSnapshot({
+        connector: current,
+        senderId: responseSenderId || null,
+        senderIdAlt: responseSenderIdAlt || null,
+      }),
+    })
   } catch (err: unknown) {
-    return { ok: false, status: 400, payload: { error: errorMessage(err) } }
+    return serviceFail(400, errorMessage(err))
   }
 }

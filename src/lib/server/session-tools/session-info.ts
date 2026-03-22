@@ -3,10 +3,19 @@ import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { genId } from '@/lib/id'
 import { loadSessions, saveSessions, loadAgents } from '../storage'
 import type { ToolBuildContext } from './context'
-import type { Extension, ExtensionHooks } from '@/types'
+import type { ActiveProjectContext } from '@/lib/server/project-context'
+import type { SessionToolPolicyDecision } from '@/lib/server/tool-capability-policy'
+import type { Agent, Extension, ExtensionHooks, Session } from '@/types'
 import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
-import { getEnabledCapabilitySelection } from '@/lib/capability-selection'
+import { getEnabledCapabilityIds, getEnabledCapabilitySelection } from '@/lib/capability-selection'
+import { getExtensionManager } from '@/lib/server/extensions'
+import { canonicalizeExtensionId, expandExtensionIds } from '@/lib/server/tool-aliases'
+import { resolvePromptMode } from '@/lib/server/chat-execution/prompt-mode'
+import { resolveActiveProjectContext } from '@/lib/server/project-context'
+import { resolveSessionLineageIds } from '@/lib/server/sessions/session-lineage'
+import { loadSettings } from '@/lib/server/settings/settings-repository'
+import { resolveSessionToolPolicy } from '@/lib/server/tool-capability-policy'
 
 /**
  * Core Session Info Execution Logic
@@ -15,15 +24,109 @@ async function executeWhoAmI(context: { sessionId?: string; agentId?: string }) 
   try {
     const sessions = loadSessions()
     const current = context.sessionId ? sessions[context.sessionId] : null
-    return JSON.stringify({
-      sessionId: context.sessionId || undefined,
-      sessionName: current?.name || undefined,
-      sessionType: current?.sessionType || undefined,
-      user: current?.user || undefined,
-      agentId: context.agentId || current?.agentId || undefined,
-      parentSessionId: current?.parentSessionId || undefined,
-    })
+    const agents = loadAgents()
+    const agentRecord = (context.agentId ? agents[context.agentId] : null) || (current?.agentId ? agents[current.agentId] : null) || null
+    const { toolPolicy, enabledExtensions } = resolveSessionIdentityAccess(current)
+    const activeProjectContext = resolveActiveProjectContext(current || { agentId: context.agentId || null, cwd: null, projectId: null })
+    const { rootSessionId } = resolveSessionLineageIds(current || { id: context.sessionId || '', parentSessionId: null })
+    return JSON.stringify(buildSessionIdentityPayload({
+      context,
+      currentSession: current,
+      currentAgent: agentRecord || null,
+      activeProjectContext,
+      enabledExtensions,
+      toolPolicy,
+      rootSessionId,
+    }))
   } catch (err: any) { return `Error: ${err.message}` }
+}
+
+function normalizeRuntimeExtensionId(extensionId: string): string {
+  const normalized = extensionId.trim().toLowerCase()
+  if (!normalized) return ''
+  if (normalized === 'delegate_to_claude_code' || normalized === 'claude_code') return 'claude_code'
+  if (normalized === 'delegate_to_codex_cli' || normalized === 'codex_cli') return 'codex_cli'
+  if (normalized === 'delegate_to_opencode_cli' || normalized === 'opencode_cli') return 'opencode_cli'
+  if (normalized === 'delegate_to_gemini_cli' || normalized === 'gemini_cli') return 'gemini_cli'
+  if (['session_info', 'sessions_tool', 'whoami_tool', 'search_history_tool'].includes(normalized)) return 'manage_sessions'
+  return canonicalizeExtensionId(normalized)
+}
+
+function canonicalizeEnabledExtensions(enabledExtensions: string[]): string[] {
+  const seen = new Set<string>()
+  const values: string[] = []
+  for (const extensionId of enabledExtensions) {
+    const normalized = normalizeRuntimeExtensionId(extensionId)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    values.push(normalized)
+  }
+  return values
+}
+
+function resolveSessionIdentityAccess(current: Session | null): {
+  toolPolicy: SessionToolPolicyDecision
+  enabledExtensions: string[]
+} {
+  const rawExtensions = getEnabledCapabilityIds(current)
+  const hasShellCapability = rawExtensions.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
+  const extensionManager = getExtensionManager()
+  const requestedExtensions = expandExtensionIds([
+    ...rawExtensions,
+    ...(hasShellCapability ? ['process'] : []),
+  ]).filter((id) => !extensionManager.isExplicitlyDisabled(id))
+  const toolPolicy = resolveSessionToolPolicy(requestedExtensions, loadSettings())
+  const blockedExtensionIds = new Set(expandExtensionIds(toolPolicy.blockedExtensions.map((entry) => entry.tool)))
+  const enabledExtensions = canonicalizeEnabledExtensions(
+    expandExtensionIds(toolPolicy.enabledExtensions)
+      .filter((id) => !blockedExtensionIds.has(id))
+      .filter((id) => !extensionManager.isExplicitlyDisabled(id)),
+  )
+  return { toolPolicy, enabledExtensions }
+}
+
+export function buildSessionIdentityPayload(params: {
+  context: { sessionId?: string; agentId?: string }
+  currentSession: Session | null
+  currentAgent?: Agent | null
+  activeProjectContext?: ActiveProjectContext | null
+  enabledExtensions?: string[]
+  toolPolicy?: SessionToolPolicyDecision | null
+  rootSessionId?: string | null
+}): Record<string, unknown> {
+  const current = params.currentSession
+  const currentAgent = params.currentAgent || null
+  const activeProjectContext = params.activeProjectContext || null
+  const enabledExtensions = Array.isArray(params.enabledExtensions) ? params.enabledExtensions : []
+  const toolPolicy = params.toolPolicy || null
+  const delegationEnabled = enabledExtensions.some((extensionId) => ['delegate', 'spawn_subagent', 'claude_code', 'codex_cli', 'opencode_cli', 'gemini_cli'].includes(extensionId))
+
+  return {
+    sessionId: params.context.sessionId || undefined,
+    sessionName: current?.name || undefined,
+    sessionType: current?.sessionType || undefined,
+    sessionKind: current?.parentSessionId ? 'delegated_child' : 'root_chat',
+    promptMode: current ? resolvePromptMode(current) : undefined,
+    user: current?.user || undefined,
+    agentId: params.context.agentId || current?.agentId || undefined,
+    agentName: typeof currentAgent?.name === 'string' ? currentAgent.name : undefined,
+    parentSessionId: current?.parentSessionId || undefined,
+    rootSessionId: params.rootSessionId || current?.id || undefined,
+    cwd: current?.cwd || undefined,
+    projectId: activeProjectContext?.projectId || undefined,
+    projectName: activeProjectContext?.project?.name || undefined,
+    provider: current?.provider || undefined,
+    model: current?.model || undefined,
+    enabledExtensions,
+    blockedExtensions: toolPolicy?.blockedExtensions || [],
+    delegationEnabled,
+    delegationTargetMode: delegationEnabled
+      ? (currentAgent?.delegationTargetMode === 'selected' ? 'selected' : 'all')
+      : undefined,
+    delegationTargetAgentIds: delegationEnabled && Array.isArray(currentAgent?.delegationTargetAgentIds)
+      ? currentAgent.delegationTargetAgentIds
+      : [],
+  }
 }
 
 function inferSessionsAction(
@@ -133,8 +236,12 @@ const SessionInfoExtension: Extension = {
   name: 'Core Session Info',
   description: 'Identify current session context and manage other agent sessions.',
   hooks: {
-    getCapabilityDescription: () => 'I can manage chat sessions (`sessions_tool`) — check my identity with action `identity`, look up past conversations, spawn sessions, and coordinate work.',
-    getOperatingGuidance: () => 'Inspect existing chats before creating duplicates.',
+    getCapabilityDescription: () => 'I can manage chat sessions (`sessions_tool`) — inspect live harness/session context with action `identity`, look up past session messages with `history`, spawn sessions, and coordinate work.',
+    getOperatingGuidance: () => [
+      'Use `sessions_tool` action `identity` when you need live session, project, lineage, or enabled-tool context.',
+      'Use `sessions_tool` action `history` only when you need earlier messages from this same session that are not already visible in the current thread.',
+      'Inspect existing chats before creating duplicates.',
+    ],
   } as ExtensionHooks,
   tools: [
     {

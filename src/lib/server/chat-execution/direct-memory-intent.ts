@@ -4,7 +4,7 @@ import type { MessageToolEvent } from '@/types'
 import { buildLLM } from '@/lib/server/build-llm'
 
 const DirectMemoryIntentResponseSchema = z.object({
-  action: z.enum(['none', 'store', 'update', 'recall']),
+  action: z.enum(['none', 'store', 'update', 'recall', 'list']),
   confidence: z.number().min(0).max(1).optional(),
   title: z.string().optional().nullable(),
   value: z.string().optional().nullable(),
@@ -18,6 +18,7 @@ export type DirectMemoryIntent =
   | { action: 'none'; confidence: number }
   | { action: 'store'; confidence: number; title?: string; value: string; acknowledgement: string; exclusiveCompletion: boolean }
   | { action: 'update'; confidence: number; title?: string; value: string; acknowledgement: string; exclusiveCompletion: boolean }
+  | { action: 'list'; confidence: number }
   | { action: 'recall'; confidence: number; query: string; missResponse: string }
 
 export interface DirectMemoryIntentClassifierInput {
@@ -122,6 +123,13 @@ export function parseDirectMemoryIntentResponse(text: string): DirectMemoryInten
     }
   }
 
+  if (parsed.data.action === 'list') {
+    return {
+      action: 'list',
+      confidence,
+    }
+  }
+
   const query = normalizeText(parsed.data.query)
   if (!query) return null
   return {
@@ -153,15 +161,17 @@ function buildDirectMemoryIntentPrompt(input: DirectMemoryIntentClassifierInput)
     'Rules:',
     '- Choose "store" when the user wants a new durable fact, preference, decision, or profile detail remembered.',
     '- Choose "update" when the user is correcting or replacing previously remembered information.',
+    '- Choose "list" when the user wants a broad inventory of stored memories or asks what the assistant remembers in general.',
     '- Choose "recall" when the user is asking what the assistant remembers from earlier interactions.',
     '- Choose "none" for ordinary conversation, current-thread-only questions, file/code/document work, and anything that should not touch durable memory.',
     '- Be conservative. If unsure, return {"action":"none","confidence":0}.',
     '- For "store" and "update", return the durable fact in "value" and a short natural user-facing acknowledgement in "acknowledgement". Do not mention tools, memory ids, storage, creation, or updating.',
     '- Set "exclusiveCompletion" to true only when a successful memory write fully satisfies the user turn and the assistant should stop after the acknowledgement. Set it to false when the user also asked for other work in the same turn.',
+    '- Choose "recall" for targeted lookups about a specific remembered fact. Choose "list" for broad inventory requests like listing memories or asking what is remembered overall.',
     '- For "recall", return a concise search query in "query" and a short natural "missResponse". Do not mention tools.',
     '',
     'Output shape:',
-    '{"action":"none|store|update|recall","confidence":0-1,"title":"optional short title","value":"for store/update","query":"for recall","acknowledgement":"for store/update","missResponse":"for recall","exclusiveCompletion":true}',
+    '{"action":"none|store|update|recall|list","confidence":0-1,"title":"optional short title","value":"for store/update","query":"for recall","acknowledgement":"for store/update","missResponse":"for recall","exclusiveCompletion":true}',
     '',
     `user_message: ${JSON.stringify(message)}`,
     `assistant_response: ${JSON.stringify(currentResponse)}`,

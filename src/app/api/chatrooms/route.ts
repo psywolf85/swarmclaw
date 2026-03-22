@@ -7,6 +7,10 @@ import { safeParseBody } from '@/lib/server/safe-parse-body'
 import { z } from 'zod'
 import type { Chatroom, ChatroomMessage } from '@/types'
 import { isWorkerOnlyAgent } from '@/lib/server/agents/agent-availability'
+import {
+  ensureChatroomRoutingGuidance,
+  synthesizeRoutingGuidanceFromRules,
+} from '@/lib/server/chatrooms/chatroom-routing'
 
 export const dynamic = 'force-dynamic'
 
@@ -14,9 +18,12 @@ export async function GET(req: Request) {
   const { searchParams } = new URL(req.url)
   const filter = searchParams.get('filter') || 'chatrooms'
   const chatrooms = loadChatrooms()
+  const agents = loadAgents()
   const filtered: typeof chatrooms = {}
+  let migrated = false
   for (const [id, chatroom] of Object.entries(chatrooms)) {
     if (chatroom.archivedAt) continue
+    if (ensureChatroomRoutingGuidance(chatroom, agents)) migrated = true
     if (filter === 'chatrooms') {
       // Default: exclude hidden (protocol transcript rooms)
       if (chatroom.hidden === true) continue
@@ -27,6 +34,7 @@ export async function GET(req: Request) {
     // filter === 'all': include everything except archived
     filtered[id] = chatroom
   }
+  if (migrated) saveChatrooms(chatrooms)
   return NextResponse.json(filtered)
 }
 
@@ -63,6 +71,9 @@ export async function POST(req: Request) {
   const chatMode = body.chatMode === 'parallel' ? 'parallel' : 'sequential'
   const autoAddress = Boolean(body.autoAddress)
   const now = Date.now()
+  const routingGuidance = (typeof body.routingGuidance === 'string' && body.routingGuidance.trim())
+    ? body.routingGuidance.trim()
+    : synthesizeRoutingGuidanceFromRules(body.routingRules, knownAgents)
 
   // Generate join messages for initial agents
   const agents = agentIds.length > 0 ? knownAgents : {}
@@ -85,8 +96,8 @@ export async function POST(req: Request) {
     messages: joinMessages,
     chatMode,
     autoAddress,
-    ...(Array.isArray(body.routingRules) && body.routingRules.length > 0
-      ? { routingRules: body.routingRules }
+    ...(routingGuidance
+      ? { routingGuidance }
       : {}),
     createdAt: now,
     updatedAt: now,

@@ -1,5 +1,7 @@
-import type { Message } from '@/types'
+import type { Message, Session } from '@/types'
 import { getMemoryDb } from '@/lib/server/memory/memory-db'
+import { extractFactsFromMessages, ensureRunContext, pruneRunContext } from '@/lib/server/run-context'
+import { getSession, saveSession } from '@/lib/server/sessions/session-repository'
 
 import { repairTranscriptConsistency } from './transcript-repair'
 
@@ -548,6 +550,23 @@ export async function llmCompact(opts: {
   const repaired = repairTranscriptConsistency(messages)
   const oldMessages = repaired.slice(0, -keepLastN)
   const recentMessages = repaired.slice(-keepLastN)
+
+  // 0. Extract facts from messages about to be dropped into RunContext (non-critical)
+  try {
+    const session = getSession(sessionId) as Session | undefined
+    if (session && oldMessages.length > 0) {
+      const extracted = extractFactsFromMessages(oldMessages)
+      if (extracted.keyFacts.length > 0 || extracted.failedApproaches.length > 0) {
+        const ctx = ensureRunContext(session.runContext)
+        ctx.keyFacts = [...ctx.keyFacts, ...extracted.keyFacts]
+        ctx.failedApproaches = [...ctx.failedApproaches, ...extracted.failedApproaches]
+        ctx.version++
+        ctx.updatedAt = Date.now()
+        session.runContext = pruneRunContext(ctx)
+        saveSession(sessionId, session)
+      }
+    }
+  } catch { /* non-critical — compaction continues even if extraction fails */ }
 
   // 1. Consolidate important info to memory
   const memoriesStored = consolidateToMemory(oldMessages, agentId, sessionId)

@@ -2,7 +2,7 @@
 
 import { create } from 'zustand'
 import { api, getStoredAccessKey } from '@/lib/app/api-client'
-import type { Chatroom, ChatroomMessage, ChatroomRoutingRule, SSEEvent } from '@/types'
+import type { Chatroom, ChatroomMessage, SSEEvent } from '@/types'
 import type { PendingFile } from '@/stores/use-chat-store'
 
 interface ToolEvent {
@@ -59,7 +59,7 @@ interface ChatroomState {
 
   loadChatrooms: () => Promise<void>
   loadChatroomById: (id: string) => Promise<Chatroom | null>
-  createChatroom: (data: { name: string; description?: string; agentIds?: string[]; chatMode?: 'sequential' | 'parallel'; autoAddress?: boolean; routingRules?: ChatroomRoutingRule[] }) => Promise<Chatroom>
+  createChatroom: (data: { name: string; description?: string; agentIds?: string[]; chatMode?: 'sequential' | 'parallel'; autoAddress?: boolean; routingGuidance?: string | null }) => Promise<Chatroom>
   updateChatroom: (id: string, data: Partial<Chatroom>) => Promise<void>
   deleteChatroom: (id: string) => Promise<void>
   setCurrentChatroom: (id: string | null) => void

@@ -5,20 +5,27 @@ import { useAppStore } from '@/stores/use-app-store'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
-import { api } from '@/lib/app/api-client'
 import { buildSkillSavePayload } from '@/lib/skill-save-payload'
 import { toast } from 'sonner'
 import type { Skill, SkillSecuritySummary } from '@/types'
+import {
+  useDeleteSkillMutation,
+  useImportSkillFromUrlMutation,
+  useSaveSkillMutation,
+  useSkillsQuery,
+} from '@/features/skills/queries'
+import { useAgentsQuery } from '@/features/agents/queries'
 
 export function SkillSheet() {
   const open = useAppStore((s) => s.skillSheetOpen)
   const setOpen = useAppStore((s) => s.setSkillSheetOpen)
   const editingId = useAppStore((s) => s.editingSkillId)
   const setEditingId = useAppStore((s) => s.setEditingSkillId)
-  const skills = useAppStore((s) => s.skills)
-  const loadSkills = useAppStore((s) => s.loadSkills)
-  const agents = useAppStore((s) => s.agents)
-  const loadAgents = useAppStore((s) => s.loadAgents)
+  const skillsQuery = useSkillsQuery({ enabled: open })
+  const agentsQuery = useAgentsQuery({ enabled: open })
+  const importSkillFromUrlMutation = useImportSkillFromUrlMutation()
+  const saveSkillMutation = useSaveSkillMutation()
+  const deleteSkillMutation = useDeleteSkillMutation()
   const fileRef = useRef<HTMLInputElement>(null)
 
   const [name, setName] = useState('')
@@ -35,6 +42,8 @@ export function SkillSheet() {
   const [confirmDelete, setConfirmDelete] = useState(false)
   const [deleting, setDeleting] = useState(false)
 
+  const skills = skillsQuery.data ?? {}
+  const agents = agentsQuery.data ?? {}
   const editing = editingId ? skills[editingId] : null
   const agentList = Object.values(agents)
 
@@ -44,7 +53,7 @@ export function SkillSheet() {
     setImportError('')
     setImportNotice('')
     try {
-      const result = await api<Partial<Skill> & { name: string; filename: string; description?: string; content: string; sourceFormat?: 'openclaw' | 'plain' }>('POST', '/skills/import', { url: importUrl.trim() })
+      const result = await importSkillFromUrlMutation.mutateAsync(importUrl.trim())
       setName(result.name || '')
       setFilename(result.filename || '')
       setDescription(result.description || '')
@@ -61,10 +70,6 @@ export function SkillSheet() {
       setImportingUrl(false)
     }
   }
-
-  useEffect(() => {
-    if (open) loadAgents()
-  }, [open, loadAgents])
 
   useEffect(() => {
     if (open) {
@@ -133,14 +138,11 @@ export function SkillSheet() {
       agentIds,
     }, metadataPreview)
     try {
-      if (editing) {
-        await api('PUT', `/skills/${editing.id}`, data)
-        toast.success('Skill updated successfully')
-      } else {
-        await api('POST', '/skills', data)
-        toast.success('Skill created successfully')
-      }
-      await loadSkills()
+      await saveSkillMutation.mutateAsync({
+        id: editing?.id,
+        data: data as Record<string, unknown>,
+      })
+      toast.success(editing ? 'Skill updated successfully' : 'Skill created successfully')
       onClose()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save skill')
@@ -151,9 +153,8 @@ export function SkillSheet() {
     if (!editing) return
     setDeleting(true)
     try {
-      await api('DELETE', `/skills/${editing.id}`)
+      await deleteSkillMutation.mutateAsync(editing.id)
       toast.success('Skill deleted')
-      await loadSkills()
       setConfirmDelete(false)
       onClose()
     } catch (err: unknown) {

@@ -5,12 +5,21 @@ import { notFound } from '@/lib/server/collection-helpers'
 import { safeParseBody } from '@/lib/server/safe-parse-body'
 import { genId } from '@/lib/id'
 import { isWorkerOnlyAgent } from '@/lib/server/agents/agent-availability'
+import {
+  ensureChatroomRoutingGuidance,
+  synthesizeRoutingGuidanceFromRules,
+} from '@/lib/server/chatrooms/chatroom-routing'
 
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const chatrooms = loadChatrooms()
   const chatroom = chatrooms[id]
   if (!chatroom) return notFound()
+  const agents = loadAgents()
+  if (ensureChatroomRoutingGuidance(chatroom, agents)) {
+    chatrooms[id] = chatroom
+    saveChatrooms(chatrooms)
+  }
   return NextResponse.json(chatroom)
 }
 
@@ -30,8 +39,16 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
   if (body.autoAddress !== undefined) {
     chatroom.autoAddress = Boolean(body.autoAddress)
   }
-  if (body.routingRules !== undefined) {
-    chatroom.routingRules = Array.isArray(body.routingRules) ? body.routingRules : undefined
+  if (body.routingGuidance !== undefined || body.routingRules !== undefined) {
+    const agents = loadAgents()
+    const routingGuidance = (typeof body.routingGuidance === 'string' && body.routingGuidance.trim())
+      ? body.routingGuidance.trim()
+      : synthesizeRoutingGuidanceFromRules(
+          Array.isArray(body.routingRules) ? body.routingRules : undefined,
+          agents,
+        )
+    chatroom.routingGuidance = routingGuidance
+    delete chatroom.routingRules
   }
 
   // Diff agentIds and inject join/leave system messages
@@ -97,6 +114,10 @@ export async function PUT(req: Request, { params }: { params: Promise<{ id: stri
     }
 
     chatroom.agentIds = agentIds
+  }
+
+  if (body.routingGuidance === undefined && body.routingRules === undefined) {
+    ensureChatroomRoutingGuidance(chatroom, loadAgents())
   }
 
   chatroom.updatedAt = Date.now()

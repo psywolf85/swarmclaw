@@ -21,7 +21,10 @@ export interface ToolPlanningEntry {
   toolName: string
   capabilities: string[]
   disciplineGuidance: string[]
-  requestMatchers: NonNullable<ExtensionToolPlanning['requestMatchers']>
+}
+
+interface LegacyToolPlanningEntry extends ToolPlanningEntry {
+  requestMatchers?: unknown
 }
 
 export interface ToolPlanningView {
@@ -32,7 +35,7 @@ export interface ToolPlanningView {
   capabilityToTools: Map<string, string[]>
 }
 
-const CORE_TOOL_PLANNING: Record<string, ToolPlanningEntry[]> = {
+const CORE_TOOL_PLANNING: Record<string, LegacyToolPlanningEntry[]> = {
   files: [
     {
       toolName: 'files',
@@ -419,22 +422,11 @@ function normalizePlanningEntry(toolName: string, planning: ExtensionToolPlannin
   if (!planning) return null
   const capabilities = dedupeStrings(Array.isArray(planning.capabilities) ? planning.capabilities : [])
   const disciplineGuidance = dedupeStrings(Array.isArray(planning.disciplineGuidance) ? planning.disciplineGuidance : [])
-  const requestMatchers = Array.isArray(planning.requestMatchers)
-    ? planning.requestMatchers
-        .map((matcher) => ({
-          capability: typeof matcher?.capability === 'string' ? matcher.capability.trim() : '',
-          patterns: dedupeStrings(Array.isArray(matcher?.patterns) ? matcher.patterns : []),
-          requireLiteralUrl: matcher?.requireLiteralUrl === true,
-          forbidLiteralUrl: matcher?.forbidLiteralUrl === true,
-        }))
-        .filter((matcher) => matcher.capability || matcher.patterns.length > 0)
-    : []
-  if (!capabilities.length && !disciplineGuidance.length && !requestMatchers.length) return null
+  if (!capabilities.length && !disciplineGuidance.length) return null
   return {
     toolName,
     capabilities,
     disciplineGuidance,
-    requestMatchers,
   }
 }
 
@@ -450,7 +442,6 @@ export function getEnabledToolPlanningView(enabledExtensions: string[]): ToolPla
         toolName: entry.toolName,
         capabilities: [...entry.capabilities],
         disciplineGuidance: [...entry.disciplineGuidance],
-        requestMatchers: [...entry.requestMatchers],
       })
     }
   }
@@ -491,31 +482,4 @@ export function getToolsForCapability(enabledExtensions: string[], capability: s
 
 export function getFirstToolForCapability(enabledExtensions: string[], capability: string): string | null {
   return getToolsForCapability(enabledExtensions, capability)[0] || null
-}
-
-export function matchToolCapabilitiesForMessage(
-  enabledExtensions: string[],
-  message: string,
-): Map<string, string[]> {
-  const text = String(message || '').toLowerCase()
-  const hasLiteralUrl = /https?:\/\/[^\s<>"')]+/i.test(message)
-  const matches = new Map<string, Set<string>>()
-
-  for (const entry of getEnabledToolPlanningView(enabledExtensions).entries) {
-    for (const matcher of entry.requestMatchers) {
-      const patterns = Array.isArray(matcher.patterns) ? matcher.patterns : []
-      if (matcher.requireLiteralUrl === true && !hasLiteralUrl) continue
-      if (matcher.forbidLiteralUrl === true && hasLiteralUrl) continue
-      if (!patterns.length) continue
-      const matched = patterns.some((pattern) => text.includes(pattern.toLowerCase()))
-      if (!matched) continue
-      const capability = matcher.capability || entry.capabilities[0] || ''
-      if (!capability) continue
-      const current = matches.get(capability) || new Set<string>()
-      current.add(entry.toolName)
-      matches.set(capability, current)
-    }
-  }
-
-  return new Map(Array.from(matches.entries()).map(([capability, toolNames]) => [capability, Array.from(toolNames)]))
 }

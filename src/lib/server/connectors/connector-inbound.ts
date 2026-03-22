@@ -6,6 +6,7 @@ import {
   loadAgents, loadCredentials, decryptKey, loadSettings, loadSkills,
   loadChatrooms, saveChatrooms,
 } from '../storage'
+import { getMessages } from '@/lib/server/messages/message-repository'
 import { dedup, errorMessage, hmrSingleton } from '@/lib/shared-utils'
 import path from 'path'
 import { streamAgentChat } from '@/lib/server/chat-execution/stream-agent-chat'
@@ -22,7 +23,10 @@ import {
   resolveApiKey as resolveApiKeyHelper,
 } from '@/lib/server/chatrooms/chatroom-helpers'
 import { filterHealthyChatroomAgents } from '@/lib/server/chatrooms/chatroom-health'
-import { evaluateRoutingRules } from '@/lib/server/chatrooms/chatroom-routing'
+import {
+  ensureChatroomRoutingGuidance,
+  selectChatroomRecipients,
+} from '@/lib/server/chatrooms/chatroom-routing'
 import { markProviderFailure, markProviderSuccess } from '../provider-health'
 import { buildIdentityContinuityContext } from '../identity-continuity'
 import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/server/skills/runtime-skill-resolver'
@@ -630,11 +634,14 @@ async function routeMessageToChatroom(connector: Connector, msg: InboundMessage)
   const threadContextBlock = buildConnectorThreadContextBlock(msg)
 
   // Parse mentions from the message text
+  ensureChatroomRoutingGuidance(chatroom, agents)
   let mentions = parseMentions(msg.text || '', agents, chatroom.agentIds)
-  // Routing rules: if no explicit mentions, evaluate keyword/capability rules
-  if (mentions.length === 0 && chatroom.routingRules?.length) {
-    const agentList = chatroom.agentIds.map((id) => agents[id]).filter(Boolean)
-    mentions = evaluateRoutingRules(msg.text || '', chatroom.routingRules, agentList)
+  if (mentions.length === 0 && !chatroom.autoAddress) {
+    mentions = await selectChatroomRecipients({
+      text: msg.text || '',
+      chatroom,
+      agentsById: agents,
+    })
   }
   // Auto-address: if enabled and still no mentions, address all agents
   if (chatroom.autoAddress && mentions.length === 0) {
@@ -1245,7 +1252,7 @@ If media sending fails, report the exact error and retry with a corrected path/t
             }
           }
         },
-        history: modelHistoryTailWithAttribution(session.messages, 50, 48_000),
+        history: modelHistoryTailWithAttribution(getMessages(session.id), 50, 48_000),
       })
       settledConnectorToolEvents = [
         ...pruneIncompleteToolEvents(streamedConnectorToolEvents),
@@ -1300,7 +1307,7 @@ If media sending fails, report the exact error and retry with a corrected path/t
         }
       },
       active: new Map(),
-      loadHistory: () => modelHistoryTailWithAttribution(session.messages, 50, 48_000),
+      loadHistory: () => modelHistoryTailWithAttribution(getMessages(session.id), 50, 48_000),
     })
     mediaExtractionText = fullText
   }

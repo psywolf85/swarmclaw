@@ -100,6 +100,9 @@ export function withTransaction<T>(fn: () => T): T {
   return wrapped()
 }
 
+/** Internal: raw database handle for specialized repositories (e.g. message-repository). */
+export function getDb(): InstanceType<typeof Database> { return db }
+
 type StoredObject = Record<string, unknown>
 type StoredSessionRecord = Session
 type StoredAgentRecord = Agent
@@ -157,6 +160,7 @@ const COLLECTIONS = [
   'provider_health',
   'swarm_snapshots',
   'main_loop_states',
+  'working_states',
   'daemon_status',
 ] as const
 
@@ -180,6 +184,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS runtime_locks (
   expires_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 )`)
+
+// Relational message storage — messages extracted from session blobs (Phase 1)
+db.exec(`CREATE TABLE IF NOT EXISTS session_messages (
+  session_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  data TEXT NOT NULL,
+  PRIMARY KEY (session_id, seq)
+) WITHOUT ROWID`)
 
 // --- Internal normalize helper that binds the loadItem dependency ---
 function normalize(table: string, value: unknown): NormalizationResult {
@@ -1594,6 +1606,12 @@ const mainLoopStatesStore = createCollectionStore('main_loop_states')
 export const loadPersistedMainLoopState = mainLoopStatesStore.loadItem
 export const upsertPersistedMainLoopState = mainLoopStatesStore.upsert
 export const deletePersistedMainLoopState = mainLoopStatesStore.deleteItem
+
+// --- Working States ---
+const workingStatesStore = createCollectionStore('working_states')
+export const loadPersistedWorkingState = workingStatesStore.loadItem
+export const upsertPersistedWorkingState = workingStatesStore.upsert
+export const deletePersistedWorkingState = workingStatesStore.deleteItem
 
 export function getSessionMessages(sessionId: string): Message[] {
   const session = loadSession(sessionId)

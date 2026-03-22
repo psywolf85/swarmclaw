@@ -6,6 +6,12 @@ import { registerNativeCapability } from '../native-capabilities'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { errorMessage, sleep } from '@/lib/shared-utils'
 import { loadAgents } from '@/lib/server/agents/agent-repository'
+import { classifyMessage } from '@/lib/server/chat-execution/message-classifier'
+import {
+  buildDelegationTaskProfile,
+  resolveBestDelegateTarget,
+  type DelegationWorkType,
+} from '@/lib/server/agents/delegation-advisory'
 import {
   cancelDelegationJob,
   getDelegationJob,
@@ -57,6 +63,9 @@ const subagentToolSchema = z.object({
   action: z.enum(SUBAGENT_ACTIONS).optional(),
   agentId: z.string().optional(),
   message: z.string().optional(),
+  selectionMode: z.enum(['explicit', 'best_fit']).optional(),
+  workType: z.enum(['coding', 'research', 'writing', 'review', 'operations', 'general']).optional(),
+  requiredCapabilities: z.union([z.array(z.string()), z.string()]).optional(),
   cwd: z.string().optional(),
   shareBrowserProfile: z.boolean().optional(),
   jobId: z.string().optional(),
@@ -88,6 +97,7 @@ export function resolveSubagentBrowserProfileId(
 // ---------------------------------------------------------------------------
 
 interface ActionContext {
+  agentId?: string
   sessionId?: string
   cwd: string
   delegationTargetMode?: 'all' | 'selected'
@@ -155,8 +165,72 @@ export function coerceSubagentActionArgs(rawArgs: Record<string, unknown>): Reco
 
   const parsedJobIds = parseJsonLike(coerced.jobIds)
   if (Array.isArray(parsedJobIds)) coerced.jobIds = parsedJobIds
+  const parsedRequiredCapabilities = parseJsonLike(coerced.requiredCapabilities)
+  if (Array.isArray(parsedRequiredCapabilities)) coerced.requiredCapabilities = parsedRequiredCapabilities
 
   return coerced
+}
+
+function normalizeWorkType(value: unknown): DelegationWorkType | null {
+  if (
+    value === 'coding'
+    || value === 'research'
+    || value === 'writing'
+    || value === 'review'
+    || value === 'operations'
+    || value === 'general'
+  ) {
+    return value
+  }
+  return null
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const entry of value) {
+    const trimmed = typeof entry === 'string' ? entry.trim() : ''
+    if (!trimmed || seen.has(trimmed.toLowerCase())) continue
+    seen.add(trimmed.toLowerCase())
+    out.push(trimmed)
+  }
+  return out
+}
+
+async function resolveBestFitAgentSelection(
+  args: Record<string, unknown>,
+  ctx: ActionContext,
+): Promise<{ agentId: string; workType: DelegationWorkType; requiredCapabilities: string[] } | null> {
+  const message = typeof args.message === 'string' ? args.message.trim() : ''
+  if (!message) return null
+  const explicitWorkType = normalizeWorkType(args.workType)
+  const explicitCapabilities = normalizeStringList(args.requiredCapabilities)
+  const classification = (!explicitWorkType && explicitCapabilities.length === 0 && ctx.sessionId)
+    ? await classifyMessage({
+        sessionId: ctx.sessionId,
+        agentId: ctx.agentId || null,
+        message,
+      }).catch(() => null)
+    : null
+  const profile = buildDelegationTaskProfile({
+    classification,
+    workType: explicitWorkType,
+    requiredCapabilities: explicitCapabilities,
+  })
+  const selection = resolveBestDelegateTarget({
+    currentAgentId: ctx.agentId || null,
+    agents: loadAgents(),
+    profile,
+    delegationTargetMode: ctx.delegationTargetMode,
+    delegationTargetAgentIds: ctx.delegationTargetAgentIds,
+  })
+  if (!selection) return null
+  return {
+    agentId: selection.agentId,
+    workType: profile.workType,
+    requiredCapabilities: profile.requiredCapabilities,
+  }
 }
 
 function requireString(args: Record<string, unknown>, key: string): string {
@@ -373,10 +447,21 @@ function handleSwarmCancel(args: Record<string, unknown>): string {
 }
 
 async function handleStart(args: Record<string, unknown>, ctx: ActionContext): Promise<string> {
-  const agentId = (args.agentId ?? args.agent_id) as string | undefined
+  const selectionMode = args.selectionMode === 'best_fit' ? 'best_fit' : 'explicit'
+  let agentId = (args.agentId ?? args.agent_id) as string | undefined
   const message = args.message as string | undefined
-  if (!agentId) return 'Error: agentId is required.'
   if (!message) return 'Error: message is required.'
+  let selectedProfile: { workType: DelegationWorkType; requiredCapabilities: string[] } | null = null
+  if (selectionMode === 'best_fit') {
+    const resolved = await resolveBestFitAgentSelection(args, ctx)
+    if (!resolved) return 'Error: no eligible delegate agent available for best_fit selection.'
+    agentId = resolved.agentId
+    selectedProfile = {
+      workType: resolved.workType,
+      requiredCapabilities: resolved.requiredCapabilities,
+    }
+  }
+  if (!agentId) return 'Error: agentId is required.'
   const targetError = validateAllowedSubagentTarget(agentId, ctx)
   if (targetError) return targetError
 
@@ -393,10 +478,13 @@ async function handleStart(args: Record<string, unknown>, ctx: ActionContext): P
     return JSON.stringify({
       jobId: handle.jobId,
       status: 'running',
+      selectionMode,
       agentId: handle.agentId,
       agentName: handle.agentName,
       sessionId: handle.sessionId,
       lineageId: handle.lineageId,
+      workType: selectedProfile?.workType || null,
+      requiredCapabilities: selectedProfile?.requiredCapabilities || [],
     })
   }
 
@@ -404,6 +492,7 @@ async function handleStart(args: Record<string, unknown>, ctx: ActionContext): P
   return JSON.stringify({
     jobId: result.jobId,
     status: result.status,
+    selectionMode,
     agentId: result.agentId,
     agentName: result.agentName,
     sessionId: result.sessionId,
@@ -412,6 +501,8 @@ async function handleStart(args: Record<string, unknown>, ctx: ActionContext): P
     depth: result.depth,
     childCount: result.childCount,
     durationMs: result.durationMs,
+    workType: selectedProfile?.workType || null,
+    requiredCapabilities: selectedProfile?.requiredCapabilities || [],
   })
 }
 
@@ -463,13 +554,13 @@ const SubagentExtension: Extension = {
   description: 'Delegate tasks to other specialized agents with resumable job handles.',
   hooks: {
     getCapabilityDescription: () =>
-      'Delegate tasks to other agents (spawn_subagent). Single task: action "start". '
+      'Delegate tasks to other agents (spawn_subagent). Single task: action "start" with `agentId`, or use `selectionMode:"best_fit"` with `message` plus optional `workType`/`requiredCapabilities`. '
       + 'Multiple independent tasks: action "batch" with a tasks array. '
       + 'Event-driven parallel with status tracking: action "swarm" with a tasks array. '
       + 'Background swarms return a swarmId you can pass to swarm_status, swarm_list, and swarm_cancel.',
     getOperatingGuidance: () => [
       'SUBAGENT DISPATCH RULES:',
-      '- Single task → action "start" with agentId + message.',
+      '- Single task → action "start" with `agentId` + `message`, or `selectionMode:"best_fit"` with `message` and optional `workType` / `requiredCapabilities`.',
       '- 2+ independent tasks → action "batch" with tasks array [{agentId, message}, ...]. Use `executionMode:"serial"` when local models are rate-limited.',
       '- Background coordination example → `{"action":"swarm","tasks":[...],"background":true}` and then read the returned `swarmId` before calling `swarm_status` or `swarm_cancel`.',
       '- If your final answer depends on all delegated results, set `waitForCompletion:true` and do not summarize early.',
@@ -483,8 +574,9 @@ const SubagentExtension: Extension = {
     {
       name: 'spawn_subagent',
       description: 'Delegate tasks to other agents. '
-            + 'Actions: start (single agent), batch (2+ tasks via "tasks" array), swarm (multi-agent execution with status tracking via "tasks" array). '
+            + 'Actions: start (single agent, either explicit `agentId` or `selectionMode:"best_fit"`), batch (2+ tasks via "tasks" array), swarm (multi-agent execution with status tracking via "tasks" array). '
             + 'Management: status, list, wait, wait_all, cancel, lineage, aggregate, swarm_status, swarm_list, swarm_cancel. '
+            + 'In `best_fit` mode, provide `message` and optionally `workType` / `requiredCapabilities`; the runtime will choose the best allowed teammate and return the chosen agent in the tool output. '
             + 'For multiple independent tasks, prefer one `batch` or `swarm` call with tasks:[{agentId,message},...] over calling `start` repeatedly. '
             + 'When the final answer depends on every delegated result, keep waitForCompletion enabled so you can synthesize after all children finish. '
             + 'Use executionMode:"serial" to avoid rate limits on local models. '
@@ -495,6 +587,21 @@ const SubagentExtension: Extension = {
           action: { type: 'string', enum: ['start', 'status', 'list', 'wait', 'wait_all', 'cancel', 'lineage', 'batch', 'aggregate', 'swarm', 'swarm_status', 'swarm_list', 'swarm_cancel'] },
           agentId: { type: 'string' },
           message: { type: 'string' },
+          selectionMode: {
+            type: 'string',
+            enum: ['explicit', 'best_fit'],
+            description: 'Use "explicit" to target `agentId` directly, or "best_fit" to let the runtime choose the best allowed delegate.',
+          },
+          workType: {
+            type: 'string',
+            enum: ['coding', 'research', 'writing', 'review', 'operations', 'general'],
+            description: 'Optional hint for `best_fit` selection.',
+          },
+          requiredCapabilities: {
+            type: 'array',
+            items: { type: 'string' },
+            description: 'Optional explicit capability requirements for `best_fit` selection.',
+          },
           cwd: { type: 'string' },
           shareBrowserProfile: {
             type: 'boolean',
@@ -532,7 +639,17 @@ const SubagentExtension: Extension = {
         },
         required: []
       },
-      execute: async (args, context) => executeSubagentAction(args, { sessionId: context.session.id, cwd: context.session.cwd || process.cwd() })
+      execute: async (args, context) => {
+        const sessionAgentId = context.session.agentId || undefined
+        const sessionAgent = sessionAgentId ? loadAgents()[sessionAgentId] : null
+        return executeSubagentAction(args, {
+          agentId: sessionAgentId,
+          sessionId: context.session.id,
+          cwd: context.session.cwd || process.cwd(),
+          delegationTargetMode: sessionAgent?.delegationTargetMode,
+          delegationTargetAgentIds: sessionAgent?.delegationTargetAgentIds,
+        })
+      }
     }
   ]
 }
@@ -562,6 +679,7 @@ export function buildSubagentTools(bctx: ToolBuildContext): StructuredToolInterf
   return [
     tool(
       async (args) => executeSubagentAction(args, {
+        agentId: bctx.ctx?.agentId || undefined,
         sessionId: bctx.ctx?.sessionId || undefined,
         cwd: bctx.cwd,
         delegationTargetMode: bctx.ctx?.delegationTargetMode,

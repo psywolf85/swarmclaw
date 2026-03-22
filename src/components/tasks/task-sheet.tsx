@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
@@ -87,6 +87,7 @@ export function TaskSheet() {
   const [qualityGateRequireArtifact, setQualityGateRequireArtifact] = useState(false)
   const [qualityGateRequireReport, setQualityGateRequireReport] = useState(false)
   const [structuredSessionOpen, setStructuredSessionOpen] = useState(false)
+  const formInitRef = useRef<string | null>(null)
 
   const editing = editingId ? tasks[editingId] : null
   const agentList = useMemo(
@@ -104,6 +105,9 @@ export function TaskSheet() {
   useEffect(() => {
     if (!open) return
     if (tasksLoading || agentsLoading || projectsLoading || settingsLoading) return
+
+    const initKey = editingId ?? '__new__'
+    if (formInitRef.current === initKey) return
 
     const defaultGateEnabled = appSettings.taskQualityGateEnabled ?? true
     const defaultGateMinResult = normalizeGateNumber(appSettings.taskQualityGateMinResultChars, 80, 10, 2000)
@@ -136,6 +140,7 @@ export function TaskSheet() {
       setQualityGateRequireVerification(gate?.requireVerification ?? defaultGateRequireVerification)
       setQualityGateRequireArtifact(gate?.requireArtifact ?? defaultGateRequireArtifact)
       setQualityGateRequireReport(gate?.requireReport ?? defaultGateRequireReport)
+      formInitRef.current = initKey
       return
     }
 
@@ -159,6 +164,7 @@ export function TaskSheet() {
     setQualityGateRequireVerification(defaultGateRequireVerification)
     setQualityGateRequireArtifact(defaultGateRequireArtifact)
     setQualityGateRequireReport(defaultGateRequireReport)
+    formInitRef.current = initKey
   }, [
     activeProjectFilter,
     agentList,
@@ -180,6 +186,7 @@ export function TaskSheet() {
   }, [open, editing, agentId, agentList])
 
   const onClose = () => {
+    formInitRef.current = null
     setOpen(false)
     setEditingId(null)
   }
@@ -271,7 +278,7 @@ export function TaskSheet() {
   const handleAddComment = async () => {
     if (!editing || !commentText.trim()) return
     const c: TaskComment = {
-      id: crypto.randomUUID().slice(0, 8),
+      id: Math.random().toString(36).slice(2, 10),
       author: 'You',
       text: commentText.trim(),
       createdAt: Date.now(),

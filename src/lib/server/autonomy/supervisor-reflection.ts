@@ -33,14 +33,16 @@ import { log } from '@/lib/server/logger'
 import { logExecution } from '@/lib/server/execution-log'
 import { logActivity } from '@/lib/server/storage'
 import { createNotification } from '@/lib/server/create-notification'
+import { foldReflectionIntoRunContext } from '@/lib/server/run-context'
+import { getSession, saveSession } from '@/lib/server/sessions/session-repository'
+import { cleanText } from '@/lib/server/text-normalization'
+import { getMessages, getMessageCount, getRecentMessages } from '@/lib/server/messages/message-repository'
 
 const TAG = 'supervisor-reflection'
 
 const MAIN_LOOP_META_LINE_RE = /\[(?:MAIN_LOOP_META|MAIN_LOOP_PLAN|MAIN_LOOP_REVIEW|AGENT_HEARTBEAT_META)\]\s*(\{[^\n]*\})?/i
 const DEFAULT_TRANSCRIPT_MESSAGES = 12
 const DEFAULT_SNIPPET_CHARS = 800
-const HUMAN_SIGNAL_RE = /\b(?:prefer|please|call me|don't call me|do not call me|i like|i dislike|i hate|i love|my pronouns|my partner|my wife|my husband|my kid|my child|my mom|my dad|my sister|my brother|birthday|anniversary|wedding|married|divorc|pregnan|baby|moved|moving|relocat|promotion|promoted|laid off|new job|job change|graduat|hospital|sick|illness|diagnos|passed away|funeral|grief|bereave|deadline|launch|fundraising|closing|house|home|travel)\b/i
-const SIGNIFICANT_EVENT_RE = /\b(?:birthday|anniversary|wedding|married|divorc|pregnan|baby|moved|moving|relocat|promotion|promoted|laid off|new job|job change|graduat|hospital|sick|illness|diagnos|passed away|funeral|grief|bereave|deadline|launch|fundraising|closing|house|home|travel)\b/i
 
 export interface SupervisorStateSnapshot {
   followupChainCount?: number | null
@@ -79,13 +81,6 @@ export interface ObserveAutonomyRunInput {
 
 function now(): number {
   return Date.now()
-}
-
-function cleanText(value: unknown, max = 320): string | null {
-  if (typeof value !== 'string') return null
-  const compact = value.replace(/\s+/g, ' ').trim()
-  if (!compact) return null
-  return compact.slice(0, max)
 }
 
 function looksLikeHtmlErrorPayload(value: string): boolean {
@@ -189,9 +184,11 @@ function buildIncident(
 }
 
 function sessionContextPressure(session: Session | null): boolean {
-  if (!session || !Array.isArray(session.messages)) return false
-  if (session.messages.length >= 60) return true
-  const totalChars = session.messages.reduce((sum, message) => sum + String(message?.text || '').length, 0)
+  if (!session) return false
+  const msgCount = getMessageCount(session.id)
+  if (msgCount >= 60) return true
+  const messages = getMessages(session.id)
+  const totalChars = messages.reduce((sum, message) => sum + String(message?.text || '').length, 0)
   return totalChars >= 18_000
 }
 
@@ -428,7 +425,7 @@ export async function executeSupervisorAutoActions(params: {
 }
 
 function buildSessionTranscript(session: Session, maxMessages = DEFAULT_TRANSCRIPT_MESSAGES): string {
-  const messages = Array.isArray(session.messages) ? session.messages.slice(-maxMessages) : []
+  const messages = getRecentMessages(session.id, maxMessages)
   const lines: string[] = []
   for (const message of messages) {
     if (!message || message.suppressed) continue
@@ -543,10 +540,21 @@ function normalizeNoteArray(value: unknown, limit = 4): string[] {
   return out
 }
 
+function transcriptHasSemanticSignal(
+  session: Session | null,
+  signal: 'hasHumanSignals' | 'hasSignificantEvent',
+): boolean {
+  if (!session) return false
+  const recentMessages = getRecentMessages(session.id, 8)
+  return recentMessages.some((message) => message?.role === 'user' && message?.semantics?.[signal] === true)
+}
+
 function transcriptHasHumanSignals(session: Session | null): boolean {
-  if (!session || !Array.isArray(session.messages)) return false
-  const recentMessages = session.messages.slice(-8)
-  return recentMessages.some((message) => HUMAN_SIGNAL_RE.test(stripMainLoopMeta(String(message?.text || ''))))
+  return transcriptHasSemanticSignal(session, 'hasHumanSignals')
+}
+
+function transcriptHasSignificantEvents(session: Session | null): boolean {
+  return transcriptHasSemanticSignal(session, 'hasSignificantEvent')
 }
 
 function parseReflectionResponse(raw: string): {
@@ -658,10 +666,11 @@ function shouldReflectRun(params: {
   if (!surface || !runtimeScopeIncludes(params.runtimeScope, surface)) return false
   if (params.status === 'cancelled') return false
   if (surface === 'task') return Boolean(params.resultText.trim() || params.incidents.length > 0)
-  const meaningfulMessages = Array.isArray(params.session?.messages)
-    ? params.session.messages.filter((message) => message && !message.suppressed && (message.text || message.toolEvents?.length)).length
+  const meaningfulMessages = params.session
+    ? getMessages(params.session.id).filter((message) => message && !message.suppressed && (message.text || message.toolEvents?.length)).length
     : 0
   if (transcriptHasHumanSignals(params.session)) return true
+  if (transcriptHasSignificantEvents(params.session)) return true
   if (params.incidents.length > 0) return true
   if (params.toolEvents.length > 0) return true
   if (params.resultText.trim().length >= 180) return true
@@ -788,7 +797,7 @@ function writeReflectionMemories(params: {
       }
       if (group.kind === 'significant_event') {
         metadata.memoryFacet = 'event'
-        metadata.eventSalience = SIGNIFICANT_EVENT_RE.test(note) ? 'high' : 'medium'
+        metadata.eventSalience = 'high'
       }
       if (group.kind === 'open_loop') {
         metadata.memoryFacet = 'followup'
@@ -1094,6 +1103,17 @@ export async function observeAutonomyRunOutcome(
   const reflections = loadRunReflections()
   reflections[reflection.id] = reflection
   saveRunReflections(reflections)
+
+  // Fold reflection notes into session RunContext (non-critical)
+  try {
+    const freshSession = getSession(input.sessionId) as Session | undefined
+    if (freshSession) {
+      freshSession.runContext = foldReflectionIntoRunContext(freshSession.runContext, reflection)
+      saveSession(input.sessionId, freshSession)
+    }
+  } catch (err: unknown) {
+    log.warn(TAG, 'RunContext reflection folding failed:', err instanceof Error ? err.message : String(err))
+  }
 
   // Quality degradation alert — if recent quality trend drops below 0.5
   if (typeof reflection.qualityScore === 'number' && input.agentId) {

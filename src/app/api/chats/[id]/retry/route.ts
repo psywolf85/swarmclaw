@@ -6,5 +6,5 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
   const { id } = await params
   const result = retryChatTurn(id)
   if (!result.ok) return notFound()
-  return NextResponse.json({ message: result.message, imagePath: result.imagePath })
+  return NextResponse.json(result.payload)
 }

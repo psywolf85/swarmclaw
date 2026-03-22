@@ -189,6 +189,7 @@ export const ChatroomCreateSchema = z.object({
   description: z.string().optional().default(''),
   chatMode: z.enum(['sequential', 'parallel']).optional(),
   autoAddress: z.boolean().optional(),
+  routingGuidance: z.string().nullable().optional(),
   routingRules: z.array(z.object({
     id: z.string(),
     type: z.enum(['keyword', 'capability']),

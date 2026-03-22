@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict'
 import { after, before, describe, it } from 'node:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 let mod: typeof import('@/lib/server/chat-execution/prompt-sections')
 
@@ -83,6 +86,59 @@ describe('prompt-sections', () => {
 
     it('returns null for unknown level', () => {
       assert.equal(mod.buildThinkingSection('extreme', false), null)
+    })
+  })
+
+  describe('buildRuntimeOrientationSection', () => {
+    it('includes delegated lineage, workspace markers, project context, and routing guidance', () => {
+      const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'swarmclaw-runtime-orientation-'))
+      try {
+        fs.writeFileSync(path.join(cwd, 'AGENTS.md'), '# Agent notes')
+        const result = mod.buildRuntimeOrientationSection({
+          session: {
+            id: 'child-session',
+            cwd,
+            provider: 'openai',
+            model: 'gpt-5',
+            parentSessionId: 'parent-session',
+            agentId: 'agent-1',
+          } as never,
+          promptMode: 'minimal',
+          sessionExtensions: ['files', 'manage_sessions', 'codex_cli'],
+          toolPolicy: {
+            mode: 'balanced',
+            requestedExtensions: ['files', 'manage_sessions', 'codex_cli', 'manage_secrets'],
+            enabledExtensions: ['files', 'manage_sessions', 'codex_cli'],
+            blockedExtensions: [{ tool: 'manage_secrets', reason: 'blocked by policy', source: 'policy' }],
+          },
+          agent: {
+            id: 'agent-1',
+            name: 'Builder',
+            delegationTargetMode: 'selected',
+            delegationTargetAgentIds: ['qa-1', 'ops-1'],
+          } as never,
+          activeProjectContext: {
+            projectId: 'project-1',
+            project: { name: 'Northstar' },
+            projectRoot: '/workspace/projects/project-1',
+          } as never,
+          rootSessionId: 'root-session',
+        })
+
+        assert.ok(result.includes('## Runtime Orientation'))
+        assert.ok(result.includes('delegated_child'))
+        assert.ok(result.includes('prompt=minimal'))
+        assert.ok(result.includes('root=root-session'))
+        assert.ok(result.includes('Workspace markers: AGENTS.md'))
+        assert.ok(result.includes('Active project: Northstar'))
+        assert.ok(result.includes('`manage_sessions`'))
+        assert.ok(result.includes('`codex_cli`'))
+        assert.ok(result.includes('Policy blocked:'))
+        assert.ok(result.includes('sessions_tool'))
+        assert.ok(result.includes('use `manage_platform` only as fallback'))
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true })
+      }
     })
   })
 

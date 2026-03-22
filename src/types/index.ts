@@ -7,6 +7,25 @@ export interface MessageToolEvent {
   toolCallId?: string
 }
 
+export type MessageTaskIntent = 'coding' | 'research' | 'browsing' | 'outreach' | 'scheduling' | 'general'
+export type MessageWorkType = 'coding' | 'research' | 'writing' | 'review' | 'operations' | 'general'
+
+export interface MessageSemanticsSummary {
+  taskIntent: MessageTaskIntent
+  workType: MessageWorkType
+  walletIntent: 'none' | 'read_only' | 'transactional'
+  isDeliverableTask: boolean
+  isBroadGoal: boolean
+  isResearchSynthesis: boolean
+  hasHumanSignals: boolean
+  hasSignificantEvent: boolean
+  wantsScreenshots?: boolean
+  wantsOutboundDelivery?: boolean
+  wantsVoiceDelivery?: boolean
+  explicitToolRequests: string[]
+  confidence: number
+}
+
 export interface Message {
   role: 'user' | 'assistant'
   text: string
@@ -30,6 +49,8 @@ export interface Message {
   streaming?: boolean
   /** Run ID that produced this message — used to scope streaming artifact replacement. */
   runId?: string
+  /** Cached turn semantics used for routing, delegation, and reflection. */
+  semantics?: MessageSemanticsSummary
 }
 
 export type SessionResetMode = 'idle' | 'daily' | 'isolated'
@@ -51,6 +72,216 @@ export interface SessionArchiveState {
   lastHash?: string | null
   messageCount?: number
   exportPath?: string | null
+}
+
+export type WorkingStateStatus = 'idle' | 'progress' | 'blocked' | 'waiting' | 'completed'
+export type WorkingStateItemStatus = 'active' | 'resolved' | 'superseded'
+
+export interface EvidenceRef {
+  id: string
+  type: 'tool' | 'message' | 'mission' | 'task' | 'artifact' | 'error' | 'approval'
+  summary: string
+  value?: string | null
+  toolName?: string | null
+  toolCallId?: string | null
+  runId?: string | null
+  sessionId?: string | null
+  missionId?: string | null
+  taskId?: string | null
+  createdAt: number
+}
+
+export interface WorkingPlanStep {
+  id: string
+  text: string
+  status: WorkingStateItemStatus
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingFact {
+  id: string
+  statement: string
+  source: 'user' | 'tool' | 'assistant' | 'mission' | 'system'
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingArtifact {
+  id: string
+  label: string
+  kind: 'file' | 'url' | 'approval' | 'message' | 'other'
+  path?: string | null
+  url?: string | null
+  sourceTool?: string | null
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingDecision {
+  id: string
+  summary: string
+  rationale?: string | null
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingBlocker {
+  id: string
+  summary: string
+  kind?: 'approval' | 'credential' | 'human_input' | 'external_dependency' | 'error' | 'other' | null
+  nextAction?: string | null
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingQuestion {
+  id: string
+  question: string
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingHypothesis {
+  id: string
+  statement: string
+  confidence?: 'low' | 'medium' | 'high' | null
+  status: WorkingStateItemStatus
+  evidenceIds?: string[]
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorkingPlanStepPatch {
+  id?: string | null
+  text: string
+  status?: WorkingStateItemStatus | null
+}
+
+export interface WorkingFactPatch {
+  id?: string | null
+  statement: string
+  source?: WorkingFact['source'] | null
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingArtifactPatch {
+  id?: string | null
+  label: string
+  kind?: WorkingArtifact['kind'] | null
+  path?: string | null
+  url?: string | null
+  sourceTool?: string | null
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingDecisionPatch {
+  id?: string | null
+  summary: string
+  rationale?: string | null
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingBlockerPatch {
+  id?: string | null
+  summary: string
+  kind?: WorkingBlocker['kind']
+  nextAction?: string | null
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingQuestionPatch {
+  id?: string | null
+  question: string
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingHypothesisPatch {
+  id?: string | null
+  statement: string
+  confidence?: WorkingHypothesis['confidence']
+  status?: WorkingStateItemStatus | null
+  evidenceIds?: string[]
+}
+
+export interface WorkingStatePatch {
+  objective?: string | null
+  summary?: string | null
+  constraints?: string[]
+  successCriteria?: string[]
+  status?: WorkingStateStatus | null
+  nextAction?: string | null
+  planSteps?: WorkingPlanStepPatch[]
+  factsUpsert?: WorkingFactPatch[]
+  artifactsUpsert?: WorkingArtifactPatch[]
+  decisionsAppend?: WorkingDecisionPatch[]
+  blockersUpsert?: WorkingBlockerPatch[]
+  questionsUpsert?: WorkingQuestionPatch[]
+  hypothesesUpsert?: WorkingHypothesisPatch[]
+  evidenceAppend?: EvidenceRef[]
+  supersedeIds?: string[]
+}
+
+export interface SessionWorkingState {
+  sessionId: string
+  missionId?: string | null
+  objective?: string | null
+  summary?: string | null
+  constraints: string[]
+  successCriteria: string[]
+  status: WorkingStateStatus
+  nextAction?: string | null
+  planSteps: WorkingPlanStep[]
+  confirmedFacts: WorkingFact[]
+  artifacts: WorkingArtifact[]
+  decisions: WorkingDecision[]
+  blockers: WorkingBlocker[]
+  openQuestions: WorkingQuestion[]
+  hypotheses: WorkingHypothesis[]
+  evidenceRefs: EvidenceRef[]
+  createdAt: number
+  updatedAt: number
+  lastCompactedAt?: number | null
+}
+
+export interface ExecutionBriefPlanStep {
+  text: string
+  status: WorkingStateItemStatus
+}
+
+export interface ExecutionBrief {
+  sessionId?: string | null
+  missionId?: string | null
+  objective: string | null
+  summary: string | null
+  status: WorkingStateStatus
+  nextAction: string | null
+  plan: ExecutionBriefPlanStep[]
+  blockers: string[]
+  facts: string[]
+  artifacts: string[]
+  constraints: string[]
+  successCriteria: string[]
+  missionStatus?: MissionStatus | null
+  missionPhase?: MissionPhase | null
+  waitState?: MissionWaitState | null
+  evidenceRefs: EvidenceRef[]
+  parentContext: string | null
 }
 
 export type MissionSource =
@@ -358,8 +589,9 @@ export interface Session {
     opencode?: string | null
     gemini?: string | null
   }
+  /** @deprecated Messages are stored in session_messages table. Use message-repository. */
   messages: Message[]
-  /** Lightweight summary fields used by list/index APIs to avoid shipping full transcripts. */
+  /** Pre-computed message count (kept in sync by message-repository). */
   messageCount?: number
   lastMessageSummary?: Message | null
   lastAssistantAt?: number | null
@@ -455,6 +687,22 @@ export interface Session {
   canvasContent?: CanvasContent
   /** Tracks how many times each memory ID has been injected via proactive recall in this session. */
   injectedMemoryIds?: Record<string, number>
+  /** Structured working memory that survives compaction and flows through delegation. */
+  runContext?: RunContext | null
+}
+
+export interface RunContext {
+  objective: string | null
+  constraints: string[]
+  keyFacts: string[]
+  discoveries: string[]
+  failedApproaches: string[]
+  currentPlan: string[]
+  completedSteps: string[]
+  blockers: string[]
+  parentContext: string | null
+  updatedAt: number
+  version: number
 }
 
 export type Sessions = Record<string, Session>
@@ -742,17 +990,6 @@ export interface ExtensionToolPlanning {
    * this tool is enabled.
    */
   disciplineGuidance?: string[]
-  /**
-   * Optional natural-language cues that indicate when this tool should be
-   * preferred or explicitly invoked. These are declarative hints so the harness
-   * does not need to hard-code every extension-specific workflow centrally.
-   */
-  requestMatchers?: Array<{
-    capability?: string
-    patterns?: string[]
-    requireLiteralUrl?: boolean
-    forbidLiteralUrl?: boolean
-  }>
 }
 
 export interface ExtensionToolDef {
@@ -1607,6 +1844,8 @@ export interface Chatroom {
   pinnedMessageIds?: string[]
   chatMode?: 'sequential' | 'parallel'
   autoAddress?: boolean
+  routingGuidance?: string | null
+  /** Legacy deterministic routing config kept only for migration/read compatibility. */
   routingRules?: ChatroomRoutingRule[]
   temporary?: boolean
   topic?: string
@@ -2106,6 +2345,23 @@ export interface AppNotification {
 // --- Session Runs ---
 
 export type SessionRunStatus = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type ExecutionKind =
+  | 'session_turn'
+  | 'task_attempt'
+  | 'protocol_step'
+  | 'heartbeat_tick'
+  | 'schedule_wake'
+  | 'repair_turn'
+  | 'subagent_turn'
+
+export type ExecutionOwnerType =
+  | 'session'
+  | 'task'
+  | 'protocol_run'
+  | 'schedule'
+  | 'mission'
+  | 'agent'
+  | 'subagent'
 
 export interface SessionRunHeartbeatConfig {
   ackMaxChars: number
@@ -2135,6 +2391,11 @@ export interface SessionRunRecord {
   id: string
   sessionId: string
   missionId?: string | null
+  kind?: ExecutionKind
+  ownerType?: ExecutionOwnerType | null
+  ownerId?: string | null
+  parentExecutionId?: string | null
+  recoveryPolicy?: 'restart_recoverable' | 'ephemeral' | 'manual' | 'none'
   source: string
   internal: boolean
   mode: string
@@ -2181,6 +2442,10 @@ export interface RunEventRecord {
   id: string
   runId: string
   sessionId: string
+  kind?: ExecutionKind
+  ownerType?: ExecutionOwnerType | null
+  ownerId?: string | null
+  parentExecutionId?: string | null
   timestamp: number
   phase: 'status' | 'event'
   status?: SessionRunStatus

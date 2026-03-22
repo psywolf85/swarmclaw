@@ -46,6 +46,15 @@ describe('direct-memory-intent', () => {
     })
   })
 
+  it('parses a list classification payload', () => {
+    const parsed = parseDirectMemoryIntentResponse('{"action":"list","confidence":0.84}')
+
+    assert.deepEqual(parsed, {
+      action: 'list',
+      confidence: 0.84,
+    })
+  })
+
   it('parses exclusive completion for pure memory turns', () => {
     const parsed = parseDirectMemoryIntentResponse('{"action":"store","confidence":0.98,"title":"Launch marker","value":"My launch marker is ALPHA-9","acknowledgement":"I\\u2019ll remember that.","exclusiveCompletion":true}')
 

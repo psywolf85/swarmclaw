@@ -7,7 +7,6 @@ import { getGatewayProfiles } from '@/lib/server/agents/agent-runtime-config'
 import {
   loadGatewayProfile,
   loadGatewayProfiles,
-  patchGatewayProfile,
   saveGatewayProfiles,
 } from '@/lib/server/gateways/gateway-profile-repository'
 import { notify } from '@/lib/server/ws-hub'
@@ -120,43 +119,44 @@ export function createGatewayProfile(input: Record<string, unknown>): GatewayPro
 }
 
 export function updateGatewayProfile(id: string, input: Record<string, unknown>): GatewayProfile | null {
+  const gateways = loadGatewayProfiles()
+  const gateway = gateways[id]
+  if (!gateway) return null
+
+  // Clear isDefault on other gateways if this one is becoming default
   if (input.isDefault === true) {
-    const gateways = loadGatewayProfiles()
-    for (const [candidateId, gateway] of Object.entries(gateways)) {
-      if (candidateId === id || !gateway) continue
-      gateway.isDefault = false
+    for (const [candidateId, g] of Object.entries(gateways)) {
+      if (candidateId !== id && g) g.isDefault = false
     }
-    saveGatewayProfiles(gateways)
   }
 
-  const updated = patchGatewayProfile(id, (gateway) => {
-    if (!gateway) return null
-    if (input.name !== undefined) gateway.name = String(input.name || '').trim() || gateway.name
-    if (input.endpoint !== undefined) gateway.endpoint = normalizeOpenClawEndpoint(typeof input.endpoint === 'string' ? input.endpoint : undefined)
-    if (input.wsUrl !== undefined) gateway.wsUrl = normalizeText(input.wsUrl)
-    if (input.credentialId !== undefined) gateway.credentialId = normalizeText(input.credentialId)
-    if (input.status !== undefined) {
-      const nextStatus = typeof input.status === 'string' && input.status.trim()
-        ? input.status.trim() as GatewayProfile['status']
-        : 'unknown'
-      gateway.status = nextStatus
-    }
-    if (input.notes !== undefined) gateway.notes = typeof input.notes === 'string' ? input.notes : null
-    if (input.tags !== undefined) gateway.tags = normalizeTags(input.tags)
-    if (input.lastError !== undefined) gateway.lastError = typeof input.lastError === 'string' ? input.lastError : null
-    if (input.lastCheckedAt !== undefined) gateway.lastCheckedAt = normalizeNullableNumber(input.lastCheckedAt)
-    if (input.lastModelCount !== undefined) gateway.lastModelCount = normalizeNullableNumber(input.lastModelCount)
-    if (input.discoveredHost !== undefined) gateway.discoveredHost = typeof input.discoveredHost === 'string' ? input.discoveredHost : null
-    if (input.discoveredPort !== undefined) gateway.discoveredPort = normalizeNullableNumber(input.discoveredPort)
-    if (input.deployment !== undefined) gateway.deployment = { ...(gateway.deployment || {}), ...(normalizeDeployment(input.deployment) || {}) }
-    if (input.stats !== undefined) gateway.stats = { ...(gateway.stats || {}), ...(normalizeStats(input.stats) || {}) }
-    if (input.isDefault !== undefined) gateway.isDefault = input.isDefault === true
-    gateway.updatedAt = Date.now()
-    return gateway
-  })
+  // Apply all field updates to the target gateway
+  if (input.name !== undefined) gateway.name = String(input.name || '').trim() || gateway.name
+  if (input.endpoint !== undefined) gateway.endpoint = normalizeOpenClawEndpoint(typeof input.endpoint === 'string' ? input.endpoint : undefined)
+  if (input.wsUrl !== undefined) gateway.wsUrl = normalizeText(input.wsUrl)
+  if (input.credentialId !== undefined) gateway.credentialId = normalizeText(input.credentialId)
+  if (input.status !== undefined) {
+    const nextStatus = typeof input.status === 'string' && input.status.trim()
+      ? input.status.trim() as GatewayProfile['status']
+      : 'unknown'
+    gateway.status = nextStatus
+  }
+  if (input.notes !== undefined) gateway.notes = typeof input.notes === 'string' ? input.notes : null
+  if (input.tags !== undefined) gateway.tags = normalizeTags(input.tags)
+  if (input.lastError !== undefined) gateway.lastError = typeof input.lastError === 'string' ? input.lastError : null
+  if (input.lastCheckedAt !== undefined) gateway.lastCheckedAt = normalizeNullableNumber(input.lastCheckedAt)
+  if (input.lastModelCount !== undefined) gateway.lastModelCount = normalizeNullableNumber(input.lastModelCount)
+  if (input.discoveredHost !== undefined) gateway.discoveredHost = typeof input.discoveredHost === 'string' ? input.discoveredHost : null
+  if (input.discoveredPort !== undefined) gateway.discoveredPort = normalizeNullableNumber(input.discoveredPort)
+  if (input.deployment !== undefined) gateway.deployment = { ...(gateway.deployment || {}), ...(normalizeDeployment(input.deployment) || {}) }
+  if (input.stats !== undefined) gateway.stats = { ...(gateway.stats || {}), ...(normalizeStats(input.stats) || {}) }
+  if (input.isDefault !== undefined) gateway.isDefault = input.isDefault === true
+  gateway.updatedAt = Date.now()
 
-  if (updated) notify('gateways')
-  return updated
+  gateways[id] = gateway
+  saveGatewayProfiles(gateways)
+  notify('gateways')
+  return gateway
 }
 
 export function deleteGatewayProfileAndDetachAgents(id: string): boolean {

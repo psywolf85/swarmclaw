@@ -18,6 +18,7 @@ import type {
   SessionQueuedTurn,
   SessionRunRecord,
 } from '@/types'
+import { getMessages } from '@/lib/server/messages/message-repository'
 import { loadApprovals } from '@/lib/server/approvals/approval-repository'
 import { loadDelegationJob } from '@/lib/server/agents/delegation-job-repository'
 import { logActivity } from '@/lib/server/activity/activity-log'
@@ -49,15 +50,13 @@ import { errorMessage, hmrSingleton } from '@/lib/shared-utils'
 import { getSessionQueueSnapshot, listRuns } from '@/lib/server/runtime/session-run-manager'
 import { loadTask, loadTasks, patchTask } from '@/lib/server/tasks/task-repository'
 import { notify } from '@/lib/server/ws-hub'
+import { buildExecutionBrief, buildExecutionBriefContextBlock } from '@/lib/server/execution-brief'
+import { cleanText } from '@/lib/server/text-normalization'
 
 const TAG = 'mission-service'
 
 function now(): number {
   return Date.now()
-}
-
-function cleanText(value: unknown, max = 320): string {
-  return typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : ''
 }
 
 function uniqueStrings(values: unknown, maxItems: number, maxChars = 180): string[] {
@@ -1571,7 +1570,7 @@ export async function resolveMissionForTurn(params: {
       sessionId: params.session.id,
       agentId: params.session.agentId || null,
       message: params.message,
-      recentMessages: Array.isArray(params.session.messages) ? params.session.messages : [],
+      recentMessages: getMessages(params.session.id),
       currentMission: currentMission ? buildMissionSummary(currentMission) : null,
       session: params.session,
     }, params.generateText ? { generateText: params.generateText } : undefined)
@@ -2254,7 +2253,10 @@ export function buildMissionContextBlock(mission: Mission | null | undefined): s
 export function buildMissionHeartbeatPrompt(session: Session, fallbackPrompt: string): string | null {
   const mission = getMissionForSession(session)
   if (!mission || isMissionTerminal(mission.status)) return null
-  const contextBlock = buildMissionContextBlock(mission)
+  const contextBlock = buildExecutionBriefContextBlock(buildExecutionBrief({
+    session,
+    mission,
+  }))
   return [
     'MAIN_AGENT_HEARTBEAT_TICK',
     `Time: ${new Date().toISOString()}`,

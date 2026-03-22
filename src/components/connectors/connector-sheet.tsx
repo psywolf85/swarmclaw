@@ -1,15 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
-import { api } from '@/lib/app/api-client'
-import { useWs } from '@/hooks/use-ws'
 import { toast } from 'sonner'
 import type {
   Connector,
   ConnectorAccessMutationAction,
-  ConnectorAccessMutationResponse,
   ConnectorAccessSnapshot,
   ConnectorPlatform,
 } from '@/types'
@@ -20,11 +17,25 @@ import { SheetFooter } from '@/components/shared/sheet-footer'
 import { SectionLabel } from '@/components/shared/section-label'
 import { HintTip } from '@/components/shared/hint-tip'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
-import { useChatroomStore } from '@/stores/use-chatroom-store'
 import { ConnectorHealth } from '@/components/connectors/connector-health'
 import { ConnectorAccessPanel } from '@/components/connectors/connector-access-panel'
 import { AdvancedSettingsSection } from '@/components/shared/advanced-settings-section'
 import { errorMessage } from '@/lib/shared-utils'
+import {
+  useConnectorsQuery,
+  useConnectorAccessMutation,
+  useConnectorAccessQuery,
+  useConnectorActionMutation,
+  useConnectorDoctorMutation,
+  useConnectorQuery,
+  useDeleteConnectorMutation,
+  useSaveConnectorMutation,
+} from '@/features/connectors/queries'
+import { useAgentsQuery } from '@/features/agents/queries'
+import { useCredentialsQuery, useCreateCredentialMutation } from '@/features/credentials/queries'
+import { useChatroomsQuery } from '@/features/chatrooms/queries'
+import { useAppSettingsQuery } from '@/features/settings/queries'
+import { useConnectorExtensionOptionsQuery } from '@/features/extensions/queries'
 
 /** Auto-detect URLs in text and make them clickable links that open in a new tab */
 function linkify(text: string) {
@@ -56,11 +67,6 @@ interface ConnectorDoctorPolicyPreview {
   inboundDebounceMs?: number
   statusReactions?: boolean
   typingIndicators?: boolean
-}
-
-interface ConnectorDoctorResponse {
-  warnings?: string[]
-  policy?: ConnectorDoctorPolicyPreview | null
 }
 
 interface ConnectorConfigOption {
@@ -538,16 +544,33 @@ const ACCESS_CONTROL_FIELDS: ConnectorConfigField[] = [
 export function ConnectorSheet() {
   const open = useAppStore((s) => s.connectorSheetOpen)
   const setOpen = useAppStore((s) => s.setConnectorSheetOpen)
-  // ... (existing state)
-  const [dynamicPlatforms, setDynamicPlatforms] = useState<Array<{ id: string; name: string; description?: string }>>([])
+  const editingId = useAppStore((s) => s.editingConnectorId)
+  const setEditingId = useAppStore((s) => s.setEditingConnectorId)
+  const connectorsQuery = useConnectorsQuery({ enabled: open })
+  const connectorDetailQuery = useConnectorQuery(editingId, {
+    enabled: open && !!editingId,
+    refetchInterval: open && editingId ? 2_000 : false,
+  })
+  const agentsQuery = useAgentsQuery({ enabled: open })
+  const credentialsQuery = useCredentialsQuery({ enabled: open })
+  const chatroomsQuery = useChatroomsQuery({ enabled: open })
+  const appSettingsQuery = useAppSettingsQuery({ enabled: open })
+  const connectorExtensionOptionsQuery = useConnectorExtensionOptionsQuery({ enabled: open })
+  const connectorDoctorMutation = useConnectorDoctorMutation()
+  const connectorAccessMutation = useConnectorAccessMutation(editingId)
+  const connectorAccessQuery = useConnectorAccessQuery(editingId, { enabled: open && !!editingId })
+  const saveConnectorMutation = useSaveConnectorMutation()
+  const connectorActionMutation = useConnectorActionMutation()
+  const deleteConnectorMutation = useDeleteConnectorMutation()
+  const createCredentialMutation = useCreateCredentialMutation()
+  const initializedKeyRef = useRef<string | null>(null)
 
-  useEffect(() => {
-    if (open) {
-      api<Array<{ id: string; name: string; description?: string }>>('GET', '/extensions/ui?type=connectors').then(list => {
-        setDynamicPlatforms(list || [])
-      }).catch(() => {})
-    }
-  }, [open])
+  const dynamicPlatforms = useMemo(() => connectorExtensionOptionsQuery.data ?? [], [connectorExtensionOptionsQuery.data])
+  const connectors = connectorsQuery.data ?? {}
+  const agents = agentsQuery.data ?? {}
+  const appSettings = appSettingsQuery.data ?? {}
+  const credentials = credentialsQuery.data ?? {}
+  const chatrooms = chatroomsQuery.data ?? {}
 
   const ALL_PLATFORMS = useMemo(() => {
     const extensionPlatforms = dynamicPlatforms.map(p => ({
@@ -561,18 +584,6 @@ export function ConnectorSheet() {
     }))
     return [...PLATFORMS, ...extensionPlatforms]
   }, [dynamicPlatforms])
-  const editingId = useAppStore((s) => s.editingConnectorId)
-  const setEditingId = useAppStore((s) => s.setEditingConnectorId)
-  const connectors = useAppStore((s) => s.connectors)
-  const loadConnectors = useAppStore((s) => s.loadConnectors)
-  const agents = useAppStore((s) => s.agents)
-  const appSettings = useAppStore((s) => s.appSettings)
-  const credentials = useAppStore((s) => s.credentials)
-  const loadAgents = useAppStore((s) => s.loadAgents)
-  const loadCredentials = useAppStore((s) => s.loadCredentials)
-
-  const chatrooms = useChatroomStore((s) => s.chatrooms)
-  const loadChatrooms = useChatroomStore((s) => s.loadChatrooms)
 
   const [name, setName] = useState('')
   const [platform, setPlatform] = useState<ConnectorPlatform>('discord')
@@ -584,9 +595,6 @@ export function ConnectorSheet() {
   const [saving, setSaving] = useState(false)
   const [actionLoading, setActionLoading] = useState(false)
   const [showSetup, setShowSetup] = useState(false)
-  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null)
-  const [waAuthenticated, setWaAuthenticated] = useState(false)
-  const [waHasCreds, setWaHasCreds] = useState(false)
   const [waConnecting, setWaConnecting] = useState(false)
   const [showNewCred, setShowNewCred] = useState(false)
   const [newCredName, setNewCredName] = useState('')
@@ -595,8 +603,6 @@ export function ConnectorSheet() {
   const [doctorWarnings, setDoctorWarnings] = useState<string[]>([])
   const [doctorPolicy, setDoctorPolicy] = useState<ConnectorDoctorPolicyPreview | null>(null)
   const [doctorLoading, setDoctorLoading] = useState(false)
-  const [accessSnapshot, setAccessSnapshot] = useState<ConnectorAccessSnapshot | null>(null)
-  const [accessLoading, setAccessLoading] = useState(false)
   const [accessError, setAccessError] = useState<string | null>(null)
   const [accessPending, setAccessPending] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -611,21 +617,22 @@ export function ConnectorSheet() {
   const supportsAccessControls = platform === 'whatsapp' || platform === 'bluebubbles'
 
   const editing = editingId ? connectors[editingId] as Connector | undefined : null
-
-  useEffect(() => {
-    if (open) {
-      loadAgents()
-      loadCredentials()
-      loadChatrooms()
-      setShowSetup(false)
-      setShowAdvancedSettings(false)
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
+  const runtimeConnector = connectorDetailQuery.data ?? editing ?? null
+  const accessSnapshot = connectorAccessQuery.data ?? null
+  const accessLoading = connectorAccessQuery.isPending
 
   // Sync form fields when editing connector changes (by ID, not reference)
   const editingIdRef = editing?.id ?? null
   useEffect(() => {
+    if (!open) {
+      initializedKeyRef.current = null
+      return
+    }
+    if (editingId && !editing) return
+    const initKey = editing?.id || '__new__'
+    if (initializedKeyRef.current === initKey) return
+    setShowSetup(false)
+    setShowAdvancedSettings(false)
     if (editing) {
       setName(editing.name)
       setPlatform(editing.platform)
@@ -642,43 +649,22 @@ export function ConnectorSheet() {
       setChatroomId('')
       setCredentialId('')
       setConfig({})
+      setShowNewCred(false)
+      setNewCredName('')
+      setNewCredValue('')
     }
-    setQrDataUrl(null)
-    setWaAuthenticated(false)
-    setWaHasCreds(false)
     setWaConnecting(false)
-  }, [editing, editingIdRef, open])
+    initializedKeyRef.current = initKey
+  }, [editing, editingId, editingIdRef, open])
 
   // Poll for QR code when WhatsApp connector is running or connecting
-  const isWaRunning = editing?.platform === 'whatsapp' && (editing?.status === 'running' || waConnecting)
-  const pollWaStatus = useCallback(async () => {
-    if (!editing) return
-    try {
-      const data = await api<Record<string, unknown>>('GET', `/connectors/${editing.id}`)
-      setQrDataUrl((data.qrDataUrl as string | null) || null)
-      setWaAuthenticated((data.authenticated as boolean) ?? false)
-      setWaHasCreds((data.hasCredentials as boolean) ?? false)
-      if (data.status === 'running' && editing.status !== 'running') {
-        const store = useAppStore.getState()
-        const updated = { ...store.connectors }
-        if (updated[editing.id]) {
-          updated[editing.id] = { ...updated[editing.id], status: 'running' as const }
-          useAppStore.setState({ connectors: updated })
-        }
-      }
-    } catch { /* ignore */ }
-  }, [editing])
-
-  useEffect(() => {
-    if (editing && isWaRunning) pollWaStatus()
-  }, [editing, editing?.id, isWaRunning, pollWaStatus])
-
-  useWs('connectors', pollWaStatus, isWaRunning ? 2000 : undefined)
-
+  const qrDataUrl = runtimeConnector?.qrDataUrl ?? null
+  const waAuthenticated = runtimeConnector?.authenticated === true
+  const waHasCreds = runtimeConnector?.hasCredentials === true
   const loadDoctorPreview = useCallback(async () => {
     setDoctorLoading(true)
     try {
-      const data = await api<ConnectorDoctorResponse>('POST', '/connectors/doctor', {
+      const data = await connectorDoctorMutation.mutateAsync({
         id: editing?.id || null,
         name,
         platform,
@@ -695,6 +681,7 @@ export function ConnectorSheet() {
     } finally {
       setDoctorLoading(false)
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- connectorDoctorMutation omitted: mutateAsync is stable at runtime but the wrapper isn't reference-stable, causing an infinite render loop
   }, [editing?.id, name, platform, routeMode, agentId, chatroomId, credentialId, config])
 
   useEffect(() => {
@@ -702,8 +689,6 @@ export function ConnectorSheet() {
       setDoctorWarnings([])
       setDoctorPolicy(null)
       setDoctorLoading(false)
-      setAccessSnapshot(null)
-      setAccessLoading(false)
       setAccessError(null)
       setAccessPending(false)
       setConfirmDelete(false)
@@ -732,35 +717,6 @@ export function ConnectorSheet() {
     })
   }, [])
 
-  const loadAccessSnapshot = useCallback(async () => {
-    if (!editing?.id) {
-      setAccessSnapshot(null)
-      setAccessError(null)
-      return
-    }
-    setAccessLoading(true)
-    setAccessError(null)
-    try {
-      const snapshot = await api<ConnectorAccessSnapshot>('GET', `/connectors/${editing.id}/access`)
-      setAccessSnapshot(snapshot)
-    } catch (err: unknown) {
-      setAccessSnapshot(null)
-      setAccessError(errorMessage(err))
-    } finally {
-      setAccessLoading(false)
-    }
-  }, [editing?.id])
-
-  useEffect(() => {
-    if (!open || !editing?.id) {
-      setAccessSnapshot(null)
-      setAccessLoading(false)
-      setAccessError(null)
-      return
-    }
-    void loadAccessSnapshot()
-  }, [editing?.id, loadAccessSnapshot, open])
-
   const handleAccessAction = useCallback(async (
     action: ConnectorAccessMutationAction,
     payload?: {
@@ -774,16 +730,14 @@ export function ConnectorSheet() {
     setAccessPending(true)
     setAccessError(null)
     try {
-      const result = await api<ConnectorAccessMutationResponse>('PUT', `/connectors/${editing.id}/access`, {
+      const result = await connectorAccessMutation.mutateAsync({
         action,
         senderId: payload?.senderId || null,
         senderIdAlt: payload?.senderIdAlt || null,
         code: payload?.code || null,
         dmAddressingMode: payload?.dmAddressingMode || null,
       })
-      setAccessSnapshot(result.snapshot)
       applySnapshotToConfig(result.snapshot)
-      await loadConnectors()
     } catch (err: unknown) {
       const message = errorMessage(err)
       setAccessError(message)
@@ -791,7 +745,7 @@ export function ConnectorSheet() {
     } finally {
       setAccessPending(false)
     }
-  }, [applySnapshotToConfig, editing?.id, loadConnectors])
+  }, [applySnapshotToConfig, connectorAccessMutation, editing?.id])
 
   const handleSave = async () => {
     const hasTarget = routeMode === 'agent' ? !!agentId : !!chatroomId
@@ -801,12 +755,16 @@ export function ConnectorSheet() {
       ? { agentId, chatroomId: null }
       : { agentId: null, chatroomId }
     try {
-      if (editing) {
-        await api('PUT', `/connectors/${editing.id}`, { name, ...routePayload, credentialId: credentialId || null, config })
-      } else {
-        await api('POST', '/connectors', { name: name || `${platformConfig?.label} Bot`, platform, ...routePayload, credentialId: credentialId || null, config })
-      }
-      await loadConnectors()
+      await saveConnectorMutation.mutateAsync({
+        id: editing?.id,
+        payload: {
+          name: name || `${platformConfig?.label} Bot`,
+          platform,
+          ...routePayload,
+          credentialId: credentialId || null,
+          config,
+        },
+      })
       setOpen(false)
       setEditingId(null)
     } catch (err: unknown) {
@@ -820,19 +778,12 @@ export function ConnectorSheet() {
     if (!editing) return
     setActionLoading(true)
     try {
-      await api('PUT', `/connectors/${editing.id}`, { action })
+      await connectorActionMutation.mutateAsync({ id: editing.id, action })
       if (action === 'start' && editing.platform === 'whatsapp') {
         setWaConnecting(true)
-        setWaAuthenticated(false)
-        setQrDataUrl(null)
-        // Don't reset waHasCreds — it will be updated by poll
       } else if (action === 'stop') {
         setWaConnecting(false)
-        setWaAuthenticated(false)
-        setWaHasCreds(false)
-        setQrDataUrl(null)
       }
-      await loadConnectors()
     } catch (err: unknown) {
       setWaConnecting(false)
       toast.error(`Failed to ${action}: ${errorMessage(err)}`)
@@ -845,8 +796,7 @@ export function ConnectorSheet() {
     if (!editing) return
     setDeleting(true)
     try {
-      await api('DELETE', `/connectors/${editing.id}`)
-      await loadConnectors()
+      await deleteConnectorMutation.mutateAsync(editing.id)
       setConfirmDelete(false)
       setOpen(false)
       setEditingId(null)
@@ -861,13 +811,9 @@ export function ConnectorSheet() {
     if (!editing) return
     setActionLoading(true)
     try {
-      await api('PUT', `/connectors/${editing.id}`, { action: 'repair' })
-      setWaAuthenticated(false)
-      setWaHasCreds(false)
-      setQrDataUrl(null)
+      await connectorActionMutation.mutateAsync({ id: editing.id, action: 'repair' })
       setWaConnecting(true)
       setConfirmWhatsAppAction(null)
-      await loadConnectors()
     } catch (err: unknown) {
       toast.error(`Failed to ${mode === 'unlink' ? 'unlink' : 're-pair'}: ${errorMessage(err)}`)
     } finally {
@@ -888,9 +834,9 @@ export function ConnectorSheet() {
     if (advancedPlatformFields.some((field) => hasConfiguredValue(field.key))) badges.push('Platform overrides')
     if (advancedAccessFields.some((field) => hasConfiguredValue(field.key)) || accessSnapshot?.pendingPairingRequests.length || accessSnapshot?.storedAllowedSenderIds.length) badges.push('Access lists')
     if (COMMON_CONFIG_FIELDS.some((field) => hasConfiguredValue(field.key))) badges.push('Runtime policy')
-    if (doctorWarnings.length > 0 || editing?.lastError) badges.push('Diagnostics')
+    if (doctorWarnings.length > 0 || runtimeConnector?.lastError) badges.push('Diagnostics')
     return Array.from(new Set(badges))
-  }, [accessSnapshot?.pendingPairingRequests.length, accessSnapshot?.storedAllowedSenderIds.length, advancedAccessFields, advancedPlatformFields, doctorWarnings.length, editing?.lastError, hasConfiguredValue])
+  }, [accessSnapshot?.pendingPairingRequests.length, accessSnapshot?.storedAllowedSenderIds.length, advancedAccessFields, advancedPlatformFields, doctorWarnings.length, hasConfiguredValue, runtimeConnector?.lastError])
   const configuredAdvancedCount = useMemo(() => {
     const advancedKeys = new Set([
       ...advancedPlatformFields.map((field) => field.key),
@@ -1063,10 +1009,10 @@ export function ConnectorSheet() {
             <div className="text-[14px] font-600 text-text">{platformConfig.label}</div>
             <div className="flex items-center gap-2 mt-0.5">
               <span className={`w-2 h-2 rounded-full ${
-                editing.status === 'running' ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]' :
-                editing.status === 'error' ? 'bg-red-400' : 'bg-white/20'
+                runtimeConnector?.status === 'running' ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]' :
+                runtimeConnector?.status === 'error' ? 'bg-red-400' : 'bg-white/20'
               }`} />
-              <span className="text-[12px] text-text-3 capitalize">{editing.status}</span>
+              <span className="text-[12px] text-text-3 capitalize">{runtimeConnector?.status || editing.status}</span>
             </div>
           </div>
         </div>
@@ -1233,12 +1179,12 @@ export function ConnectorSheet() {
                   onClick={async () => {
                     setSavingCred(true)
                     try {
-                      const cred = await api<{ id: string }>('POST', '/credentials', {
+                      const cred = await createCredentialMutation.mutateAsync({
                         provider: platform,
                         name: newCredName.trim() || `${platformConfig.label} Bot Token`,
                         apiKey: newCredValue.trim(),
                       })
-                      await loadCredentials()
+                      await credentialsQuery.refetch()
                       setCredentialId(cred.id)
                       setShowNewCred(false)
                       setNewCredName('')
@@ -1288,7 +1234,7 @@ export function ConnectorSheet() {
 
       {/* Start/Stop controls for editing */}
       {editing && (() => {
-        const effectiveRunning = editing.status === 'running' || waConnecting
+        const effectiveRunning = runtimeConnector?.status === 'running' || waConnecting
         return (
         <div className="mb-6 p-4 rounded-[14px] border border-white/[0.06] bg-white/[0.01]">
           <div className="flex items-center justify-between">
@@ -1297,10 +1243,10 @@ export function ConnectorSheet() {
               <div className="text-[12px] text-text-3 mt-0.5 flex items-center gap-1.5">
                 <span className={`w-2 h-2 rounded-full inline-block ${
                   effectiveRunning ? 'bg-green-400 shadow-[0_0_6px_rgba(74,222,128,0.5)]' :
-                  editing.status === 'error' ? 'bg-red-400' : 'bg-white/20'
+                  runtimeConnector?.status === 'error' ? 'bg-red-400' : 'bg-white/20'
                 }`} />
                 {effectiveRunning ? (waAuthenticated ? 'Connected and listening' : 'Connecting...') :
-                 editing.status === 'error' ? 'Error — see below' : 'Not connected'}
+                 runtimeConnector?.status === 'error' ? 'Error — see below' : 'Not connected'}
               </div>
             </div>
             {effectiveRunning ? (
@@ -1328,7 +1274,7 @@ export function ConnectorSheet() {
       })()}
 
       {/* WhatsApp QR code */}
-      {editing && editing.platform === 'whatsapp' && (editing.status === 'running' || waConnecting) && qrDataUrl && (
+      {editing && platform === 'whatsapp' && (runtimeConnector?.status === 'running' || waConnecting) && qrDataUrl && (
         <div className="mb-6 p-5 rounded-[14px] border border-white/[0.06] bg-white/[0.01] text-center"
           style={{ animation: 'fade-in 0.3s ease-out' }}>
           <div className="text-[13px] font-600 text-text-2 mb-1">Scan with WhatsApp</div>
@@ -1344,7 +1290,7 @@ export function ConnectorSheet() {
       )}
 
       {/* WhatsApp connected (authenticated, no QR) */}
-      {editing && editing.platform === 'whatsapp' && (editing.status === 'running' || waConnecting) && !qrDataUrl && waAuthenticated && (
+      {editing && platform === 'whatsapp' && (runtimeConnector?.status === 'running' || waConnecting) && !qrDataUrl && waAuthenticated && (
         <div className="mb-6 p-5 rounded-[14px] border border-white/[0.06] bg-white/[0.01] text-center">
           <div className="text-[13px] font-600 text-green-400 mb-1">Connected</div>
           <p className="text-[11px] text-text-3 mb-3">WhatsApp is paired and listening for messages</p>
@@ -1360,7 +1306,7 @@ export function ConnectorSheet() {
       )}
 
       {/* WhatsApp waiting for QR / reconnecting (not yet authenticated, no QR yet) */}
-      {editing && editing.platform === 'whatsapp' && (editing.status === 'running' || waConnecting) && !qrDataUrl && !waAuthenticated && (
+      {editing && platform === 'whatsapp' && (runtimeConnector?.status === 'running' || waConnecting) && !qrDataUrl && !waAuthenticated && (
         <div className="mb-6 p-5 rounded-[14px] border border-white/[0.06] bg-white/[0.01] text-center">
           <div className="flex items-center justify-center gap-2 mb-1">
             <span className="w-3 h-3 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
@@ -1387,10 +1333,10 @@ export function ConnectorSheet() {
       )}
 
       {/* Error display */}
-      {editing?.lastError && (
+      {runtimeConnector?.lastError && (
         <div className="mb-6 p-4 rounded-[14px] bg-red-500/[0.06] border border-red-500/15">
           <div className="text-[12px] font-600 text-red-400 mb-1">Error</div>
-          <div className="text-[12px] text-red-400/70 leading-[1.5] font-mono">{editing.lastError}</div>
+          <div className="text-[12px] text-red-400/70 leading-[1.5] font-mono">{runtimeConnector.lastError}</div>
         </div>
       )}
 

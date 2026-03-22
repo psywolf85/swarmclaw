@@ -68,7 +68,11 @@ export function requireCredentialSecret(
   if (!id) throw new Error(missingMessage)
   const credential = loadCredential(id)
   if (!credential?.encryptedKey) throw new Error(missingMessage)
-  return decryptKey(credential.encryptedKey)
+  try {
+    return decryptKey(credential.encryptedKey)
+  } catch {
+    throw new Error(missingMessage)
+  }
 }
 
 export function createCredentialRecord(input: {

@@ -6,10 +6,8 @@ import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { toast } from 'sonner'
-import { api } from '@/lib/app/api-client'
 import { dedup } from '@/lib/shared-utils'
 import { useMountedRef } from '@/hooks/use-mounted-ref'
-import { useWs } from '@/hooks/use-ws'
 import { useAppStore } from '@/stores/use-app-store'
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { CodeBlock } from '@/components/chat/code-block'
@@ -18,30 +16,25 @@ import type {
   Agent,
   ClawHubSkill,
   Skill,
-  SkillCommandDispatch,
-  SkillInvocationConfig,
   SkillSuggestion,
 } from '@/types'
+import { useAgentsQuery } from '@/features/agents/queries'
+import {
+  useApproveSkillSuggestionMutation,
+  useClawHubPreviewMutation,
+  useClawHubSearchMutation,
+  useDeleteSkillMutation,
+  useGenerateSkillSuggestionMutation,
+  useInstallClawHubSkillMutation,
+  useRejectSkillSuggestionMutation,
+  useSkillsQuery,
+  useSkillSuggestionsQuery,
+  type ClawHubPreview,
+} from '@/features/skills/queries'
 
 type SkillScopeFilter = 'all' | 'global' | 'agent'
 type SkillSort = 'updated' | 'name'
 type HubSort = 'popular' | 'name' | 'updated'
-
-interface ClawHubSearchResponse {
-  skills: ClawHubSkill[]
-  total: number
-  page: number
-  nextCursor?: string | null
-  error?: string
-}
-
-type ClawHubPreview = Partial<Skill> & {
-  name: string
-  content: string
-  description?: string
-  invocation?: SkillInvocationConfig | null
-  commandDispatch?: SkillCommandDispatch | null
-}
 
 const HUB_PAGE_SIZE = 18
 
@@ -49,20 +42,28 @@ export function SkillsWorkspace() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const mountedRef = useMountedRef()
-
-  const skills = useAppStore((s) => s.skills)
-  const loadSkills = useAppStore((s) => s.loadSkills)
-  const agents = useAppStore((s) => s.agents)
-  const loadAgents = useAppStore((s) => s.loadAgents)
+  const skillsQuery = useSkillsQuery()
+  const skills = useMemo(() => skillsQuery.data ?? {}, [skillsQuery.data])
+  const agentsQuery = useAgentsQuery()
+  const suggestionsQuery = useSkillSuggestionsQuery()
+  const generateSuggestionMutation = useGenerateSkillSuggestionMutation()
+  const approveSuggestionMutation = useApproveSkillSuggestionMutation()
+  const rejectSuggestionMutation = useRejectSkillSuggestionMutation()
+  const clawHubSearchMutation = useClawHubSearchMutation()
+  const clawHubPreviewMutation = useClawHubPreviewMutation()
+  const installClawHubSkillMutation = useInstallClawHubSkillMutation()
+  const deleteSkillMutation = useDeleteSkillMutation()
   const currentAgentId = useAppStore((s) => s.currentAgentId)
   const activeProjectFilter = useAppStore((s) => s.activeProjectFilter)
   const setSkillSheetOpen = useAppStore((s) => s.setSkillSheetOpen)
   const setEditingSkillId = useAppStore((s) => s.setEditingSkillId)
 
+  const suggestions = suggestionsQuery.data ?? []
+  const agents = agentsQuery.data ?? {}
+
   const activeTab = searchParams.get('tab') === 'clawhub' ? 'clawhub' : 'skills'
   const selectedSkillId = activeTab === 'skills' ? searchParams.get('skill') : null
 
-  const [ready, setReady] = useState(false)
   const [libraryQuery, setLibraryQuery] = useState('')
   const [libraryScope, setLibraryScope] = useState<SkillScopeFilter>('all')
   const [librarySort, setLibrarySort] = useState<SkillSort>('updated')
@@ -70,8 +71,6 @@ export function SkillsWorkspace() {
   const [deleteTarget, setDeleteTarget] = useState<Skill | null>(null)
   const [deletingSkillId, setDeletingSkillId] = useState<string | null>(null)
 
-  const [suggestions, setSuggestions] = useState<SkillSuggestion[]>([])
-  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const [suggestionActionId, setSuggestionActionId] = useState<string | null>(null)
   const [generatingSuggestion, setGeneratingSuggestion] = useState(false)
 
@@ -94,23 +93,11 @@ export function SkillsWorkspace() {
   const hubSearchRequestIdRef = useRef(0)
 
   useEffect(() => {
-    let active = true
-    void Promise.all([loadSkills(), loadAgents()]).finally(() => {
-      if (active && mountedRef.current) setReady(true)
-    })
-    return () => {
-      active = false
-    }
-  }, [loadAgents, loadSkills, mountedRef])
-
-  useEffect(() => {
     if (activeTab !== 'clawhub') {
       setSelectedHubSkill(null)
       setHubPreviewError(null)
     }
   }, [activeTab])
-
-  useWs('skills', () => { void loadSkills() })
 
   const skillList = useMemo(() => {
     return Object.values(skills).filter((skill) => !activeProjectFilter || skill.projectId === activeProjectFilter)
@@ -141,26 +128,6 @@ export function SkillsWorkspace() {
     setSkillSheetOpen(true)
   }, [setEditingSkillId, setSkillSheetOpen])
 
-  const loadSuggestions = useCallback(async () => {
-    setSuggestionsLoading(true)
-    try {
-      const result = await api<SkillSuggestion[]>('GET', '/skill-suggestions')
-      if (!mountedRef.current) return
-      setSuggestions(Array.isArray(result) ? result : [])
-    } catch (err) {
-      if (!mountedRef.current) return
-      toast.error(err instanceof Error ? err.message : 'Failed to load skill suggestions')
-    } finally {
-      if (mountedRef.current) setSuggestionsLoading(false)
-    }
-  }, [mountedRef])
-
-  useEffect(() => {
-    void loadSuggestions()
-  }, [loadSuggestions])
-
-  useWs('skill_suggestions', () => { void loadSuggestions() })
-
   const handleGenerateSuggestion = useCallback(async () => {
     if (!currentSessionId) {
       toast.error('Open a chat first so SwarmClaw has a session to learn from.')
@@ -168,41 +135,38 @@ export function SkillsWorkspace() {
     }
     setGeneratingSuggestion(true)
     try {
-      await api<SkillSuggestion>('POST', '/skill-suggestions', { sessionId: currentSessionId })
+      await generateSuggestionMutation.mutateAsync(currentSessionId)
       toast.success('Drafted a skill suggestion from the current conversation.')
-      await loadSuggestions()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to generate a skill suggestion')
     } finally {
       if (mountedRef.current) setGeneratingSuggestion(false)
     }
-  }, [currentSessionId, loadSuggestions, mountedRef])
+  }, [currentSessionId, generateSuggestionMutation, mountedRef])
 
   const handleApproveSuggestion = useCallback(async (id: string) => {
     setSuggestionActionId(id)
     try {
-      await api('POST', `/skill-suggestions/${id}/approve`)
+      await approveSuggestionMutation.mutateAsync(id)
       toast.success('Skill suggestion approved and saved.')
-      await Promise.all([loadSuggestions(), loadSkills()])
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to approve the skill suggestion')
     } finally {
       if (mountedRef.current) setSuggestionActionId(null)
     }
-  }, [loadSkills, loadSuggestions, mountedRef])
+  }, [approveSuggestionMutation, mountedRef])
 
   const handleRejectSuggestion = useCallback(async (id: string) => {
     setSuggestionActionId(id)
     try {
-      await api('POST', `/skill-suggestions/${id}/reject`)
+      await rejectSuggestionMutation.mutateAsync(id)
       toast.success('Skill suggestion dismissed.')
-      await loadSuggestions()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to dismiss the skill suggestion')
     } finally {
       if (mountedRef.current) setSuggestionActionId(null)
     }
-  }, [loadSuggestions, mountedRef])
+  }, [mountedRef, rejectSuggestionMutation])
 
   const searchHub = useCallback(async (query: string, page: number, append = false, cursor?: string | null) => {
     const requestId = hubSearchRequestIdRef.current + 1
@@ -211,13 +175,12 @@ export function SkillsWorkspace() {
     setHubError(null)
 
     try {
-      const params = new URLSearchParams({
-        q: query,
-        page: String(page),
-        limit: String(HUB_PAGE_SIZE),
+      const response = await clawHubSearchMutation.mutateAsync({
+        query,
+        page,
+        limit: HUB_PAGE_SIZE,
+        cursor,
       })
-      if (cursor) params.set('cursor', cursor)
-      const response = await api<ClawHubSearchResponse>('GET', `/clawhub/search?${params.toString()}`)
       if (!mountedRef.current || requestId !== hubSearchRequestIdRef.current) return
 
       if (response.error) setHubError(response.error)
@@ -233,7 +196,7 @@ export function SkillsWorkspace() {
     } finally {
       if (mountedRef.current && requestId === hubSearchRequestIdRef.current) setHubLoading(false)
     }
-  }, [mountedRef])
+  }, [clawHubSearchMutation, mountedRef])
 
   useEffect(() => {
     if (activeTab !== 'clawhub' || selectedHubSkill) return
@@ -252,7 +215,7 @@ export function SkillsWorkspace() {
     setHubPreviewLoadingId(selectedHubSkill.id)
     setHubPreviewError(null)
 
-    void api<ClawHubPreview>('POST', '/clawhub/preview', {
+    void clawHubPreviewMutation.mutateAsync({
       name: selectedHubSkill.name,
       description: selectedHubSkill.description,
       author: selectedHubSkill.author,
@@ -271,7 +234,7 @@ export function SkillsWorkspace() {
     return () => {
       active = false
     }
-  }, [hubPreviewCache, mountedRef, selectedHubSkill])
+  }, [clawHubPreviewMutation, hubPreviewCache, mountedRef, selectedHubSkill])
 
   const installedHubIds = useMemo(() => {
     const ids = new Set<string>()
@@ -335,7 +298,7 @@ export function SkillsWorkspace() {
   const handleInstallHubSkill = useCallback(async (skill: ClawHubSkill) => {
     setInstallingHubId(skill.id)
     try {
-      await api('POST', '/clawhub/install', {
+      await installClawHubSkillMutation.mutateAsync({
         name: skill.name,
         description: skill.description,
         url: skill.url,
@@ -344,21 +307,19 @@ export function SkillsWorkspace() {
         content: hubPreviewCache[skill.id]?.content,
       })
       toast.success(`Installed "${skill.name}"`)
-      await loadSkills()
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Install failed')
     } finally {
       if (mountedRef.current) setInstallingHubId(null)
     }
-  }, [hubPreviewCache, loadSkills, mountedRef])
+  }, [hubPreviewCache, installClawHubSkillMutation, mountedRef])
 
   const confirmDeleteSkill = useCallback(async () => {
     if (!deleteTarget) return
     setDeletingSkillId(deleteTarget.id)
     try {
-      await api('DELETE', `/skills/${deleteTarget.id}`)
+      await deleteSkillMutation.mutateAsync(deleteTarget.id)
       toast.success('Skill deleted')
-      await loadSkills()
       if (selectedSkillId === deleteTarget.id) {
         setPageState({ skill: null }, 'replace')
       }
@@ -368,9 +329,9 @@ export function SkillsWorkspace() {
     } finally {
       if (mountedRef.current) setDeletingSkillId(null)
     }
-  }, [deleteTarget, loadSkills, mountedRef, selectedSkillId, setPageState])
+  }, [deleteSkillMutation, deleteTarget, mountedRef, selectedSkillId, setPageState])
 
-  if (!ready) {
+  if (skillsQuery.isPending || agentsQuery.isPending) {
     return (
       <div className="flex-1 flex items-center justify-center px-6">
         <div className="flex items-center gap-3 text-[13px] text-text-3/65">
@@ -573,10 +534,10 @@ export function SkillsWorkspace() {
               </div>
             )}
 
-            {(suggestionsLoading || draftCount > 0) ? (
+            {(suggestionsQuery.isPending || draftCount > 0) ? (
               <SuggestionsPanel
                 suggestions={suggestions}
-                loading={suggestionsLoading}
+                loading={suggestionsQuery.isPending}
                 busyId={suggestionActionId}
                 onApprove={handleApproveSuggestion}
                 onReject={handleRejectSuggestion}

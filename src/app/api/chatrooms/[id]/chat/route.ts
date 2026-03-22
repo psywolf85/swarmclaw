@@ -20,7 +20,10 @@ import {
   isMuted,
 } from '@/lib/server/chatrooms/chatroom-helpers'
 import { filterHealthyChatroomAgents } from '@/lib/server/chatrooms/chatroom-health'
-import { evaluateRoutingRules } from '@/lib/server/chatrooms/chatroom-routing'
+import {
+  ensureChatroomRoutingGuidance,
+  selectChatroomRecipients,
+} from '@/lib/server/chatrooms/chatroom-routing'
 import { markProviderFailure, markProviderSuccess } from '@/lib/server/provider-health'
 import { applyAgentReactionsFromText } from '@/lib/server/chatrooms/chatroom-agent-signals'
 import { resolvePrimaryAgentRoute } from '@/lib/server/agents/agent-runtime-config'
@@ -60,11 +63,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Persist incoming message
   const senderName = senderId === 'user' ? 'You' : (agents[senderId]?.name || senderId)
   const replyTargetAgentId = resolveReplyTargetAgentId(replyToId, chatroom.messages, chatroom.agentIds)
+  ensureChatroomRoutingGuidance(chatroom, agents)
   let mentions = parseMentions(text, agents, chatroom.agentIds, { replyTargetAgentId, senderId: senderId !== 'user' ? senderId : null })
-  // Routing rules: if no explicit mentions, evaluate keyword/capability rules
-  if (mentions.length === 0 && chatroom.routingRules?.length) {
-    const agentList = chatroom.agentIds.map((aid) => agents[aid]).filter(Boolean)
-    mentions = evaluateRoutingRules(text, chatroom.routingRules, agentList)
+  if (mentions.length === 0 && !chatroom.autoAddress) {
+    mentions = await selectChatroomRecipients({
+      text,
+      chatroom,
+      agentsById: agents,
+    })
   }
   // Auto-address: if enabled and still no mentions, address all agents
   if (chatroom.autoAddress && mentions.length === 0) {

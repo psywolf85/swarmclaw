@@ -3,7 +3,7 @@ import { HumanMessage, AIMessage } from '@langchain/core/messages'
 import { createReactAgent } from '@langchain/langgraph/prebuilt'
 import { MemorySaver } from '@langchain/langgraph'
 import { DEFAULT_HEARTBEAT_INTERVAL_SEC } from '@/lib/runtime/heartbeat-defaults'
-import { getAgent } from '@/lib/server/agents/agent-repository'
+import { getAgent, listAgents } from '@/lib/server/agents/agent-repository'
 import { buildSessionTools } from '@/lib/server/session-tools'
 import { buildChatModel } from '@/lib/server/build-llm'
 import { loadSettings } from '@/lib/server/settings/settings-repository'
@@ -18,6 +18,7 @@ import { truncateToolResultText } from '@/lib/server/chat-execution/tool-result-
 import {
   buildIdentitySection,
   buildThinkingSection,
+  buildRuntimeOrientationSection,
   buildWorkspaceSection,
   buildAgentAwarenessSection,
   buildSituationalSection,
@@ -27,13 +28,15 @@ import {
   buildProactiveMemorySection,
   buildCoordinatorSection,
   buildCredentialAwarenessSection,
+  buildDelegationRecommendationSection,
+  buildRunContextSection,
 } from '@/lib/server/chat-execution/prompt-sections'
 
 import { log } from '@/lib/server/logger'
 import { logExecution } from '@/lib/server/execution-log'
 import { buildCurrentDateTimePromptContext } from '@/lib/server/prompt-runtime-context'
 import { expandExtensionIds } from '@/lib/server/tool-aliases'
-import type { Session, Message } from '@/types'
+import type { ExecutionBrief, Session, Message } from '@/types'
 import { getEnabledCapabilityIds } from '@/lib/capability-selection'
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { resolveActiveProjectContext } from '@/lib/server/project-context'
@@ -89,6 +92,7 @@ import {
   DEFAULT_PROMPT_BUDGET,
   MINIMAL_PROMPT_BUDGET,
 } from '@/lib/server/chat-execution/prompt-budget'
+import { resolveSessionLineageIds } from '@/lib/server/sessions/session-lineage'
 import { IterationTimers } from '@/lib/server/chat-execution/iteration-timers'
 import { processIterationEvents } from '@/lib/server/chat-execution/iteration-event-handler'
 import { evaluateContinuation } from '@/lib/server/chat-execution/continuation-evaluator'
@@ -101,6 +105,11 @@ import {
   isResearchSynthesis as classifiedIsResearchSynthesis,
   type MessageClassification,
 } from '@/lib/server/chat-execution/message-classifier'
+import {
+  buildDelegationTaskProfile,
+  formatDelegationRationale,
+  resolveDelegationAdvisory,
+} from '@/lib/server/agents/delegation-advisory'
 
 const TAG = 'stream-agent-chat'
 
@@ -174,6 +183,7 @@ interface StreamAgentChatOpts {
   attachedFiles?: string[]
   apiKey: string | null
   systemPrompt?: string
+  executionBrief?: ExecutionBrief | null
   extraSystemContext?: string[]
   write: (data: string) => void
   history: Message[]
@@ -213,7 +223,7 @@ export async function streamAgentChat(opts: StreamAgentChatOpts): Promise<Stream
 
 async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAgentChatResult> {
   const startTs = Date.now()
-  const { session, message, imagePath, imageUrl, attachedFiles, apiKey, systemPrompt, extraSystemContext, write, history, fallbackCredentialIds, signal } = opts
+  const { session, message, imagePath, imageUrl, attachedFiles, apiKey, systemPrompt, executionBrief, extraSystemContext, write, history, fallbackCredentialIds, signal } = opts
   const isHeartbeat = isHeartbeatSource(opts.source)
   const promptMode: PromptMode = opts.promptMode ?? resolvePromptMode(session)
   const isMinimalPrompt = promptMode === 'minimal'
@@ -221,7 +231,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   const rawExtensions = getEnabledCapabilityIds(session)
   const hasShellCapability = rawExtensions.some((toolId) => ['shell', 'execute_command'].includes(String(toolId)))
   const extensionManager = getExtensionManager()
-  const sessionExtensions = expandExtensionIds([
+  const requestedExtensions = expandExtensionIds([
     ...rawExtensions,
     ...(hasShellCapability ? ['process'] : []),
   ]).filter((id) => !extensionManager.isExplicitlyDisabled(id))
@@ -249,10 +259,15 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   // Build agent prompt
   const settings = loadSettings()
+  const toolPolicy = resolveSessionToolPolicy(requestedExtensions, settings)
+  const blockedExtensionIds = new Set(expandExtensionIds(toolPolicy.blockedExtensions.map((entry) => entry.tool)))
+  const sessionExtensions = expandExtensionIds(toolPolicy.enabledExtensions)
+    .filter((id) => !blockedExtensionIds.has(id))
+    .filter((id) => !extensionManager.isExplicitlyDisabled(id))
   const requestedToolPreflightResponse = resolveRequestedToolPreflightResponse({
     message,
     enabledExtensions: sessionExtensions,
-    toolPolicy: resolveSessionToolPolicy(sessionExtensions, settings),
+    toolPolicy,
     appSettings: settings,
     internal: false,
     source: 'chat',
@@ -296,6 +311,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   // -------------------------------------------------------------------------
   const promptParts: string[] = []
   const hasProvidedSystemPrompt = typeof systemPrompt === 'string' && systemPrompt.trim().length > 0
+  const hasCanonicalExecutionBrief = Boolean(executionBrief)
   const currentThreadRecallRequest = isCurrentThreadRecallRequest(message)
   const hasAttachmentContext = Boolean(
     imagePath
@@ -347,17 +363,36 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   // Composable prompt sections — each builder returns string | null (or string[])
   const thinkingBlock = buildThinkingSection(agentThinkingLevel, isMinimalPrompt)
   if (thinkingBlock) promptParts.push(thinkingBlock)
+  const { rootSessionId } = resolveSessionLineageIds(session)
 
   // Async sections — run concurrently where possible
-  const [workspaceBlock, awarenessBlock, situationalBlock, extensionAuditBlock] = await Promise.all([
+  const [runtimeOrientationBlock, workspaceBlock, awarenessBlock, situationalBlock, extensionAuditBlock] = await Promise.all([
+    buildRuntimeOrientationSection({
+      session,
+      promptMode,
+      sessionExtensions,
+      toolPolicy,
+      agent: sessionAgent,
+      activeProjectContext,
+      rootSessionId,
+      isHeartbeat,
+      isConnectorSession,
+    }),
     !hasProvidedSystemPrompt ? buildWorkspaceSection(session, isMinimalPrompt, agentHeartbeatEnabled) : null,
     buildAgentAwarenessSection(session, sessionExtensions, isMinimalPrompt),
     buildSituationalSection(session, isMinimalPrompt),
     buildExtensionAccessAuditSection(sessionExtensions, agentMcpDisabledTools, isMinimalPrompt),
   ])
+  if (runtimeOrientationBlock) promptParts.push(runtimeOrientationBlock)
   if (workspaceBlock) promptParts.push(workspaceBlock)
   if (awarenessBlock) promptParts.push(awarenessBlock)
   if (situationalBlock) promptParts.push(situationalBlock)
+
+  // RunContext — structured working memory that survives compaction
+  if (!hasProvidedSystemPrompt && !hasCanonicalExecutionBrief) {
+    const runContextBlock = buildRunContextSection(session.runContext, isMinimalPrompt)
+    if (runContextBlock) promptParts.push(runContextBlock)
+  }
 
   // Extra system context — always included (caller-provided context is always relevant)
   if (Array.isArray(extraSystemContext)) {
@@ -393,6 +428,22 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
 
   // Await classification before building the agentic execution policy
   const classification = await classificationPromise
+  const delegationAdvisory = sessionAgent && agentDelegationEnabled
+    ? resolveDelegationAdvisory({
+        currentAgent: sessionAgent,
+        agents: listAgents(),
+        profile: buildDelegationTaskProfile({ classification }),
+        delegationTargetMode: agentDelegationTargetMode,
+        delegationTargetAgentIds: agentDelegationTargetAgentIds,
+      })
+    : null
+  const delegationRecommendationBlock = !isMinimalPrompt
+    ? buildDelegationRecommendationSection({
+        agent: sessionAgent,
+        classification,
+      })
+    : null
+  if (delegationRecommendationBlock) promptParts.push(delegationRecommendationBlock)
 
   promptParts.push(
     buildAgenticExecutionPolicy({
@@ -813,7 +864,7 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
   // -------------------------------------------------------------------------
   const state = new ChatTurnState()
   const limits = new ContinuationLimits(isConnectorSession, isHeartbeat)
-  const routingDecision = routeTaskIntent(message, sessionExtensions, null)
+  const routingDecision = routeTaskIntent(message, sessionExtensions, null, classification)
   const explicitRequiredToolNames = getExplicitRequiredToolNames(message, sessionExtensions)
 
   const boundedExternalExecutionTask = classifiedHasTransactionalWalletIntent(classification, message)
@@ -1071,6 +1122,8 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
           likelyResearchSynthesisTask,
           abortControllerAborted: abortController.signal.aborted,
           classification,
+          delegationEnabled: agentDelegationEnabled,
+          delegationPreferenceActive: delegationAdvisory?.shouldDelegate === true,
         })
         shouldContinue = decision.type
         if (decision.requiredToolReminderNames.length > 0) {
@@ -1123,6 +1176,9 @@ async function streamAgentChatCore(opts: StreamAgentChatOpts): Promise<StreamAge
         cwd: session.cwd,
         frequencyLimitedToolName,
         sessionExtensions,
+        isCoordinatorAgent,
+        recommendedDelegateName: delegationAdvisory?.recommended?.agentName || null,
+        delegationRationale: formatDelegationRationale(delegationAdvisory?.recommended),
       })
 
       if (continuationPrompt) {

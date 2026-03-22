@@ -10,6 +10,7 @@ import {
   restoreArchivedScheduleCluster,
 } from '@/lib/server/schedules/schedule-lifecycle'
 import { loadSchedule, loadSchedules, upsertSchedule, upsertSchedules } from '@/lib/server/schedules/schedule-repository'
+import { serviceFail, serviceOk } from '@/lib/server/service-result'
 import { errorMessage } from '@/lib/shared-utils'
 import { getScheduleSignatureKey } from '@/lib/schedules/schedule-dedupe'
 import { prepareScheduledTaskRun } from '@/lib/server/tasks/task-lifecycle'
@@ -18,6 +19,8 @@ import { pushMainLoopEventToMainSessions } from '@/lib/server/agents/main-agent-
 import { WORKSPACE_DIR } from '@/lib/server/data-dir'
 import { notify } from '@/lib/server/ws-hub'
 import type { Schedule } from '@/types'
+import type { ScheduleLike } from '@/lib/schedules/schedule-dedupe'
+import type { ServiceResult } from '@/lib/server/service-result'
 
 type InFlightTask = {
   status?: string
@@ -35,17 +38,17 @@ export function listSchedulesForApi(includeArchived: boolean) {
   return filtered
 }
 
-export function createScheduleFromRoute(body: Record<string, unknown>) {
+export function createScheduleFromRoute(body: Record<string, unknown>): ServiceResult<ScheduleLike> {
   const now = Date.now()
   const schedules = loadSchedules()
   const agents = loadAgents()
   const candidateAgentId = typeof body.agentId === 'string' ? body.agentId.trim() : ''
   const agent = agents[candidateAgentId]
   if (!agent) {
-    return { ok: false as const, status: 400 as const, payload: { error: `Agent not found: ${String(body.agentId)}` } }
+    return serviceFail(400, `Agent not found: ${String(body.agentId)}`)
   }
   if (isAgentDisabled(agent)) {
-    return { ok: false as const, status: 409 as const, payload: { error: buildAgentDisabledMessage(agent, 'take scheduled work') } }
+    return serviceFail(409, buildAgentDisabledMessage(agent, 'take scheduled work'))
   }
   const prepared = prepareScheduleCreate({
     input: body,
@@ -54,13 +57,13 @@ export function createScheduleFromRoute(body: Record<string, unknown>) {
     cwd: WORKSPACE_DIR,
   })
   if (!prepared.ok) {
-    return { ok: false as const, status: 400 as const, payload: { error: prepared.error } }
+    return serviceFail(400, prepared.error)
   }
   if (prepared.kind === 'duplicate') {
     if (prepared.entries.length === 1) upsertSchedule(prepared.scheduleId, prepared.schedule)
     else if (prepared.entries.length > 1) upsertSchedules(prepared.entries)
     if (prepared.entries.length > 0) notify('schedules')
-    return { ok: true as const, payload: prepared.schedule }
+    return serviceOk(prepared.schedule)
   }
   upsertSchedule(prepared.scheduleId, prepared.schedule)
   logActivity({
@@ -71,28 +74,25 @@ export function createScheduleFromRoute(body: Record<string, unknown>) {
     summary: `Schedule created: "${prepared.schedule.name}"`,
   })
   notify('schedules')
-  return { ok: true as const, payload: prepared.schedule }
+  return serviceOk(prepared.schedule)
 }
 
-export function updateScheduleFromRoute(id: string, body: Record<string, unknown>) {
+export function updateScheduleFromRoute(id: string, body: Record<string, unknown>): ServiceResult<ScheduleLike & { [key: string]: unknown }> {
   const schedules = loadSchedules()
   const current = schedules[id]
-  if (!current) return { ok: false as const, status: 404 as const }
+  if (!current) return serviceFail(404, 'Schedule not found')
 
   if (body.restore === true) {
     const restored = restoreArchivedScheduleCluster(id, {
       actor: { actor: 'user' },
     })
     if (!restored.ok || !restored.schedule) {
-      return { ok: false as const, status: 409 as const, payload: { error: 'Schedule is not archived.' } }
+      return serviceFail(409, 'Schedule is not archived.')
     }
-    return {
-      ok: true as const,
-      payload: {
-        ...restored.schedule,
-        restoredIds: restored.restoredIds,
-      },
-    }
+    return serviceOk({
+      ...restored.schedule,
+      restoredIds: restored.restoredIds,
+    })
   }
 
   if (body.status === 'archived') {
@@ -100,17 +100,14 @@ export function updateScheduleFromRoute(id: string, body: Record<string, unknown
       actor: { actor: 'user' },
     })
     if (!archived.ok || !archived.schedule) {
-      return { ok: false as const, status: 500 as const, payload: { error: 'Failed to archive schedule.' } }
+      return serviceFail(500, 'Failed to archive schedule.')
     }
-    return {
-      ok: true as const,
-      payload: {
-        ...archived.schedule,
-        archivedIds: archived.archivedIds,
-        cancelledTaskIds: archived.cancelledTaskIds,
-        abortedRunSessionIds: archived.abortedRunSessionIds,
-      },
-    }
+    return serviceOk({
+      ...archived.schedule,
+      archivedIds: archived.archivedIds,
+      cancelledTaskIds: archived.cancelledTaskIds,
+      abortedRunSessionIds: archived.abortedRunSessionIds,
+    })
   }
 
   const sessions = loadSessions()
@@ -130,7 +127,7 @@ export function updateScheduleFromRoute(id: string, body: Record<string, unknown
     propagationSource: current as unknown as Record<string, unknown>,
   })
   if (!prepared.ok) {
-    return { ok: false as const, status: 400 as const, payload: { error: errorMessage(prepared.error) } }
+    return serviceFail(400, errorMessage(prepared.error))
   }
   upsertSchedules(prepared.entries)
   logActivity({
@@ -142,57 +139,53 @@ export function updateScheduleFromRoute(id: string, body: Record<string, unknown
     detail: prepared.affectedScheduleIds.length > 1 ? { affectedScheduleIds: prepared.affectedScheduleIds } : undefined,
   })
   notify('schedules')
-  return {
-    ok: true as const,
-    payload: prepared.affectedScheduleIds.length > 1
+  return serviceOk(
+    prepared.affectedScheduleIds.length > 1
       ? { ...prepared.schedule, affectedScheduleIds: prepared.affectedScheduleIds }
       : prepared.schedule,
-  }
+  )
 }
 
-export function deleteScheduleFromRoute(id: string, purge: boolean) {
+export function deleteScheduleFromRoute(id: string, purge: boolean): ServiceResult<Record<string, unknown>> {
   const current = loadSchedule(id)
-  if (!current) return { ok: false as const, status: 404 as const }
+  if (!current) return serviceFail(404, 'Schedule not found')
   if (purge) {
     const purged = purgeArchivedScheduleCluster(id, {
       actor: { actor: 'user' },
     })
     if (!purged.ok) {
-      return { ok: false as const, status: 409 as const, payload: { error: 'Only archived schedules can be purged.' } }
+      return serviceFail(409, 'Only archived schedules can be purged.')
     }
-    return { ok: true as const, payload: { ok: true, purgedIds: purged.purgedIds } }
+    return serviceOk({ ok: true, purgedIds: purged.purgedIds })
   }
   const archived = archiveScheduleCluster(id, {
     actor: { actor: 'user' },
   })
   if (!archived.ok || !archived.schedule) {
-    return { ok: false as const, status: 500 as const, payload: { error: 'Failed to archive schedule.' } }
+    return serviceFail(500, 'Failed to archive schedule.')
   }
-  return {
-    ok: true as const,
-    payload: {
-      ok: true,
-      archivedIds: archived.archivedIds,
-      cancelledTaskIds: archived.cancelledTaskIds,
-      removedQueuedTaskIds: archived.removedQueuedTaskIds,
-      abortedRunSessionIds: archived.abortedRunSessionIds,
-      schedule: archived.schedule,
-    },
-  }
+  return serviceOk({
+    ok: true,
+    archivedIds: archived.archivedIds,
+    cancelledTaskIds: archived.cancelledTaskIds,
+    removedQueuedTaskIds: archived.removedQueuedTaskIds,
+    abortedRunSessionIds: archived.abortedRunSessionIds,
+    schedule: archived.schedule,
+  })
 }
 
-export function runScheduleNow(id: string) {
+export function runScheduleNow(id: string): ServiceResult<Record<string, unknown>> {
   const schedule = loadSchedule(id) as Schedule | null
-  if (!schedule) return { ok: false as const, status: 404 as const }
+  if (!schedule) return serviceFail(404, 'Schedule not found')
   if (schedule.status === 'archived') {
-    return { ok: false as const, status: 409 as const, payload: { error: 'Archived schedules must be restored before they can run.' } }
+    return serviceFail(409, 'Archived schedules must be restored before they can run.')
   }
 
   const agents = loadAgents()
   const agent = agents[schedule.agentId]
-  if (!agent) return { ok: false as const, status: 400 as const, payload: { error: 'Agent not found' } }
+  if (!agent) return serviceFail(400, 'Agent not found')
   if (isAgentDisabled(agent)) {
-    return { ok: false as const, status: 409 as const, payload: { error: buildAgentDisabledMessage(agent, 'run schedules') } }
+    return serviceFail(409, buildAgentDisabledMessage(agent, 'run schedules'))
   }
 
   const tasks = loadTasks()
@@ -204,7 +197,7 @@ export function runScheduleNow(id: string) {
       && task.sourceScheduleKey === scheduleSignature
     )
     if (inFlight) {
-      return { ok: true as const, payload: { ok: true, queued: false, reason: 'in_flight' } }
+      return serviceOk({ ok: true, queued: false, reason: 'in_flight' })
     }
   }
 
@@ -233,5 +226,5 @@ export function runScheduleNow(id: string) {
     detail: { taskId, runNumber: schedule.runNumber },
   })
 
-  return { ok: true as const, payload: { ok: true, queued: true, taskId, runNumber: schedule.runNumber } }
+  return serviceOk({ ok: true, queued: true, taskId, runNumber: schedule.runNumber })
 }

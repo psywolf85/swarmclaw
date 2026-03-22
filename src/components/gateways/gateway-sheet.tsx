@@ -1,42 +1,29 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
 import { OpenClawDeployPanel } from '@/components/openclaw/openclaw-deploy-panel'
 import { useAppStore } from '@/stores/use-app-store'
-import { api } from '@/lib/app/api-client'
 import { toast } from 'sonner'
 import type {
-  Credential,
   OpenClawDevicePairRequest,
   OpenClawNode,
   OpenClawNodePairRequest,
   OpenClawPairedDevice,
   GatewayProfile,
 } from '@/types'
-
-interface DiscoveryResult {
-  host: string
-  port: number
-  healthy: boolean
-  models?: string[]
-  error?: string
-}
-
-interface GatewayRpcResponse<T> {
-  ok?: boolean
-  result?: T
-  error?: string
-}
-
-interface NodeListResult {
-  nodes?: OpenClawNode[]
-}
-
-interface PairingListResult<T> {
-  pending?: T[]
-  paired?: OpenClawPairedDevice[]
-}
+import { useCreateCredentialMutation, useCredentialsQuery } from '@/features/credentials/queries'
+import {
+  useCheckOpenClawGatewayMutation,
+  useDiscoverOpenClawGatewaysMutation,
+  useGatewayInvokeNodeMutation,
+  useGatewayPairingDecisionMutation,
+  useGatewayProfilesQuery,
+  useGatewayRemoveDeviceMutation,
+  useRefreshGatewayTopologyMutation,
+  useSaveGatewayProfileMutation,
+  type GatewayDiscoveryResult,
+} from '@/features/gateways/queries'
 
 interface GatewayImportShape {
   name?: string
@@ -54,10 +41,19 @@ export function GatewaySheet() {
   const setOpen = useAppStore((s) => s.setGatewaySheetOpen)
   const editingId = useAppStore((s) => s.editingGatewayId)
   const setEditingId = useAppStore((s) => s.setEditingGatewayId)
-  const gatewayProfiles = useAppStore((s) => s.gatewayProfiles)
-  const loadGatewayProfiles = useAppStore((s) => s.loadGatewayProfiles)
-  const credentials = useAppStore((s) => s.credentials)
-  const loadCredentials = useAppStore((s) => s.loadCredentials)
+  const gatewayProfilesQuery = useGatewayProfilesQuery({ enabled: open })
+  const credentialsQuery = useCredentialsQuery({ enabled: open })
+  const createCredentialMutation = useCreateCredentialMutation()
+  const saveGatewayMutation = useSaveGatewayProfileMutation()
+  const checkGatewayMutation = useCheckOpenClawGatewayMutation()
+  const discoverGatewaysMutation = useDiscoverOpenClawGatewaysMutation()
+  const refreshGatewayTopologyMutation = useRefreshGatewayTopologyMutation()
+  const gatewayPairingDecisionMutation = useGatewayPairingDecisionMutation()
+  const gatewayRemoveDeviceMutation = useGatewayRemoveDeviceMutation()
+  const gatewayInvokeNodeMutation = useGatewayInvokeNodeMutation()
+
+  const gatewayProfiles = gatewayProfilesQuery.data ?? []
+  const credentials = credentialsQuery.data ?? {}
 
   const editing = editingId ? gatewayProfiles.find((item) => item.id === editingId) : null
   const openClawCredentials = Object.values(credentials).filter((item) => item.provider === 'openclaw')
@@ -73,7 +69,7 @@ export function GatewaySheet() {
   const [checking, setChecking] = useState(false)
   const [checkMessage, setCheckMessage] = useState('')
   const [discovering, setDiscovering] = useState(false)
-  const [discoveries, setDiscoveries] = useState<DiscoveryResult[]>([])
+  const [discoveries, setDiscoveries] = useState<GatewayDiscoveryResult[]>([])
   const [nodesLoading, setNodesLoading] = useState(false)
   const [nodesError, setNodesError] = useState('')
   const [nodes, setNodes] = useState<OpenClawNode[]>([])
@@ -87,11 +83,6 @@ export function GatewaySheet() {
   const [invoking, setInvoking] = useState(false)
   const [deployment, setDeployment] = useState<GatewayProfile['deployment'] | null>(null)
   const importFileRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    if (!open) return
-    void Promise.all([loadGatewayProfiles(), loadCredentials()])
-  }, [open, loadGatewayProfiles, loadCredentials])
 
   useEffect(() => {
     if (!open) return
@@ -127,61 +118,30 @@ export function GatewaySheet() {
     setInvokeParamsText('{}')
   }, [open, editing, gatewayProfiles.length])
 
-  const loadNodesAndDevices = async (profileId: string) => {
+  const loadNodesAndDevices = useCallback(async (profileId: string) => {
     setNodesLoading(true)
     setNodesError('')
     try {
-      const [nodesRes, nodePairRes, devicePairRes] = await Promise.all([
-        api<GatewayRpcResponse<NodeListResult>>('POST', '/openclaw/gateway', {
-          method: 'node.list',
-          params: { profileId },
-        }),
-        api<GatewayRpcResponse<PairingListResult<OpenClawNodePairRequest>>>('POST', '/openclaw/gateway', {
-          method: 'node.pair.list',
-          params: { profileId },
-        }),
-        api<GatewayRpcResponse<PairingListResult<OpenClawDevicePairRequest>>>('POST', '/openclaw/gateway', {
-          method: 'device.pair.list',
-          params: { profileId },
-        }),
-      ])
-
-      if (nodesRes.error) throw new Error(nodesRes.error)
-      if (nodePairRes.error) throw new Error(nodePairRes.error)
-      if (devicePairRes.error) throw new Error(devicePairRes.error)
-
-      const nextNodes = Array.isArray(nodesRes.result?.nodes) ? nodesRes.result.nodes : []
-      const nextNodePairings = Array.isArray(nodePairRes.result?.pending) ? nodePairRes.result.pending : []
-      const nextDevicePairings = Array.isArray(devicePairRes.result?.pending) ? devicePairRes.result.pending : []
-      const nextPairedDevices = Array.isArray(devicePairRes.result?.paired) ? devicePairRes.result.paired : []
-
-      setNodes(nextNodes)
-      setNodePairings(nextNodePairings)
-      setDevicePairings(nextDevicePairings)
-      setPairedDevices(nextPairedDevices)
-      const nextStats: NonNullable<GatewayProfile['stats']> = {
-        nodeCount: nextNodes.length,
-        connectedNodeCount: nextNodes.filter((node) => node.connected).length,
-        pendingNodePairings: nextNodePairings.length,
-        pairedDeviceCount: nextPairedDevices.length,
-        pendingDevicePairings: nextDevicePairings.length,
+      const result = await refreshGatewayTopologyMutation.mutateAsync(profileId)
+      setNodes(result.nodes)
+      setNodePairings(result.nodePairings)
+      setDevicePairings(result.devicePairings)
+      setPairedDevices(result.pairedDevices)
+      if (result.nodes[0]) {
+        setInvokeNodeId((current) => current || result.nodes[0].nodeId)
+        setInvokeCommand((current) => current || result.nodes[0].commands?.[0] || '')
       }
-      if (nextNodes[0]) {
-        setInvokeNodeId((current) => current || nextNodes[0].nodeId)
-        setInvokeCommand((current) => current || nextNodes[0].commands?.[0] || '')
-      }
-      void api('PUT', `/gateways/${profileId}`, { stats: nextStats }).catch(() => {})
     } catch (err: unknown) {
       setNodesError(err instanceof Error ? err.message : 'Failed to load nodes for this gateway.')
     } finally {
       setNodesLoading(false)
     }
-  }
+  }, [refreshGatewayTopologyMutation])
 
   useEffect(() => {
     if (!open || !editing?.id) return
     void loadNodesAndDevices(editing.id)
-  }, [open, editing?.id])
+  }, [open, editing?.id, loadNodesAndDevices])
 
   const onClose = () => {
     setOpen(false)
@@ -193,7 +153,7 @@ export function GatewaySheet() {
     try {
       let nextCredentialId = credentialId
       if (tokenDraft.trim()) {
-        const created = await api<Credential>('POST', '/credentials', {
+        const created = await createCredentialMutation.mutateAsync({
           provider: 'openclaw',
           name: `${name.trim() || 'OpenClaw Gateway'} token`,
           apiKey: tokenDraft.trim(),
@@ -209,14 +169,11 @@ export function GatewaySheet() {
         deployment,
         isDefault,
       }
-      if (editing) {
-        await api('PUT', `/gateways/${editing.id}`, payload)
-        toast.success('Gateway updated')
-      } else {
-        await api('POST', '/gateways', payload)
-        toast.success('Gateway added')
-      }
-      await Promise.all([loadGatewayProfiles(), loadCredentials()])
+      await saveGatewayMutation.mutateAsync({
+        id: editing?.id,
+        payload,
+      })
+      toast.success(editing ? 'Gateway updated' : 'Gateway added')
       onClose()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save gateway')
@@ -229,11 +186,11 @@ export function GatewaySheet() {
     setChecking(true)
     setCheckMessage('')
     try {
-      const params = new URLSearchParams()
-      params.set('endpoint', endpoint.trim() || 'http://localhost:18789')
-      if (credentialId) params.set('credentialId', credentialId)
-      if (tokenDraft.trim()) params.set('token', tokenDraft.trim())
-      const result = await api<{ ok: boolean; models: string[]; message?: string; error?: string; hint?: string }>('GET', `/providers/openclaw/health?${params.toString()}`)
+      const result = await checkGatewayMutation.mutateAsync({
+        endpoint,
+        credentialId,
+        token: tokenDraft,
+      })
       if (result.ok) {
         setCheckMessage(result.message || `Connected. ${result.models?.length ? `${result.models.length} model${result.models.length === 1 ? '' : 's'} visible.` : 'Gateway responded normally.'}`)
       } else {
@@ -249,7 +206,7 @@ export function GatewaySheet() {
   const handleDiscover = async () => {
     setDiscovering(true)
     try {
-      const result = await api<{ gateways: DiscoveryResult[] }>('GET', '/openclaw/discover')
+      const result = await discoverGatewaysMutation.mutateAsync()
       setDiscoveries((result.gateways || []).filter((item) => item.healthy))
     } catch {
       setDiscoveries([])
@@ -261,11 +218,11 @@ export function GatewaySheet() {
   const handlePairingDecision = async (kind: 'node' | 'device', requestId: string, decision: 'approve' | 'reject') => {
     if (!editing?.id) return
     try {
-      await api<GatewayRpcResponse<unknown>>('POST', '/openclaw/gateway', {
-        method: kind === 'node'
-          ? (decision === 'approve' ? 'node.pair.approve' : 'node.pair.reject')
-          : (decision === 'approve' ? 'device.pair.approve' : 'device.pair.reject'),
-        params: { profileId: editing.id, requestId },
+      await gatewayPairingDecisionMutation.mutateAsync({
+        profileId: editing.id,
+        kind,
+        requestId,
+        decision,
       })
       toast.success(`${kind === 'node' ? 'Node' : 'Device'} ${decision}d`)
       await loadNodesAndDevices(editing.id)
@@ -277,10 +234,7 @@ export function GatewaySheet() {
   const handleRemoveDevice = async (deviceId: string) => {
     if (!editing?.id) return
     try {
-      await api<GatewayRpcResponse<unknown>>('POST', '/openclaw/gateway', {
-        method: 'device.pair.remove',
-        params: { profileId: editing.id, deviceId },
-      })
+      await gatewayRemoveDeviceMutation.mutateAsync({ profileId: editing.id, deviceId })
       toast.success('Device removed')
       await loadNodesAndDevices(editing.id)
     } catch (err: unknown) {
@@ -300,14 +254,11 @@ export function GatewaySheet() {
           parsedParams = next as Record<string, unknown>
         }
       }
-      const result = await api<GatewayRpcResponse<unknown>>('POST', '/openclaw/gateway', {
-        method: 'node.invoke',
-        params: {
-          profileId: editing.id,
-          nodeId: invokeNodeId.trim(),
-          command: invokeCommand.trim(),
-          params: parsedParams,
-        },
+      const result = await gatewayInvokeNodeMutation.mutateAsync({
+        profileId: editing.id,
+        nodeId: invokeNodeId.trim(),
+        command: invokeCommand.trim(),
+        params: parsedParams,
       })
       if (result.error) throw new Error(result.error)
       setInvokeResult(JSON.stringify(result.result, null, 2))

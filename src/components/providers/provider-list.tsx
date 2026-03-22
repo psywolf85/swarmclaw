@@ -1,12 +1,26 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useState } from 'react'
 import { toast } from 'sonner'
 import { OpenClawDeployPanel } from '@/components/openclaw/openclaw-deploy-panel'
 import { useAppStore } from '@/stores/use-app-store'
-import { useWs } from '@/hooks/use-ws'
-import { api } from '@/lib/app/api-client'
-import type { Credential, GatewayProfile } from '@/types'
+import {
+  useProviderConfigsQuery,
+  useProvidersQuery,
+  useToggleProviderMutation,
+  useDeleteProviderMutation,
+} from '@/features/providers/queries'
+import { useCredentialsQuery, useCreateCredentialMutation } from '@/features/credentials/queries'
+import {
+  useCloneGatewayProfileMutation,
+  useDeleteGatewayProfileMutation,
+  useGatewayHealthCheckMutation,
+  useGatewayProfilesQuery,
+  useSaveGatewayProfileMutation,
+  useVerifyOpenClawDeployMutation,
+} from '@/features/gateways/queries'
+import { useExternalAgentsQuery, useExternalAgentRuntimeMutation } from '@/features/external-agents/queries'
+import type { GatewayProfile } from '@/types'
 import { dedup } from '@/lib/shared-utils'
 import { PageLoader } from '@/components/ui/page-loader'
 import { StatusDot } from '@/components/ui/status-dot'
@@ -30,33 +44,34 @@ function formatRuntimeTimestamp(value: number | null | undefined): string {
 }
 
 export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
-  const providers = useAppStore((s) => s.providers)
-  const providerConfigs = useAppStore((s) => s.providerConfigs)
-  const loadProviders = useAppStore((s) => s.loadProviders)
-  const loadProviderConfigs = useAppStore((s) => s.loadProviderConfigs)
-  const gatewayProfiles = useAppStore((s) => s.gatewayProfiles)
-  const loadGatewayProfiles = useAppStore((s) => s.loadGatewayProfiles)
-  const externalAgents = useAppStore((s) => s.externalAgents)
-  const loadExternalAgents = useAppStore((s) => s.loadExternalAgents)
-  const credentials = useAppStore((s) => s.credentials)
-  const loadCredentials = useAppStore((s) => s.loadCredentials)
   const setProviderSheetOpen = useAppStore((s) => s.setProviderSheetOpen)
   const setEditingProviderId = useAppStore((s) => s.setEditingProviderId)
   const setGatewaySheetOpen = useAppStore((s) => s.setGatewaySheetOpen)
   const setEditingGatewayId = useAppStore((s) => s.setEditingGatewayId)
-  const [loaded, setLoaded] = useState(false)
   const [deployDraft, setDeployDraft] = useState<OpenClawDeployDraft | null>(null)
-  const [savingDeploy, setSavingDeploy] = useState(false)
+  const providersQuery = useProvidersQuery()
+  const providerConfigsQuery = useProviderConfigsQuery()
+  const gatewayProfilesQuery = useGatewayProfilesQuery()
+  const externalAgentsQuery = useExternalAgentsQuery()
+  const credentialsQuery = useCredentialsQuery()
+  const toggleProviderMutation = useToggleProviderMutation()
+  const deleteProviderMutation = useDeleteProviderMutation()
+  const createCredentialMutation = useCreateCredentialMutation()
+  const saveGatewayMutation = useSaveGatewayProfileMutation()
+  const deleteGatewayMutation = useDeleteGatewayProfileMutation()
+  const healthCheckGatewayMutation = useGatewayHealthCheckMutation()
+  const verifyDeployMutation = useVerifyOpenClawDeployMutation()
+  const cloneGatewayMutation = useCloneGatewayProfileMutation()
+  const runtimeActionMutation = useExternalAgentRuntimeMutation()
 
-  const refresh = useCallback(async () => {
-    await Promise.all([loadProviders(), loadProviderConfigs(), loadGatewayProfiles(), loadExternalAgents(), loadCredentials()])
-    setLoaded(true)
-  }, [loadProviders, loadProviderConfigs, loadGatewayProfiles, loadExternalAgents, loadCredentials])
-
-  useEffect(() => { void refresh() }, [refresh])
-  useWs('providers', loadProviders, 20_000)
-  useWs('gateways', loadGatewayProfiles, 20_000)
-  useWs('external_agents', loadExternalAgents, 20_000)
+  const providers = providersQuery.data ?? []
+  const providerConfigs = providerConfigsQuery.data ?? []
+  const gatewayProfiles = gatewayProfilesQuery.data ?? []
+  const externalAgents = externalAgentsQuery.data ?? []
+  const credentials = credentialsQuery.data ?? {}
+  const savingDeploy = createCredentialMutation.isPending
+    || verifyDeployMutation.isPending
+    || saveGatewayMutation.isPending
 
   const handleEdit = (id: string) => {
     setEditingProviderId(id)
@@ -65,14 +80,12 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
 
   const handleToggle = async (e: React.MouseEvent, id: string, currentEnabled: boolean) => {
     e.stopPropagation()
-    await api('PUT', `/providers/${id}`, { isEnabled: !currentEnabled })
-    await Promise.all([loadProviderConfigs(), loadProviders()])
+    await toggleProviderMutation.mutateAsync({ id, isEnabled: !currentEnabled })
   }
 
   const handleDelete = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    await api('DELETE', `/providers/${id}`)
-    await Promise.all([loadProviderConfigs(), loadProviders()])
+    await deleteProviderMutation.mutateAsync(id)
   }
 
   const handleEditGateway = (id: string | null) => {
@@ -82,14 +95,12 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
 
   const handleDeleteGateway = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    await api('DELETE', `/gateways/${id}`)
-    await loadGatewayProfiles()
+    await deleteGatewayMutation.mutateAsync(id)
   }
 
   const handleHealthCheckGateway = async (e: React.MouseEvent, id: string) => {
     e.stopPropagation()
-    await api('GET', `/gateways/${id}/health`)
-    await loadGatewayProfiles()
+    await healthCheckGatewayMutation.mutateAsync(id)
   }
 
   const handleDeployApply = (patch: { endpoint?: string; token?: string; name?: string; notes?: string; deployment?: GatewayProfile['deployment'] | Record<string, unknown> | null }) => {
@@ -105,11 +116,10 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
 
   const handleSavePreparedGateway = async () => {
     if (!deployDraft?.endpoint) return
-    setSavingDeploy(true)
     try {
       let nextCredentialId: string | null = null
       if (deployDraft.token?.trim()) {
-        const credential = await api<Credential>('POST', '/credentials', {
+        const credential = await createCredentialMutation.mutateAsync({
           provider: 'openclaw',
           name: `${deployDraft.name || 'OpenClaw Gateway'} token`,
           apiKey: deployDraft.token.trim(),
@@ -124,17 +134,7 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
         ...(deployDraft.deployment?.useCase ? [deployDraft.deployment.useCase] : []),
         ...(deployDraft.deployment?.exposure ? [deployDraft.deployment.exposure] : []),
       ])
-      const verify = await api<{
-        ok: boolean
-        verify?: {
-          ok: boolean
-          message?: string
-          error?: string
-          hint?: string
-          models?: string[]
-        }
-      }>('POST', '/openclaw/deploy', {
-        action: 'verify',
+      const verify = await verifyDeployMutation.mutateAsync({
         endpoint: deployDraft.endpoint,
         token: deployDraft.token?.trim() || undefined,
       }).catch(() => ({ ok: false, verify: undefined as undefined }))
@@ -150,7 +150,7 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
           ...(existing?.deployment || {}),
           ...(deployDraft.deployment || {}),
           managedBy: 'swarmclaw',
-          lastVerifiedAt: verify.verify ? Date.now() : (existing?.deployment?.lastVerifiedAt || null),
+          lastVerifiedAt: verify.verify ? +new Date() : (existing?.deployment?.lastVerifiedAt || null),
           lastVerifiedOk: verify.verify ? verifiedOk : (existing?.deployment?.lastVerifiedOk ?? null),
           lastVerifiedMessage: verify.verify
             ? (verifiedOk
@@ -161,26 +161,21 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
         isDefault: existing?.isDefault === true || gatewayProfiles.length === 0,
       }
 
-      if (existing) {
-        await api('PUT', `/gateways/${existing.id}`, payload)
-      } else {
-        await api('POST', '/gateways', payload)
-      }
-
-      await Promise.all([loadGatewayProfiles(), loadCredentials()])
+      await saveGatewayMutation.mutateAsync({
+        id: existing?.id,
+        payload,
+      })
       setDeployDraft(null)
       toast.success(existing ? 'Gateway profile updated' : 'Gateway profile saved')
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save prepared gateway')
-    } finally {
-      setSavingDeploy(false)
     }
   }
 
   const handleCloneGateway = async (e: React.MouseEvent, gateway: GatewayProfile) => {
     e.stopPropagation()
     try {
-      await api('POST', '/gateways', {
+      await cloneGatewayMutation.mutateAsync({
         name: `${gateway.name} Copy`,
         endpoint: gateway.endpoint,
         credentialId: gateway.credentialId || null,
@@ -190,7 +185,6 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
         stats: gateway.stats || null,
         isDefault: false,
       })
-      await loadGatewayProfiles()
       toast.success('Gateway cloned')
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to clone gateway')
@@ -204,8 +198,7 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
   ) => {
     e.stopPropagation()
     try {
-      await api('PUT', `/external-agents/${runtimeId}`, { action })
-      await loadExternalAgents()
+      await runtimeActionMutation.mutateAsync({ runtimeId, action })
       const actionLabel = action === 'activate'
         ? 'Runtime activated'
         : action === 'drain'
@@ -265,7 +258,13 @@ export function ProviderList({ inSidebar }: { inSidebar?: boolean }) {
     return acc
   }, {})
 
-  if (!loaded) {
+  if (
+    providersQuery.isPending
+    || providerConfigsQuery.isPending
+    || gatewayProfilesQuery.isPending
+    || externalAgentsQuery.isPending
+    || credentialsQuery.isPending
+  ) {
     return <PageLoader label="Loading providers..." />
   }
 

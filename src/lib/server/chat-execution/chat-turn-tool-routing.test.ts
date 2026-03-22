@@ -439,6 +439,51 @@ describe('chat-turn-tool-routing', () => {
     assert.equal(result.calledNames.has('memory_search'), true)
   })
 
+  it('uses classifier-backed memory list fallback for broad memory inventory requests', async () => {
+    const invocations: Array<{ toolName: string; args: Record<string, unknown> }> = []
+    const result = await runPostLlmToolRouting({
+      session: {
+        cwd: process.cwd(),
+        tools: ['memory'],
+      },
+      sessionId: 'session-memory-list',
+      message: 'List everything you remember about me.',
+      effectiveMessage: 'List everything you remember about me.',
+      enabledExtensions: ['memory'],
+      toolPolicy: resolveSessionToolPolicy(['memory'], {}),
+      appSettings: {},
+      internal: false,
+      source: 'chat',
+      toolEvents: [],
+      emit: () => {},
+    }, '', undefined, {
+      classifyDirectMemoryIntent: async () => ({
+        action: 'list',
+        confidence: 0.91,
+      }),
+      invokeTool: async (_ctx, toolName, args, _failurePrefix, calledNames) => {
+        invocations.push({ toolName, args })
+        calledNames.add(toolName)
+        return {
+          invoked: true,
+          responseOverride: null,
+          toolOutputText: '[mem_1] favorite editor: Neovim\n[mem_2] timezone: Europe/Isle_of_Man',
+        }
+      },
+    })
+
+    assert.equal(invocations.length, 1)
+    assert.equal(invocations[0].toolName, 'memory_tool')
+    assert.deepEqual(invocations[0].args, {
+      action: 'list',
+      key: '',
+      scope: 'auto',
+    })
+    assert.equal(result.fullResponse, '[mem_1] favorite editor: Neovim\n[mem_2] timezone: Europe/Isle_of_Man')
+    assert.equal(result.errorMessage, undefined)
+    assert.equal(result.calledNames.has('memory_tool'), true)
+  })
+
   it('fails open when post-LLM memory classification times out', async () => {
     let invoked = false
     const started = Date.now()

@@ -15,6 +15,7 @@ import {
   encryptKey,
   decryptKey,
 } from '../storage'
+import { getMessages } from '@/lib/server/messages/message-repository'
 import { resolveScheduleName } from '@/lib/schedules/schedule-name'
 import type { ScheduleLike } from '@/lib/schedules/schedule-dedupe'
 import {
@@ -38,6 +39,12 @@ import {
   prepareTaskCreation,
 } from '@/lib/server/tasks/task-service'
 import { ensureMissionForTask, enrichTaskWithMissionSummary } from '@/lib/server/missions/mission-service'
+import { classifyMessage } from '@/lib/server/chat-execution/message-classifier'
+import {
+  buildDelegationTaskProfile,
+  formatDelegationRationale,
+  resolveDelegationAdvisory,
+} from '@/lib/server/agents/delegation-advisory'
 import type { ToolBuildContext } from './context'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { BoardTask } from '@/types'
@@ -74,6 +81,99 @@ function findDuplicateManagedAgent(
   }
 
   return null
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) return []
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const entry of value) {
+    const trimmed = typeof entry === 'string' ? entry.trim() : ''
+    const key = trimmed.toLowerCase()
+    if (!trimmed || seen.has(key)) continue
+    seen.add(key)
+    out.push(trimmed)
+  }
+  return out
+}
+
+function buildTaskDelegationText(parsed: Record<string, unknown>): string {
+  const title = typeof parsed.title === 'string' ? parsed.title.trim() : ''
+  const description = typeof parsed.description === 'string' ? parsed.description.trim() : ''
+  return [title, description].filter(Boolean).join('\n\n').trim()
+}
+
+async function resolveManagedTaskDelegation(params: {
+  parsed: Record<string, unknown>
+  agents: ReturnType<typeof loadAgents>
+  ctx?: ToolBuildContext['ctx']
+  assignedAgentId: string | null
+  explicitAssignment: boolean
+  allowAutoAssignment: boolean
+}): Promise<{
+  assignedAgentId: string | null
+  advisory: Record<string, unknown> | null
+}> {
+  const currentAgentId = typeof params.ctx?.agentId === 'string' ? params.ctx.agentId.trim() : ''
+  if (!currentAgentId || params.ctx?.delegationEnabled !== true) {
+    return { assignedAgentId: params.assignedAgentId, advisory: null }
+  }
+  const currentAgent = params.agents[currentAgentId]
+  if (!currentAgent) {
+    return { assignedAgentId: params.assignedAgentId, advisory: null }
+  }
+
+  const explicitCapabilities = normalizeStringList(params.parsed.requiredCapabilities)
+  const classificationText = buildTaskDelegationText(params.parsed)
+  const classification = (!explicitCapabilities.length && classificationText && params.ctx?.sessionId)
+    ? await classifyMessage({
+        sessionId: params.ctx.sessionId,
+        agentId: currentAgentId,
+        message: classificationText,
+      }).catch(() => null)
+    : null
+
+  const profile = buildDelegationTaskProfile({
+    classification,
+    requiredCapabilities: explicitCapabilities,
+  })
+  if (!profile.substantial) {
+    return { assignedAgentId: params.assignedAgentId, advisory: null }
+  }
+
+  const delegationAdvisory = resolveDelegationAdvisory({
+    currentAgent,
+    agents: params.agents,
+    profile,
+    delegationTargetMode: params.ctx?.delegationTargetMode === 'selected' ? 'selected' : 'all',
+    delegationTargetAgentIds: params.ctx?.delegationTargetAgentIds || [],
+  })
+  const recommended = delegationAdvisory.recommended
+  if (!delegationAdvisory.shouldDelegate || !recommended) {
+    return { assignedAgentId: params.assignedAgentId, advisory: null }
+  }
+  if (params.explicitAssignment && params.assignedAgentId === recommended.agentId) {
+    return { assignedAgentId: params.assignedAgentId, advisory: null }
+  }
+
+  let assignedAgentId = params.assignedAgentId
+  let autoAssigned = false
+  if (!params.explicitAssignment && params.allowAutoAssignment) {
+    assignedAgentId = recommended.agentId
+    autoAssigned = true
+  }
+
+  return {
+    assignedAgentId,
+    advisory: {
+      recommendedAgentId: recommended.agentId,
+      recommendedAgentName: recommended.agentName,
+      rationale: formatDelegationRationale(recommended),
+      workType: profile.workType,
+      requiredCapabilities: profile.requiredCapabilities,
+      autoAssigned,
+    },
+  }
 }
 
 const VALID_CONNECTOR_PLATFORMS = new Set([
@@ -208,7 +308,7 @@ function deriveScheduleFollowupTarget(sessionId: string | null | undefined): {
 
   if (isMainSession(session)) return {}
 
-  const messages = Array.isArray(session.messages) ? session.messages : []
+  const messages = getMessages(normalizedSessionId)
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i]
     if ((typeof message?.role === 'string' ? message.role : '') !== 'user') continue
@@ -365,6 +465,9 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
         description += `\n\nYou may create tasks for yourself, leave them unassigned, or delegate them to other agents. Your agent ID is "${ctx?.agentId || 'unknown'}". When delegating, set a target agent using "agentId", "assignee", "agent", "assignedAgentId", or "assigned_agent_id". Use the target agent's exact ID when possible. Valid manual statuses: backlog, queued, completed, failed, archived. "running" is runtime-only and set automatically when execution starts.` + agentSummary
       }
       description += '\n\nCreate/update calls accept either `data` as a JSON string or direct top-level fields like `title`, `description`, `status`, `agentId`, and `projectId`.'
+      if (canAssignOtherAgents) {
+        description += '\n\nWhen you omit an assignee, the runtime may auto-assign the task to a materially better-fit teammate based on `requiredCapabilities` or the classified work type. If you set an explicit assignee, it is respected in v1, but the response may include `delegationAdvisory` when another teammate is a better fit.'
+      }
       description += '\n\nFor follow-up work, set `continueFromTaskId` (or `followUpToTaskId`) to a prior task ID. The new task will inherit the predecessor\'s project/agent/session context, block on that task by default, and reuse its execution session when possible.'
       if (ctx?.projectId) {
         description += `\n\nCurrent project context: "${ctx.projectName || ctx.projectId}" (projectId "${ctx.projectId}"). Omit "projectId" to use this active project by default.`
@@ -492,6 +595,7 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
               if ((toolKey === 'manage_tasks' || toolKey === 'manage_schedules' || toolKey === 'manage_secrets') && !Object.prototype.hasOwnProperty.call(parsed, 'projectId') && ctx?.projectId) {
                 parsed.projectId = ctx.projectId
               }
+              let taskDelegationAdvisory: Record<string, unknown> | null = null
               if (toolKey === 'manage_tasks' || toolKey === 'manage_schedules') {
                 const agents = loadAgents()
                 const resolution = resolveManagedAgentAssignment(
@@ -502,12 +606,12 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                     : null,
                   { allowDescription: toolKey === 'manage_tasks' },
                 )
-                  const assignmentError = validateManagedAgentAssignment({
-                    resourceLabel: res.label,
-                    agents,
-                    assignScope: canAssignOtherAgents ? 'all' : 'self',
-                    currentAgentId: ctx?.agentId || null,
-                    targetAgentId: resolution.agentId,
+                const assignmentError = validateManagedAgentAssignment({
+                  resourceLabel: res.label,
+                  agents,
+                  assignScope: canAssignOtherAgents ? 'all' : 'self',
+                  currentAgentId: ctx?.agentId || null,
+                  targetAgentId: resolution.agentId,
                   unresolvedReference: resolution.unresolvedReference,
                   isDelegation: toolKey === 'manage_tasks' ? isDelegationTaskPayload(parsed as Record<string, unknown>) : false,
                   delegatorAgentId: toolKey === 'manage_tasks'
@@ -516,6 +620,18 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                 })
                 if (assignmentError) return assignmentError
                 parsed.agentId = resolution.agentId
+                if (toolKey === 'manage_tasks') {
+                  const delegated = await resolveManagedTaskDelegation({
+                    parsed: parsed as Record<string, unknown>,
+                    agents,
+                    ctx,
+                    assignedAgentId: resolution.agentId,
+                    explicitAssignment: resolution.source === 'explicit',
+                    allowAutoAssignment: true,
+                  })
+                  parsed.agentId = delegated.assignedAgentId
+                  taskDelegationAdvisory = delegated.advisory
+                }
               }
               let preparedManagedTask: BoardTask | null = null
               let preparedManagedSchedule: any = null
@@ -639,6 +755,12 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                     missionId: mission.id,
                   })
                 }
+                if (taskDelegationAdvisory && responseEntry && typeof responseEntry === 'object') {
+                  responseEntry = {
+                    ...(responseEntry as Record<string, unknown>),
+                    delegationAdvisory: taskDelegationAdvisory,
+                  }
+                }
               }
               if (toolKey === 'manage_tasks' && entry.status === 'queued') {
                 const { enqueueTask } = await import('@/lib/server/runtime/queue')
@@ -675,6 +797,7 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                 if (continuationError) return continuationError
               }
               const prevStatus = all[effectiveId]?.status
+              let taskDelegationAdvisory: Record<string, unknown> | null = null
               const managedAgents = toolKey === 'manage_tasks' || toolKey === 'manage_schedules'
                 ? loadAgents()
                 : null
@@ -682,6 +805,10 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                 const requestedClear = Object.prototype.hasOwnProperty.call(parsedRecord, 'agentId') && parsedRecord.agentId == null
                 const shouldResolveAssignment = requestedClear
                   || hasManagedAgentAssignmentInput(parsedRecord)
+                let resolvedAgentId: string | null = requestedClear
+                  ? null
+                  : (typeof all[effectiveId]?.agentId === 'string' ? all[effectiveId].agentId : null)
+                let explicitAssignment = false
                 if (shouldResolveAssignment) {
                   const resolution = resolveManagedAgentAssignment(
                     parsedRecord,
@@ -689,18 +816,20 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                     null,
                     { allowDescription: false },
                   )
+                  resolvedAgentId = requestedClear ? null : resolution.agentId
+                  explicitAssignment = resolution.hadExplicitInput
                   const assignmentError = validateManagedAgentAssignment({
                     resourceLabel: res.label,
                     agents: managedAgents,
                     assignScope: canAssignOtherAgents ? 'all' : 'self',
                     currentAgentId: ctx?.agentId || null,
-                    targetAgentId: requestedClear ? null : resolution.agentId,
+                    targetAgentId: resolvedAgentId,
                     unresolvedReference: requestedClear ? null : resolution.unresolvedReference,
                     isDelegation: toolKey === 'manage_tasks'
                       ? isDelegationTaskPayload({
                           ...all[effectiveId],
                           ...parsedRecord,
-                          agentId: requestedClear ? null : resolution.agentId,
+                          agentId: resolvedAgentId,
                         } as Record<string, unknown>)
                       : false,
                     delegatorAgentId: toolKey === 'manage_tasks'
@@ -711,7 +840,24 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
                       : null,
                   })
                   if (assignmentError) return assignmentError
-                  if (!requestedClear) parsedRecord.agentId = resolution.agentId
+                  if (!requestedClear) parsedRecord.agentId = resolvedAgentId
+                }
+                if (toolKey === 'manage_tasks') {
+                  const delegated = await resolveManagedTaskDelegation({
+                    parsed: {
+                      ...all[effectiveId],
+                      ...parsedRecord,
+                    },
+                    agents: managedAgents,
+                    ctx,
+                    assignedAgentId: resolvedAgentId,
+                    explicitAssignment,
+                    allowAutoAssignment: !resolvedAgentId || resolvedAgentId === ctx?.agentId,
+                  })
+                  if (delegated.assignedAgentId !== resolvedAgentId) {
+                    parsedRecord.agentId = delegated.assignedAgentId
+                  }
+                  taskDelegationAdvisory = delegated.advisory
                 }
               }
               if (toolKey === 'manage_schedules') {
@@ -796,6 +942,12 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
               }
               if (toolKey === 'manage_projects') {
                 return JSON.stringify(buildProjectSnapshot(all[effectiveId]))
+              }
+              if (toolKey === 'manage_tasks' && taskDelegationAdvisory) {
+                return JSON.stringify({
+                  ...(all[effectiveId] as Record<string, unknown>),
+                  delegationAdvisory: taskDelegationAdvisory,
+                })
               }
               if (toolKey === 'manage_schedules' && affectedScheduleIds?.length) {
                 return JSON.stringify({

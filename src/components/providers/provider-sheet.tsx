@@ -1,26 +1,42 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
-import { createProviderConfig, updateProviderConfig, deleteProviderConfig } from '@/lib/provider-config'
-import { api } from '@/lib/app/api-client'
-import { fetchProviderModelDiscovery } from '@/lib/provider-model-discovery-client'
 import { BottomSheet } from '@/components/shared/bottom-sheet'
 import { ConfirmDialog } from '@/components/shared/confirm-dialog'
 import { toast } from 'sonner'
 import { errorMessage } from '@/lib/shared-utils'
+import {
+  useCheckProviderConnectionMutation,
+  useDeleteProviderMutation,
+  useProviderConfigsQuery,
+  useProviderModelDiscoveryMutation,
+  useProvidersQuery,
+  useResetProviderModelsMutation,
+  useSaveBuiltinProviderMutation,
+  useSaveCustomProviderMutation,
+} from '@/features/providers/queries'
+import { useCreateCredentialMutation, useCredentialsQuery } from '@/features/credentials/queries'
 
 export function ProviderSheet() {
   const open = useAppStore((s) => s.providerSheetOpen)
   const setOpen = useAppStore((s) => s.setProviderSheetOpen)
   const editingId = useAppStore((s) => s.editingProviderId)
   const setEditingId = useAppStore((s) => s.setEditingProviderId)
-  const providerConfigs = useAppStore((s) => s.providerConfigs)
-  const loadProviderConfigs = useAppStore((s) => s.loadProviderConfigs)
-  const providers = useAppStore((s) => s.providers)
-  const loadProviders = useAppStore((s) => s.loadProviders)
-  const credentials = useAppStore((s) => s.credentials)
-  const loadCredentials = useAppStore((s) => s.loadCredentials)
+  const providerConfigsQuery = useProviderConfigsQuery({ enabled: open })
+  const providersQuery = useProvidersQuery({ enabled: open })
+  const credentialsQuery = useCredentialsQuery({ enabled: open })
+  const saveBuiltinProviderMutation = useSaveBuiltinProviderMutation()
+  const saveCustomProviderMutation = useSaveCustomProviderMutation()
+  const deleteProviderMutation = useDeleteProviderMutation()
+  const resetProviderModelsMutation = useResetProviderModelsMutation()
+  const checkProviderConnectionMutation = useCheckProviderConnectionMutation()
+  const providerModelDiscoveryMutation = useProviderModelDiscoveryMutation()
+  const createCredentialMutation = useCreateCredentialMutation()
+
+  const providerConfigs = providerConfigsQuery.data ?? []
+  const providers = providersQuery.data ?? []
+  const credentials = useMemo(() => credentialsQuery.data ?? {}, [credentialsQuery.data])
 
   const [name, setName] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -54,7 +70,6 @@ export function ProviderSheet() {
 
   useEffect(() => {
     if (open) {
-      loadCredentials()
       setNewModel('')
       setLiveModels([])
       setLiveMessage('')
@@ -86,7 +101,7 @@ export function ProviderSheet() {
         setIsEnabled(true)
       }
     }
-  }, [open, editingId, credentials, editingBuiltin, editingBuiltinOverride, editingCustom, loadCredentials])
+  }, [open, editingId, credentials, editingBuiltin, editingBuiltinOverride, editingCustom])
 
   // Reset test status when connection params change
   useEffect(() => {
@@ -105,7 +120,7 @@ export function ProviderSheet() {
     setTestStatus('testing')
     setTestMessage('')
     try {
-      const result = await api<{ ok: boolean; message: string }>('POST', '/setup/check-provider', {
+      const result = await checkProviderConnectionMutation.mutateAsync({
         provider: editingId || 'custom',
         credentialId,
         endpoint: baseUrl,
@@ -137,15 +152,13 @@ export function ProviderSheet() {
   const handleSave = async () => {
     try {
       if (isBuiltin) {
-        // Save model overrides for built-in providers
         const modelList = models.split(',').map((m) => m.trim()).filter(Boolean)
-        await api('PUT', `/providers/${editingId}/models`, { models: modelList })
-        await api('PUT', `/providers/${editingId}`, {
-          type: 'builtin',
+        await saveBuiltinProviderMutation.mutateAsync({
+          id: editingId || '',
+          models: modelList,
           isEnabled,
         })
         toast.success('Built-in provider updated')
-        await Promise.all([loadProviders(), loadProviderConfigs()])
         onClose()
         return
       }
@@ -158,14 +171,11 @@ export function ProviderSheet() {
         credentialId,
         isEnabled,
       }
-      if (editingCustom) {
-        await updateProviderConfig(editingCustom.id, data)
-        toast.success('Provider updated')
-      } else {
-        await createProviderConfig(data)
-        toast.success('Provider created')
-      }
-      await Promise.all([loadProviderConfigs(), loadProviders()])
+      await saveCustomProviderMutation.mutateAsync({
+        id: editingCustom?.id,
+        data,
+      })
+      toast.success(editingCustom ? 'Provider updated' : 'Provider created')
       onClose()
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Failed to save provider')
@@ -176,9 +186,8 @@ export function ProviderSheet() {
     if (editingCustom) {
       setDeleting(true)
       try {
-        await deleteProviderConfig(editingCustom.id)
+        await deleteProviderMutation.mutateAsync(editingCustom.id)
         toast.success('Provider deleted')
-        await Promise.all([loadProviderConfigs(), loadProviders()])
         setConfirmDelete(false)
         onClose()
       } catch (err: unknown) {
@@ -190,26 +199,24 @@ export function ProviderSheet() {
   }
 
   const handleResetModels = async () => {
-    if (isBuiltin && editingId) {
-      await api('DELETE', `/providers/${editingId}/models`)
-      await loadProviders()
-      // Re-read from fresh store state (closure captures stale providers)
-      const updated = useAppStore.getState().providers.find((p) => p.id === editingId)
-      if (updated) setModels(updated.models.join(', '))
-    }
+    if (!isBuiltin || !editingId) return
+    await resetProviderModelsMutation.mutateAsync(editingId)
+    const refreshedProviders = (await providersQuery.refetch()).data ?? []
+    const updated = refreshedProviders.find((provider) => provider.id === editingId)
+    if (updated) setModels(updated.models.join(', '))
   }
 
-  const handleAddModel = () => {
-    if (!newModel.trim()) return
-    const current = models ? models + ', ' + newModel.trim() : newModel.trim()
-    setModels(current)
-    setNewModel('')
-  }
-
-  const handleRemoveModel = (index: number) => {
-    const list = models.split(',').map((m) => m.trim()).filter(Boolean)
-    list.splice(index, 1)
-    setModels(list.join(', '))
+  const handleCreateCredential = async () => {
+    const cred = await createCredentialMutation.mutateAsync({
+      provider: editingId || name || 'custom',
+      name: newKeyName.trim() || `${name || editingId || 'Custom'} key`,
+      apiKey: newKeyValue.trim(),
+    })
+    await credentialsQuery.refetch()
+    setCredentialId(cred.id)
+    setAddingKey(false)
+    setNewKeyName('')
+    setNewKeyValue('')
   }
 
   const handleLoadLiveModels = async (force = false) => {
@@ -218,7 +225,7 @@ export function ProviderSheet() {
     setLiveLoading(true)
     setLiveMessage('')
     try {
-      const result = await fetchProviderModelDiscovery({
+      const result = await providerModelDiscoveryMutation.mutateAsync({
         providerId,
         credentialId,
         endpoint: baseUrl,
@@ -241,6 +248,19 @@ export function ProviderSheet() {
     } finally {
       setLiveLoading(false)
     }
+  }
+
+  const handleAddModel = () => {
+    if (!newModel.trim()) return
+    const current = models ? models + ', ' + newModel.trim() : newModel.trim()
+    setModels(current)
+    setNewModel('')
+  }
+
+  const handleRemoveModel = (index: number) => {
+    const list = models.split(',').map((m) => m.trim()).filter(Boolean)
+    list.splice(index, 1)
+    setModels(list.join(', '))
   }
 
   const credList = Object.values(credentials)
@@ -300,7 +320,7 @@ export function ProviderSheet() {
               </button>
             )}
             {isBuiltin && (
-              <button onClick={handleResetModels}
+              <button onClick={() => { void handleResetModels() }}
                 className="text-[11px] text-text-3 hover:text-text-2 transition-colors cursor-pointer bg-transparent border-none"
                 style={{ fontFamily: 'inherit' }}>
                 Reset to defaults
@@ -456,14 +476,12 @@ export function ProviderSheet() {
                   onClick={async () => {
                     setSavingKey(true)
                     try {
-                      const cred = await api<{ id: string }>('POST', '/credentials', { provider: editingId || name || 'custom', name: newKeyName.trim() || `${name || editingId || 'Custom'} key`, apiKey: newKeyValue.trim() })
-                      await loadCredentials()
-                      setCredentialId(cred.id)
-                      setAddingKey(false)
-                      setNewKeyName('')
-                      setNewKeyValue('')
-                    } catch (err: unknown) { toast.error(`Failed to save: ${errorMessage(err)}`) }
-                    finally { setSavingKey(false) }
+                      await handleCreateCredential()
+                    } catch (err: unknown) {
+                      toast.error(`Failed to save: ${errorMessage(err)}`)
+                    } finally {
+                      setSavingKey(false)
+                    }
                   }}
                   className="px-4 py-1.5 rounded-[8px] bg-accent-bright text-white text-[12px] font-600 cursor-pointer border-none hover:brightness-110 transition-all disabled:opacity-40"
                   style={{ fontFamily: 'inherit' }}

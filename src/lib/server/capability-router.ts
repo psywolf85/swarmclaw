@@ -1,6 +1,7 @@
 import type { AppSettings } from '@/types'
 import { dedup } from '@/lib/shared-utils'
-import { getToolsForCapability, matchToolCapabilitiesForMessage, TOOL_CAPABILITY } from './tool-planning'
+import { getToolsForCapability, TOOL_CAPABILITY } from './tool-planning'
+import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 
 export type TaskIntent =
   | 'coding'
@@ -25,36 +26,8 @@ function findFirstUrl(text: string): string | undefined {
   return m?.[0]
 }
 
-function containsAny(text: string, terms: string[]): boolean {
-  return terms.some((term) => text.includes(term))
-}
-
 function dedupe(values: string[]): string[] {
   return dedup(values.filter(Boolean))
-}
-
-function isMonitoringOrCurrentEventsRequest(text: string): boolean {
-  const normalized = text.toLowerCase()
-  if (!normalized.trim()) return false
-  return containsAny(normalized, [
-    'latest',
-    'news',
-    'headline',
-    'current event',
-    'recent update',
-    'recent updates',
-    'update me',
-    'updates',
-    'breaking',
-    'developments',
-    'keep watching',
-    'watch for',
-    'watching for',
-    'monitor',
-    'track',
-    'follow the situation',
-    'tell me if anything changes',
-  ])
 }
 
 function preferredToolsForCapabilities(enabledExtensions: string[], capabilities: string[], fallback: string[] = []): string[] {
@@ -90,68 +63,36 @@ export function routeTaskIntent(
   message: string,
   enabledExtensions: string[],
   settings?: AppSettings | null,
+  classification?: MessageClassification | null,
 ): CapabilityRoutingDecision {
-  const text = (message || '').toLowerCase()
   const url = findFirstUrl(message || '')
   const delegateOrder = normalizeDelegateOrder(settings?.autonomyPreferredDelegates)
-  const matchedCapabilities = matchToolCapabilitiesForMessage(enabledExtensions, message)
-  const wantsVoiceNote = matchedCapabilities.has(TOOL_CAPABILITY.deliveryVoiceNote)
-  const wantsScreenshots = matchedCapabilities.has(TOOL_CAPABILITY.browserCapture)
-  const wantsMediaDelivery = matchedCapabilities.has(TOOL_CAPABILITY.deliveryMedia)
-  const wantsChannelDelivery = matchedCapabilities.has(TOOL_CAPABILITY.deliveryMessage)
-  const researchLike = matchedCapabilities.has(TOOL_CAPABILITY.researchSearch)
-    || matchedCapabilities.has(TOOL_CAPABILITY.researchFetch)
-    || isMonitoringOrCurrentEventsRequest(text)
-    || !!url
+  const intent = classification?.taskIntent || 'general'
+  const confidence = classification?.confidence ?? 0
+  const wantsVoiceDelivery = classification?.wantsVoiceDelivery === true
+  const wantsScreenshots = classification?.wantsScreenshots === true
+  const wantsOutboundDelivery = classification?.wantsOutboundDelivery === true
 
-  const coding = containsAny(text, [
-    'build',
-    'implement',
-    'create app',
-    'refactor',
-    'fix bug',
-    'write code',
-    'codebase',
-    'typescript',
-    'javascript',
-    'react',
-    'next.js',
-    'unit test',
-    'run tests',
-    'compile',
-    'npm ',
-    'pnpm ',
-    'yarn ',
-  ])
-  if (coding) {
+  if (intent === 'coding') {
     return {
       intent: 'coding',
-      confidence: 0.9,
+      confidence,
       preferredTools: ['claude_code', 'codex_cli', 'opencode_cli', 'shell', 'files', 'edit_file'],
       preferredDelegates: delegateOrder,
       primaryUrl: url,
     }
   }
 
-  const outreach = containsAny(text, [
-    'send update',
-    'message',
-    'whatsapp',
-    'telegram',
-    'slack',
-    'discord',
-    'notify',
-    'broadcast',
-  ]) || (!researchLike && (wantsVoiceNote || wantsMediaDelivery || wantsChannelDelivery))
-  if (outreach) {
+  if (intent === 'outreach') {
     return {
       intent: 'outreach',
-      confidence: 0.8,
+      confidence,
       preferredTools: preferredToolsForCapabilities(
         enabledExtensions,
         [
-          TOOL_CAPABILITY.deliveryVoiceNote,
-          TOOL_CAPABILITY.deliveryMedia,
+          ...(wantsVoiceDelivery ? [TOOL_CAPABILITY.deliveryVoiceNote] : []),
+          ...(wantsScreenshots ? [TOOL_CAPABILITY.deliveryMedia] : []),
+          ...(wantsOutboundDelivery || wantsVoiceDelivery ? [TOOL_CAPABILITY.deliveryMessage] : []),
           TOOL_CAPABILITY.deliveryMessage,
         ],
         ['connector_message_tool', 'manage_connectors', 'manage_sessions'],
@@ -161,35 +102,20 @@ export function routeTaskIntent(
     }
   }
 
-  const scheduling = containsAny(text, [
-    'schedule',
-    'every day',
-    'every week',
-    'cron',
-    'recurring',
-    'remind',
-    'follow up tomorrow',
-  ]) && !researchLike
-  if (scheduling) {
+  if (intent === 'scheduling') {
     return {
       intent: 'scheduling',
-      confidence: 0.75,
+      confidence,
       preferredTools: ['manage_schedules', 'manage_tasks'],
       preferredDelegates: delegateOrder,
       primaryUrl: url,
     }
   }
 
-  const browsing = !!url && (
-    matchedCapabilities.has(TOOL_CAPABILITY.browserNavigate)
-    || matchedCapabilities.has(TOOL_CAPABILITY.browserCapture)
-    || getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserNavigate).length > 0
-    || getToolsForCapability(enabledExtensions, TOOL_CAPABILITY.browserCapture).length > 0
-  )
-  if (browsing) {
+  if (intent === 'browsing') {
     return {
       intent: 'browsing',
-      confidence: 0.7,
+      confidence,
       preferredTools: preferredToolsForCapabilities(
         enabledExtensions,
         [
@@ -204,22 +130,21 @@ export function routeTaskIntent(
     }
   }
 
-  const research = researchLike
-  if (research) {
+  if (intent === 'research') {
     const preferred = preferredToolsForCapabilities(
       enabledExtensions,
       [
         TOOL_CAPABILITY.researchSearch,
         TOOL_CAPABILITY.researchFetch,
         ...(wantsScreenshots ? [TOOL_CAPABILITY.browserCapture] : []),
-        ...(wantsVoiceNote ? [TOOL_CAPABILITY.deliveryVoiceNote] : []),
-        ...(wantsMediaDelivery || wantsChannelDelivery ? [TOOL_CAPABILITY.deliveryMedia, TOOL_CAPABILITY.deliveryMessage] : []),
+        ...(wantsVoiceDelivery ? [TOOL_CAPABILITY.deliveryVoiceNote] : []),
+        ...(wantsOutboundDelivery ? [TOOL_CAPABILITY.deliveryMedia, TOOL_CAPABILITY.deliveryMessage] : []),
       ],
       ['web_search', 'web_fetch', 'browser'],
     )
     return {
       intent: 'research',
-      confidence: 0.7,
+      confidence,
       preferredTools: preferred,
       preferredDelegates: delegateOrder,
       primaryUrl: url,
@@ -228,7 +153,7 @@ export function routeTaskIntent(
 
   return {
     intent: 'general',
-    confidence: 0.5,
+    confidence,
     preferredTools: [],
     preferredDelegates: delegateOrder,
     primaryUrl: url,

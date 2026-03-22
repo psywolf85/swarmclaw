@@ -398,21 +398,6 @@ export function findFirstUrl(text: string): string | null {
   return match?.[0] || null
 }
 
-export function isMemoryListIntent(message: string): boolean {
-  const text = message.toLowerCase()
-  if (!/\bmemory|memories|remember\b/.test(text)) return false
-  if (/\b(save|store|memorize|add to memory|write to memory|remember this)\b/.test(text)) return false
-  if (/\bmemory_tool\b/.test(text)) return true
-  return (
-    /\blist\b[\s\w]{0,24}\bmemories\b/.test(text)
-    || /\bshow\b[\s\w]{0,24}\bmemories\b/.test(text)
-    || /\bget\b[\s\w]{0,24}\bmemories\b/.test(text)
-    || /\bwhat\b[\s\w]{0,40}\bmemories\b/.test(text)
-    || /\bwhat do you remember\b/.test(text)
-    || /\brecall\b[\s\w]{0,24}\bmemories?\b/.test(text)
-  )
-}
-
 export function extractDelegationTask(message: string, toolName: string): string | null {
   if (!message.toLowerCase().includes(toolName.toLowerCase())) return null
   const patterns = [

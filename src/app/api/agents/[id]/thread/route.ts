@@ -5,6 +5,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { id: agentId } = await params
   const body = await req.json().catch(() => ({}))
   const result = getAgentThreadSession(agentId, typeof body.user === 'string' ? body.user : 'default')
-  if (!result.session) return NextResponse.json({ error: result.error }, { status: result.status })
-  return NextResponse.json(result.session, { status: result.status })
+  if (!result.ok) return NextResponse.json(result.payload, { status: result.status })
+  return NextResponse.json(result.payload)
 }

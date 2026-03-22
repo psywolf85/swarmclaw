@@ -6,13 +6,24 @@
  * The main prompt assembly in stream-agent-chat.ts composes these declaratively.
  */
 
+import fs from 'node:fs'
+import path from 'node:path'
 import type { Session, Agent } from '@/types'
+import type { PromptMode } from '@/lib/server/chat-execution/prompt-mode'
+import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
 import type { ActiveProjectContext } from '@/lib/server/project-context'
+import type { SessionToolPolicyDecision } from '@/lib/server/tool-capability-policy'
 import { buildIdentityContinuityContext } from '@/lib/server/identity-continuity'
+import {
+  buildDelegationTaskProfile,
+  formatDelegationRationale,
+  resolveDelegationAdvisory,
+} from '@/lib/server/agents/delegation-advisory'
 import { getAgent, listAgents } from '@/lib/server/agents/agent-repository'
 import { loadSkills } from '@/lib/server/skills/skill-repository'
 import { buildRuntimeSkillPromptBlocks, resolveRuntimeSkills } from '@/lib/server/skills/runtime-skill-resolver'
 import { resolveTeam } from '@/lib/server/agents/team-resolution'
+import { canonicalizeExtensionId } from '@/lib/server/tool-aliases'
 
 // ---------------------------------------------------------------------------
 // Identity: agent name, description, continuity, soul, systemPrompt, skills
@@ -87,6 +98,148 @@ export function buildThinkingSection(
   }
   const text = guidance[thinkingLevel]
   return text ? `## Reasoning Depth\n${text}` : null
+}
+
+// ---------------------------------------------------------------------------
+// Runtime Orientation
+// ---------------------------------------------------------------------------
+
+const WORKSPACE_MARKER_FILES = [
+  'AGENTS.md',
+  'BOOTSTRAP.md',
+  'HEARTBEAT.md',
+  'IDENTITY.md',
+  'TOOLS.md',
+  'USER.md',
+]
+
+function normalizeRuntimeExtensionId(extensionId: string): string {
+  const normalized = extensionId.trim().toLowerCase()
+  if (!normalized) return ''
+  if (normalized === 'delegate_to_claude_code' || normalized === 'claude_code') return 'claude_code'
+  if (normalized === 'delegate_to_codex_cli' || normalized === 'codex_cli') return 'codex_cli'
+  if (normalized === 'delegate_to_opencode_cli' || normalized === 'opencode_cli') return 'opencode_cli'
+  if (normalized === 'delegate_to_gemini_cli' || normalized === 'gemini_cli') return 'gemini_cli'
+  if (['session_info', 'sessions_tool', 'whoami_tool', 'search_history_tool'].includes(normalized)) return 'manage_sessions'
+  return canonicalizeExtensionId(normalized)
+}
+
+function canonicalizeEnabledExtensions(enabledExtensions: string[]): string[] {
+  const seen = new Set<string>()
+  const values: string[] = []
+  for (const extensionId of enabledExtensions) {
+    const normalized = normalizeRuntimeExtensionId(extensionId)
+    if (!normalized || seen.has(normalized)) continue
+    seen.add(normalized)
+    values.push(normalized)
+  }
+  return values
+}
+
+function formatInlineCodeList(values: string[], maxItems = 8): string {
+  if (values.length === 0) return '(none)'
+  const head = values.slice(0, maxItems).map((value) => `\`${value}\``)
+  if (values.length > maxItems) head.push(`... +${values.length - maxItems} more`)
+  return head.join(', ')
+}
+
+function formatPolicyBlocks(blocked: SessionToolPolicyDecision['blockedExtensions'], maxItems = 3): string {
+  const lines = blocked
+    .slice(0, maxItems)
+    .map((entry) => `\`${canonicalizeExtensionId(entry.tool)}\` (${entry.reason})`)
+  if (blocked.length > maxItems) lines.push(`... +${blocked.length - maxItems} more`)
+  return lines.join(', ')
+}
+
+function collectWorkspaceMarkers(cwd: string | null | undefined): string[] {
+  if (typeof cwd !== 'string' || !cwd.trim()) return []
+  return WORKSPACE_MARKER_FILES.filter((filename) => {
+    try {
+      return fs.existsSync(path.join(cwd, filename))
+    } catch {
+      return false
+    }
+  })
+}
+
+function resolveRuntimeSessionKind(params: {
+  session: Session
+  isHeartbeat?: boolean
+  isConnectorSession?: boolean
+}): string {
+  if (params.isHeartbeat) return 'heartbeat'
+  if (params.isConnectorSession) return 'connector'
+  if (params.session.parentSessionId) return 'delegated_child'
+  return 'root_chat'
+}
+
+export function buildRuntimeOrientationSection(params: {
+  session: Session
+  promptMode: PromptMode
+  sessionExtensions: string[]
+  toolPolicy?: SessionToolPolicyDecision | null
+  agent?: Agent | null
+  activeProjectContext?: ActiveProjectContext | null
+  rootSessionId?: string | null
+  isHeartbeat?: boolean
+  isConnectorSession?: boolean
+}): string {
+  const { session, agent } = params
+  const activeProjectContext = params.activeProjectContext || null
+  const enabledExtensions = canonicalizeEnabledExtensions(params.sessionExtensions)
+  const workspaceMarkers = collectWorkspaceMarkers(session.cwd)
+  const delegationEnabled = enabledExtensions.some((extensionId) =>
+    ['delegate', 'spawn_subagent', 'claude_code', 'codex_cli', 'opencode_cli', 'gemini_cli'].includes(extensionId),
+  )
+
+  const lines = [
+    '## Runtime Orientation',
+    `Session: ${resolveRuntimeSessionKind({ session, isHeartbeat: params.isHeartbeat, isConnectorSession: params.isConnectorSession })} | prompt=${params.promptMode} | id=${session.id}`,
+    session.parentSessionId || params.rootSessionId
+      ? `Lineage: parent=${session.parentSessionId || '(none)'} | root=${params.rootSessionId || session.id}`
+      : `Lineage: root=${session.id}`,
+    `Agent: ${agent?.name || session.agentId || 'Unassigned'}${session.agentId ? ` [id: ${session.agentId}]` : ''}`,
+    `Provider/model: ${session.provider} / ${session.model || '(default)'}`,
+    `CWD: ${session.cwd || '(none)'}`,
+  ]
+
+  if (workspaceMarkers.length > 0) {
+    lines.push(`Workspace markers: ${workspaceMarkers.join(', ')}`)
+  }
+
+  if (activeProjectContext?.projectId) {
+    const projectLabel = activeProjectContext.project?.name || activeProjectContext.projectId
+    const projectRoot = activeProjectContext.projectRoot ? ` | root=${activeProjectContext.projectRoot}` : ''
+    lines.push(`Active project: ${projectLabel}${projectRoot}`)
+  }
+
+  lines.push(`Enabled capabilities now: ${formatInlineCodeList(enabledExtensions)}`)
+
+  if (params.toolPolicy?.blockedExtensions?.length) {
+    lines.push(`Policy blocked: ${formatPolicyBlocks(params.toolPolicy.blockedExtensions)}`)
+  }
+
+  if (delegationEnabled) {
+    const delegateMode = agent?.delegationTargetMode === 'selected' ? 'selected' : 'all'
+    const targetIds = Array.isArray(agent?.delegationTargetAgentIds)
+      ? agent!.delegationTargetAgentIds.filter((value) => typeof value === 'string' && value.trim())
+      : []
+    lines.push(
+      delegateMode === 'selected'
+        ? `Delegation: enabled (${delegateMode}) | targets=${targetIds.length ? targetIds.join(', ') : '(none configured)'}`
+        : 'Delegation: enabled (all allowed targets)',
+    )
+  } else {
+    lines.push('Delegation: disabled in this runtime')
+  }
+
+  if (enabledExtensions.includes('manage_sessions')) {
+    lines.push('Harness inspection: use `sessions_tool` action `identity` for live session/platform context; use action `history` only when you need earlier messages from this same session.')
+  }
+
+  lines.push('Platform routing: prefer direct `manage_*` tools when enabled; use `manage_platform` only as fallback.')
+
+  return lines.join('\n')
 }
 
 // ---------------------------------------------------------------------------
@@ -414,6 +567,43 @@ export function buildCoordinatorSection(
   return lines.join('\n')
 }
 
+export function buildDelegationRecommendationSection(params: {
+  agent: Agent | null | undefined
+  classification?: MessageClassification | null
+}): string | null {
+  const agent = params.agent
+  if (!agent || agent.delegationEnabled !== true) return null
+  const profile = buildDelegationTaskProfile({
+    classification: params.classification,
+  })
+  if (!profile.substantial) return null
+
+  const advisory = resolveDelegationAdvisory({
+    currentAgent: agent,
+    agents: listAgents(),
+    profile,
+    delegationTargetMode: agent.delegationTargetMode === 'selected' ? 'selected' : 'all',
+    delegationTargetAgentIds: agent.delegationTargetAgentIds || [],
+  })
+  if (!advisory.shouldDelegate || !advisory.recommended) return null
+
+  const recommendation = advisory.recommended
+  const workLabel = profile.workType === 'general' ? 'substantial work' : `${profile.workType} work`
+  const recommendationLabel = advisory.style === 'managerial'
+    ? 'Managerial Delegation Recommendation'
+    : 'Delegation Recommendation'
+
+  return [
+    `## ${recommendationLabel}`,
+    `This request looks like ${workLabel}.`,
+    `Best-fit teammate: **${recommendation.agentName}** [id: ${recommendation.agentId}]`,
+    `Why: ${formatDelegationRationale(recommendation)}.`,
+    advisory.style === 'managerial'
+      ? 'Prefer delegating the execution and keep your direct work to reconnaissance, validation, and synthesis.'
+      : 'Prefer delegating the execution and reserve direct tool use for quick lookups or validation.',
+  ].join('\n')
+}
+
 // ---------------------------------------------------------------------------
 // Credential Awareness
 // ---------------------------------------------------------------------------
@@ -527,3 +717,6 @@ export function buildCliDelegationContext(opts: {
 
   return parts.join('\n')
 }
+
+// Re-export RunContext prompt builder from its canonical home
+export { buildRunContextSection } from '@/lib/server/run-context'

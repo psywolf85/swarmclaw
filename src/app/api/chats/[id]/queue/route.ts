@@ -19,12 +19,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const { id } = await params
   const body = await req.json().catch(() => ({}))
   const result = queueChatMessage(id, body as Record<string, unknown>)
-  if ('error' in result) {
+  if (!result.ok) {
     return result.status === 404
       ? notFound()
-      : NextResponse.json({ error: result.error }, { status: result.status })
+      : NextResponse.json(result.payload, { status: result.status })
   }
-  return NextResponse.json(result.payload, { status: result.status })
+  return NextResponse.json(result.payload)
 }
 
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -32,5 +32,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   const body = await req.json().catch(() => ({}))
   const result = cancelQueuedChatMessages(id, typeof body.runId === 'string' ? body.runId : '')
   if (!result) return notFound()
-  return NextResponse.json(result.payload, { status: result.status })
+  if (!result.ok) return NextResponse.json(result.payload, { status: result.status })
+  return NextResponse.json(result.payload)
 }

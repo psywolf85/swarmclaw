@@ -111,4 +111,156 @@ describe('manage_tasks tool', () => {
     assert.equal(output.created.codexResumeId, 'codex-thread-1')
     assert.deepEqual(output.created.blockedBy, ['task-source'])
   })
+
+  it('auto-assigns unowned tasks to a better-fit teammate when delegation is enabled', () => {
+    const output = runWithTempDataDir(`
+      const storageMod = await import('./src/lib/server/storage')
+      const crudMod = await import('./src/lib/server/session-tools/crud')
+      const storage = storageMod.default || storageMod
+      const crud = crudMod.default || crudMod
+
+      const now = Date.now()
+      storage.saveAgents({
+        ceo: {
+          id: 'ceo',
+          name: 'CEO',
+          role: 'coordinator',
+          description: 'Directs specialist workers',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['coordination', 'delegation', 'operations'],
+          delegationEnabled: true,
+          delegationTargetMode: 'all',
+          delegationTargetAgentIds: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+        builder: {
+          id: 'builder',
+          name: 'Builder',
+          role: 'worker',
+          description: 'Builds and debugs software',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['coding', 'implementation', 'debugging'],
+          createdAt: now,
+          updatedAt: now,
+        },
+        researcher: {
+          id: 'researcher',
+          name: 'Researcher',
+          role: 'worker',
+          description: 'Research and synthesis specialist',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['research', 'analysis', 'summarization'],
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+
+      const tools = crud.buildCrudTools({
+        cwd: process.env.WORKSPACE_DIR,
+        ctx: { sessionId: 'session-auto-assign', agentId: 'ceo', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
+        hasExtension: (name) => name === 'manage_tasks',
+      })
+      const tool = tools.find((entry) => entry.name === 'manage_tasks')
+      const raw = await tool.invoke({
+        action: 'create',
+        title: 'Implement API integration',
+        description: 'Build the API client and fix the failing tests.',
+        requiredCapabilities: ['coding'],
+        status: 'backlog',
+      })
+
+      const response = JSON.parse(raw)
+      const stored = storage.loadTasks()[response.id]
+      console.log(JSON.stringify({ response, stored }))
+    `)
+
+    assert.equal(output.response.agentId, 'builder')
+    assert.equal(output.stored.agentId, 'builder')
+    assert.equal(output.response.delegationAdvisory.autoAssigned, true)
+    assert.equal(output.response.delegationAdvisory.recommendedAgentId, 'builder')
+    assert.deepEqual(output.response.delegationAdvisory.requiredCapabilities, ['coding'])
+  })
+
+  it('keeps an explicit assignee but returns delegation advisory when another teammate is a better fit', () => {
+    const output = runWithTempDataDir(`
+      const storageMod = await import('./src/lib/server/storage')
+      const crudMod = await import('./src/lib/server/session-tools/crud')
+      const storage = storageMod.default || storageMod
+      const crud = crudMod.default || crudMod
+
+      const now = Date.now()
+      storage.saveAgents({
+        ceo: {
+          id: 'ceo',
+          name: 'CEO',
+          role: 'coordinator',
+          description: 'Directs specialist workers',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['coordination', 'delegation', 'operations'],
+          delegationEnabled: true,
+          delegationTargetMode: 'all',
+          delegationTargetAgentIds: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+        builder: {
+          id: 'builder',
+          name: 'Builder',
+          role: 'worker',
+          description: 'Builds and debugs software',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['coding', 'implementation', 'debugging'],
+          createdAt: now,
+          updatedAt: now,
+        },
+        researcher: {
+          id: 'researcher',
+          name: 'Researcher',
+          role: 'worker',
+          description: 'Research and synthesis specialist',
+          systemPrompt: '',
+          provider: 'openai',
+          model: 'gpt-test',
+          capabilities: ['research', 'analysis', 'summarization'],
+          createdAt: now,
+          updatedAt: now,
+        },
+      })
+
+      const tools = crud.buildCrudTools({
+        cwd: process.env.WORKSPACE_DIR,
+        ctx: { sessionId: 'session-explicit-assign', agentId: 'ceo', delegationEnabled: true, delegationTargetMode: 'all', delegationTargetAgentIds: [] },
+        hasExtension: (name) => name === 'manage_tasks',
+      })
+      const tool = tools.find((entry) => entry.name === 'manage_tasks')
+      const raw = await tool.invoke({
+        action: 'create',
+        title: 'Implement API integration',
+        description: 'Build the API client and fix the failing tests.',
+        agentId: 'researcher',
+        requiredCapabilities: ['coding'],
+        status: 'backlog',
+      })
+
+      const response = JSON.parse(raw)
+      const stored = storage.loadTasks()[response.id]
+      console.log(JSON.stringify({ response, stored }))
+    `)
+
+    assert.equal(output.response.agentId, 'researcher')
+    assert.equal(output.stored.agentId, 'researcher')
+    assert.equal(output.response.delegationAdvisory.autoAssigned, false)
+    assert.equal(output.response.delegationAdvisory.recommendedAgentId, 'builder')
+  })
 })

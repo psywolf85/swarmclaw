@@ -16,10 +16,12 @@ import {
 } from '@/lib/server/agents/agent-repository'
 import { logActivity } from '@/lib/server/activity/activity-log'
 import { getAgentSpendWindows } from '@/lib/server/cost'
+import { serviceFail, serviceOk } from '@/lib/server/service-result'
 import { listSessions, saveSession } from '@/lib/server/sessions/session-repository'
 import { loadUsage } from '@/lib/server/usage/usage-repository'
 import { notify } from '@/lib/server/ws-hub'
 import type { Agent, Session } from '@/types'
+import type { ServiceResult } from '@/lib/server/service-result'
 
 function normalizeStringList(value: unknown): string[] {
   return Array.isArray(value)
@@ -403,19 +405,19 @@ export function bulkPatchAgents(patches: unknown): { updated: number; errors: st
   return { updated, errors }
 }
 
-export function getAgentThreadSession(agentId: string, user = 'default'): { status: 200 | 404 | 409; session?: Session; error?: string } {
+export function getAgentThreadSession(agentId: string, user = 'default'): ServiceResult<Session> {
   const agent = loadAgents()[agentId]
   if (!agent) {
-    return { status: 404, error: 'Agent not found' }
+    return serviceFail(404, 'Agent not found')
   }
   const session = ensureAgentThreadSession(agentId, user, agent)
   if (!session) {
     if (isAgentDisabled(agent)) {
-      return { status: 409, error: buildAgentDisabledMessage(agent, 'start new chats') }
+      return serviceFail(409, buildAgentDisabledMessage(agent, 'start new chats'))
     }
-    return { status: 404, error: 'Agent not found' }
+    return serviceFail(404, 'Agent not found')
   }
-  return { status: 200, session }
+  return serviceOk(session)
 }
 
 export function getAgentStatus(agentId: string): Agent | null {

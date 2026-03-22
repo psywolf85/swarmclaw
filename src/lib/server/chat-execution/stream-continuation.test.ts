@@ -290,5 +290,41 @@ describe('stream-continuation', () => {
       assert.equal(typeof prompt, 'string')
       assert.ok(prompt!.includes('memory write'))
     })
+
+    it('renders a coordinator delegation nudge with the recommended delegate', () => {
+      const prompt = mod.buildContinuationPrompt({
+        type: 'coordinator_delegation_nudge',
+        message: 'test',
+        fullText: '',
+        toolEvents: [],
+        requiredToolReminderNames: [],
+        isCoordinatorAgent: true,
+        recommendedDelegateName: 'Builder',
+        delegationRationale: 'capability match: coding; worker role fits execution-heavy work',
+      })
+
+      assert.ok(prompt)
+      assert.ok(prompt!.includes('Builder'))
+      assert.ok(prompt!.includes('orchestrate'))
+      assert.ok(prompt!.includes('Reason: capability match: coding; worker role fits execution-heavy work.'))
+    })
+
+    it('renders an advisory delegation nudge for non-coordinator agents', () => {
+      const prompt = mod.buildContinuationPrompt({
+        type: 'coordinator_delegation_nudge',
+        message: 'test',
+        fullText: '',
+        toolEvents: [],
+        requiredToolReminderNames: [],
+        isCoordinatorAgent: false,
+        recommendedDelegateName: 'Reviewer',
+        delegationRationale: 'capability match: review; currently idle',
+      })
+
+      assert.ok(prompt)
+      assert.ok(prompt!.includes('materially better fit'))
+      assert.ok(prompt!.includes('Reviewer'))
+      assert.ok(prompt!.includes('reconnaissance, validation, or synthesis'))
+    })
   })
 })

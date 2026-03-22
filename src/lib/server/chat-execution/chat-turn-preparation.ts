@@ -2,13 +2,14 @@ import fs from 'fs'
 import os from 'os'
 
 import { getProvider } from '@/lib/providers'
-import type { Message, Session } from '@/types'
+import type { ExecutionBrief, Message, Session } from '@/types'
 import {
   decryptKey,
   loadCredentials,
 } from '@/lib/server/credentials/credential-repository'
 import { getAgent } from '@/lib/server/agents/agent-repository'
 import { getSession, saveSession } from '@/lib/server/sessions/session-repository'
+import { getMessages, getMessageCount, appendMessage } from '@/lib/server/messages/message-repository'
 import { loadSettings } from '@/lib/server/settings/settings-repository'
 import { loadSkills } from '@/lib/server/skills/skill-repository'
 import { resolveImagePath } from '@/lib/server/resolve-image'
@@ -45,7 +46,6 @@ import {
 import { normalizeProviderEndpoint, isLocalOpenClawEndpoint } from '@/lib/openclaw/openclaw-endpoint'
 import { NON_LANGGRAPH_PROVIDER_IDS } from '@/lib/provider-sets'
 import {
-  buildMissionContextBlock,
   resolveMissionForTurn,
 } from '@/lib/server/missions/mission-service'
 import {
@@ -69,7 +69,15 @@ import {
   resetSessionRuntime,
   resolveSessionResetPolicy,
 } from '@/lib/server/session-reset-policy'
+import {
+  buildExecutionBrief,
+  buildExecutionBriefContextBlock,
+} from '@/lib/server/execution-brief'
 import { checkAgentBudgetLimits } from '@/lib/server/cost'
+import {
+  classifyMessage,
+  toMessageSemanticsSummary,
+} from '@/lib/server/chat-execution/message-classifier'
 import {
   filterRuntimeCapabilityIds,
   getTodaySpendUsd,
@@ -445,7 +453,8 @@ export interface PreparedExecutableChatTurn {
   lifecycleRunId: string
   agentForSession: ReturnType<typeof getAgent>
   mission: Awaited<ReturnType<typeof resolveMissionForTurn>>
-  missionContextBlock?: string
+  executionBrief: ExecutionBrief
+  executionBriefContextBlock?: string
   extensionsForRun: string[]
   effectiveMessage: string
   providerType: string
@@ -492,9 +501,8 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
 
   const session = getSession(sessionId)
   if (!session) throw new Error(`Session not found: ${sessionId}`)
-  session.messages = Array.isArray(session.messages) ? session.messages : []
   const runStartedAt = Date.now()
-  const runMessageStartIndex = session.messages.length
+  const runMessageStartIndex = getMessageCount(sessionId)
 
   const appSettings = loadSettings()
   const lifecycleRunId = runId || `${sessionId}:${runStartedAt}`
@@ -542,7 +550,7 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
         {
           sessionId: session.id,
           session,
-          messageCount: Array.isArray(session.messages) ? session.messages.length : 0,
+          messageCount: getMessageCount(sessionId),
           durationMs: Date.now() - (session.createdAt || runStartedAt),
           reason: freshness.reason || 'session_reset',
         },
@@ -615,12 +623,16 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
   if (isHeartbeatRun && input.modelOverride) {
     sessionForRun = { ...sessionForRun, model: input.modelOverride }
   }
-  const missionContextBlock = buildMissionContextBlock(mission)
+  const executionBrief = buildExecutionBrief({
+    session: sessionForRun,
+    mission,
+  })
+  const executionBriefContextBlock = buildExecutionBriefContextBlock(executionBrief)
 
   if (extensionsForRun.length > 0) {
     const modelResolvePrompt = heartbeatLightContext
-      ? (joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), missionContextBlock) || '')
-      : (joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), missionContextBlock) || '')
+      ? (joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), executionBriefContextBlock) || '')
+      : (joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), executionBriefContextBlock) || '')
     const modelResolve = await runCapabilityBeforeModelResolve(
       {
         session: sessionForRun,
@@ -710,7 +722,17 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
 
   const shouldPersistUserMessage = shouldPersistInboundUserMessage(internal, source)
   if (shouldPersistUserMessage) {
-    const linkAnalysis = !internal ? await runLinkUnderstanding(message) : []
+    const [linkAnalysis, semantics] = await Promise.all([
+      !internal ? runLinkUnderstanding(message) : Promise.resolve([]),
+      classifyMessage({
+        sessionId,
+        agentId: session.agentId || null,
+        message,
+        history: getMessages(sessionId),
+      })
+        .then((classification) => toMessageSemanticsSummary(classification))
+        .catch(() => undefined),
+    ])
     const guardedUserText = guardUntrustedText({
       text: message,
       source,
@@ -727,13 +749,14 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
         imageUrl: imageUrl || undefined,
         attachedFiles: attachedFiles?.length ? attachedFiles : undefined,
         replyToId: input.replyToId || undefined,
+        ...(semantics ? { semantics } : {}),
       },
       enabledIds: extensionsForRun,
       phase: 'user',
       runId: lifecycleRunId,
     })
     if (nextUserMessage) {
-      session.messages.push(nextUserMessage)
+      appendMessage(sessionId, nextUserMessage)
       if (linkAnalysis.length > 0) {
         const linkAnalysisMessage = await applyMessageLifecycleHooks({
           session,
@@ -749,7 +772,7 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
           isSynthetic: true,
         })
         if (linkAnalysisMessage) {
-          session.messages.push(linkAnalysisMessage)
+          appendMessage(sessionId, linkAnalysisMessage)
         }
       }
       session.lastActiveAt = Date.now()
@@ -781,8 +804,8 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
     && !useLocalOpenClawNativeRuntime
 
   const systemPrompt = heartbeatLightContext
-    ? joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), missionContextBlock)
-    : (hasExtensions ? undefined : joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), missionContextBlock))
+    ? joinSystemPromptBlocks(buildLightHeartbeatSystemPrompt(sessionForRun), executionBriefContextBlock)
+    : (hasExtensions ? undefined : joinSystemPromptBlocks(buildAgentSystemPrompt(sessionForRun), executionBriefContextBlock))
 
   return {
     kind: 'ready',
@@ -797,7 +820,8 @@ export async function prepareChatTurn(input: ExecuteChatTurnInput): Promise<Prep
     lifecycleRunId,
     agentForSession,
     mission,
-    missionContextBlock: missionContextBlock || undefined,
+    executionBrief,
+    executionBriefContextBlock: executionBriefContextBlock || undefined,
     extensionsForRun,
     effectiveMessage,
     providerType,

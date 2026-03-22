@@ -1,21 +1,14 @@
 {
   "version": 1,
-  "generatedAt": "2026-03-18T15:47:59.063Z",
-  "totalIssues": 396,
-  "uniqueIssues": 123,
+  "generatedAt": "2026-03-22T13:08:27.646Z",
+  "totalIssues": 377,
+  "uniqueIssues": 124,
   "issues": [
     {
       "filePath": "bin/worker-cmd.js",
       "ruleId": "@typescript-eslint/no-require-imports",
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
-      "count": 2
-    },
-    {
-      "filePath": "src/app/api/chats/[id]/mailbox/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
       "count": 2
     },
     {
@@ -26,35 +19,7 @@
       "count": 1
     },
     {
-      "filePath": "src/app/api/credentials/route.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "severity": 1,
-      "message": "'_req' is defined but never used.",
-      "count": 1
-    },
-    {
-      "filePath": "src/app/api/documents/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 3
-    },
-    {
       "filePath": "src/app/api/external-agents/route.test.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 1
-    },
-    {
-      "filePath": "src/app/api/external-agents/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 3
-    },
-    {
-      "filePath": "src/app/api/gateways/route.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
@@ -75,13 +40,6 @@
       "count": 2
     },
     {
-      "filePath": "src/app/api/mcp-servers/[id]/tools/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 4
-    },
-    {
       "filePath": "src/app/api/mcp-servers/route.ts",
       "ruleId": "@typescript-eslint/no-unused-vars",
       "severity": 1,
@@ -94,13 +52,6 @@
       "severity": 1,
       "message": "'_req' is defined but never used.",
       "count": 1
-    },
-    {
-      "filePath": "src/app/api/providers/ollama/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 2
     },
     {
       "filePath": "src/app/api/providers/route.ts",
@@ -145,13 +96,6 @@
       "count": 1
     },
     {
-      "filePath": "src/app/api/setup/openclaw-device/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 1
-    },
-    {
       "filePath": "src/app/api/version/route.ts",
       "ruleId": "@typescript-eslint/no-unused-vars",
       "severity": 1,
@@ -166,13 +110,6 @@
       "count": 5
     },
     {
-      "filePath": "src/app/api/webhooks/[id]/history/route.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 3
-    },
-    {
       "filePath": "src/app/api/webhooks/route.test.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
@@ -184,6 +121,55 @@
       "ruleId": "@typescript-eslint/no-unused-vars",
       "severity": 1,
       "message": "'_req' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'AgentList' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'ProtocolRunDetail' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'runs' logical expression could make the dependencies of useEffect Hook (at line 209) change on every render. To fix this, wrap the initialization of 'runs' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'runs' logical expression could make the dependencies of useMemo Hook (at line 222) change on every render. To fix this, wrap the initialization of 'runs' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'templates' logical expression could make the dependencies of useMemo Hook (at line 211) change on every render. To fix this, wrap the initialization of 'templates' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'templates' logical expression could make the dependencies of useMemo Hook (at line 212) change on every render. To fix this, wrap the initialization of 'templates' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/app/protocols/page.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'templates' logical expression could make the dependencies of useMemo Hook (at line 213) change on every render. To fix this, wrap the initialization of 'templates' in its own useMemo() Hook.",
       "count": 1
     },
     {
@@ -257,6 +243,62 @@
       "count": 1
     },
     {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'AgentList' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'Chatroom' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'Mission' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'ProtocolTemplate' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'TaskList' is defined but never used.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'agents' logical expression could make the dependencies of useMemo Hook (at line 138) change on every render. To fix this, wrap the initialization of 'agents' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'agents' logical expression could make the dependencies of useMemo Hook (at line 155) change on every render. To fix this, wrap the initialization of 'agents' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
+      "filePath": "src/components/protocols/structured-session-launcher.tsx",
+      "ruleId": "react-hooks/exhaustive-deps",
+      "severity": 1,
+      "message": "The 'templates' logical expression could make the dependencies of useMemo Hook (at line 142) change on every render. To fix this, wrap the initialization of 'templates' in its own useMemo() Hook.",
+      "count": 1
+    },
+    {
       "filePath": "src/components/shared/attachment-chip.tsx",
       "ruleId": "@next/next/no-img-element",
       "severity": 1,
@@ -292,6 +334,13 @@
       "count": 1
     },
     {
+      "filePath": "src/components/tasks/task-sheet.tsx",
+      "ruleId": "react-hooks/set-state-in-effect",
+      "severity": 2,
+      "message": "Error: Calling setState synchronously within an effect can trigger cascading renders Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following: * Update external systems with the latest state from React. * Subscribe for updates from some external system, calling setState in a callback function when external state changes. Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).",
+      "count": 2
+    },
+    {
       "filePath": "src/hooks/use-speech-recognition.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
@@ -304,6 +353,13 @@
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",
       "count": 2
+    },
+    {
+      "filePath": "src/lib/providers/index.ts",
+      "ruleId": "@typescript-eslint/no-unused-vars",
+      "severity": 1,
+      "message": "'ProviderType' is defined but never used.",
+      "count": 1
     },
     {
       "filePath": "src/lib/providers/openai.ts",
@@ -516,35 +572,7 @@
       "count": 12
     },
     {
-      "filePath": "src/lib/server/openclaw/gateway.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "severity": 1,
-      "message": "'id' is assigned a value but never used.",
-      "count": 1
-    },
-    {
-      "filePath": "src/lib/server/openclaw/sync.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 2
-    },
-    {
-      "filePath": "src/lib/server/protocols/protocol-agent-turn.ts",
-      "ruleId": "@typescript-eslint/no-require-imports",
-      "severity": 2,
-      "message": "A `require()` style import is forbidden.",
-      "count": 2
-    },
-    {
       "filePath": "src/lib/server/protocols/protocol-foreach.ts",
-      "ruleId": "@typescript-eslint/no-require-imports",
-      "severity": 2,
-      "message": "A `require()` style import is forbidden.",
-      "count": 1
-    },
-    {
-      "filePath": "src/lib/server/protocols/protocol-run-lifecycle.ts",
       "ruleId": "@typescript-eslint/no-require-imports",
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
@@ -573,17 +601,10 @@
     },
     {
       "filePath": "src/lib/server/protocols/protocol-step-processors.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "severity": 1,
-      "message": "'createTranscriptRoom' is defined but never used.",
-      "count": 1
-    },
-    {
-      "filePath": "src/lib/server/protocols/protocol-step-processors.ts",
       "ruleId": "@typescript-eslint/no-require-imports",
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
-      "count": 6
+      "count": 1
     },
     {
       "filePath": "src/lib/server/protocols/protocol-subflow.ts",
@@ -598,13 +619,6 @@
       "severity": 2,
       "message": "A `require()` style import is forbidden.",
       "count": 4
-    },
-    {
-      "filePath": "src/lib/server/protocols/protocol-swarm.ts",
-      "ruleId": "@typescript-eslint/no-unused-vars",
-      "severity": 1,
-      "message": "'cleanText' is defined but never used.",
-      "count": 1
     },
     {
       "filePath": "src/lib/server/protocols/protocol-swarm.ts",
@@ -797,13 +811,6 @@
     },
     {
       "filePath": "src/lib/server/storage-mcp.test.ts",
-      "ruleId": "@typescript-eslint/no-explicit-any",
-      "severity": 2,
-      "message": "Unexpected any. Specify a different type.",
-      "count": 4
-    },
-    {
-      "filePath": "src/lib/server/tasks/task-followups.ts",
       "ruleId": "@typescript-eslint/no-explicit-any",
       "severity": 2,
       "message": "Unexpected any. Specify a different type.",

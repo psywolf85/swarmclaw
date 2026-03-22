@@ -15,7 +15,8 @@ import { z } from 'zod'
 import { buildLLM } from '@/lib/server/build-llm'
 import { log } from '@/lib/server/logger'
 import { hmrSingleton } from '@/lib/shared-utils'
-import type { Message } from '@/types'
+import type { Message, MessageSemanticsSummary, MessageTaskIntent } from '@/types'
+import type { DelegationWorkType } from '@/lib/server/agents/delegation-advisory'
 
 const TAG = 'message-classifier'
 
@@ -23,18 +24,40 @@ const TAG = 'message-classifier'
 // Schema
 // ---------------------------------------------------------------------------
 
+const WorkTypeSchema = z.enum(['coding', 'research', 'writing', 'review', 'operations', 'general']).optional().default('general')
+const TaskIntentSchema = z.enum(['coding', 'research', 'browsing', 'outreach', 'scheduling', 'general']).optional().default('general')
+
 export const MessageClassificationSchema = z.object({
+  taskIntent: TaskIntentSchema,
   isDeliverableTask: z.boolean(),
   isBroadGoal: z.boolean(),
   walletIntent: z.enum(['none', 'read_only', 'transactional']),
   hasHumanSignals: z.boolean(),
   hasSignificantEvent: z.boolean(),
   isResearchSynthesis: z.boolean(),
+  workType: WorkTypeSchema,
+  wantsScreenshots: z.boolean().optional().default(false),
+  wantsOutboundDelivery: z.boolean().optional().default(false),
+  wantsVoiceDelivery: z.boolean().optional().default(false),
   explicitToolRequests: z.array(z.string()),
   confidence: z.number().min(0).max(1),
 })
 
-export type MessageClassification = z.infer<typeof MessageClassificationSchema>
+export interface MessageClassification {
+  taskIntent: MessageTaskIntent
+  isDeliverableTask: boolean
+  isBroadGoal: boolean
+  walletIntent: 'none' | 'read_only' | 'transactional'
+  hasHumanSignals: boolean
+  hasSignificantEvent: boolean
+  isResearchSynthesis: boolean
+  workType?: DelegationWorkType
+  wantsScreenshots?: boolean
+  wantsOutboundDelivery?: boolean
+  wantsVoiceDelivery?: boolean
+  explicitToolRequests: string[]
+  confidence: number
+}
 
 // ---------------------------------------------------------------------------
 // LRU Cache (module-level, keyed on sha256 of message)
@@ -76,12 +99,17 @@ function buildClassificationPrompt(message: string, recentHistory: string): stri
     'Classify the user message below across multiple dimensions. Return JSON only.',
     '',
     'Dimensions:',
+    '- taskIntent: The primary execution intent. Use exactly one of: "coding", "research", "browsing", "outreach", "scheduling", or "general". Choose "coding" for repo/code/build/debug/edit tasks. Choose "research" for gathering current info or synthesizing sources. Choose "browsing" for page navigation, rendered-page inspection, form work, or literal browser workflows. Choose "outreach" for sending/sharing/delivering updates to an external channel. Choose "scheduling" for reminders, recurring work, monitoring, or follow-up scheduling. Choose "general" when none of the above clearly fits.',
     '- isDeliverableTask (bool): The user wants a concrete artifact produced — a document, report, plan, proposal, landing page, dashboard, HTML file, markdown file, brief, copy, screenshots, or similar deliverable. NOT simple Q&A, code fixes, or single-command tasks.',
     '- isBroadGoal (bool): The message describes a broad, multi-step goal (50+ chars, no code blocks, no file paths, no numbered lists). Short questions ending with "?" are NOT broad goals.',
     '- walletIntent: "none" if no crypto/wallet/trading context. "read_only" if mentioning wallet/crypto but only for checking balances, viewing transactions, or research. "transactional" if the user wants to swap, trade, buy, sell, mint, claim, deposit, withdraw, bridge, or execute a transaction.',
     '- hasHumanSignals (bool): The message contains personal signals — preferences ("I prefer", "call me"), relationships ("my wife", "my partner", "my kid"), life events ("birthday", "wedding", "promotion", "moving", "graduation", "hospital"), or personal disclosures.',
     '- hasSignificantEvent (bool): The message mentions a notable life/work event or milestone (birthday, anniversary, wedding, graduation, promotion, new job, relocation, illness, funeral, travel, house, deadline, launch).',
     '- isResearchSynthesis (bool): The task requires gathering information from multiple sources and synthesizing it — research reports, competitive analysis, market overviews, literature reviews, multi-source comparisons. NOT simple factual lookups.',
+    '- workType: The primary work domain. Use exactly one of: "coding", "research", "writing", "review", "operations", or "general". Choose "general" when nothing else clearly fits.',
+    '- wantsScreenshots (bool): The user explicitly wants screenshots, visual capture, rendered proof, or page snapshots.',
+    '- wantsOutboundDelivery (bool): The user explicitly wants the result sent, shared, delivered, posted, or messaged to an external destination/channel.',
+    '- wantsVoiceDelivery (bool): The user explicitly wants a voice note, voice memo, audio note, or voice message.',
     '- explicitToolRequests (string[]): Tool names the user explicitly asks to use. E.g. "use the shell", "run curl", "send an email", "ask the human", "use the browser". Return canonical tool names: "shell", "email", "ask_human", "browser", "files", "web". Empty array if none.',
     '- confidence (0-1): How confident are you in this classification overall.',
     '',
@@ -90,9 +118,10 @@ function buildClassificationPrompt(message: string, recentHistory: string): stri
     '- A message can be both a deliverable task AND a broad goal.',
     '- "walletIntent" should be "transactional" only if the user wants to execute a state-changing action, not just discuss crypto.',
     '- For "explicitToolRequests", only include tools the user explicitly mentions by name or clear synonym. Do not infer tool needs from the task type.',
+    '- Prefer the most execution-relevant taskIntent. Example: "research this and send me a voice note" is "research", not "outreach".',
     '',
     'Output shape:',
-    '{"isDeliverableTask":bool,"isBroadGoal":bool,"walletIntent":"none|read_only|transactional","hasHumanSignals":bool,"hasSignificantEvent":bool,"isResearchSynthesis":bool,"explicitToolRequests":[],"confidence":0.0-1.0}',
+    '{"taskIntent":"coding|research|browsing|outreach|scheduling|general","isDeliverableTask":bool,"isBroadGoal":bool,"walletIntent":"none|read_only|transactional","hasHumanSignals":bool,"hasSignificantEvent":bool,"isResearchSynthesis":bool,"workType":"coding|research|writing|review|operations|general","wantsScreenshots":bool,"wantsOutboundDelivery":bool,"wantsVoiceDelivery":bool,"explicitToolRequests":[],"confidence":0.0-1.0}',
     '',
     recentHistory ? `Recent context:\n${recentHistory}\n` : '',
     `User message: ${JSON.stringify(message)}`,
@@ -181,7 +210,7 @@ const CLASSIFIER_TIMEOUT_MS = 2_000
 
 /**
  * Classify a user message using a single LLM call.
- * Returns null on failure/timeout — callers should fall back to regex.
+ * Returns null on failure/timeout so callers can fail open to neutral behavior.
  */
 export async function classifyMessage(
   input: ClassifyMessageInput,
@@ -238,47 +267,60 @@ export async function classifyMessage(
   }
 }
 
+export function toMessageSemanticsSummary(classification: MessageClassification | null | undefined): MessageSemanticsSummary | undefined {
+  if (!classification) return undefined
+  return {
+    taskIntent: classification.taskIntent,
+    workType: classification.workType || 'general',
+    walletIntent: classification.walletIntent,
+    isDeliverableTask: classification.isDeliverableTask,
+    isBroadGoal: classification.isBroadGoal,
+    isResearchSynthesis: classification.isResearchSynthesis,
+    hasHumanSignals: classification.hasHumanSignals,
+    hasSignificantEvent: classification.hasSignificantEvent,
+    wantsScreenshots: classification.wantsScreenshots === true,
+    wantsOutboundDelivery: classification.wantsOutboundDelivery === true,
+    wantsVoiceDelivery: classification.wantsVoiceDelivery === true,
+    explicitToolRequests: [...classification.explicitToolRequests],
+    confidence: classification.confidence,
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Adapter functions — fall back to regex when classification is null
+// Adapter functions — neutral defaults when classification is unavailable
 // ---------------------------------------------------------------------------
 
-import {
-  isBroadGoal as regexIsBroadGoal,
-  looksLikeExternalWalletTask as regexLooksLikeExternalWalletTask,
-  looksLikeBoundedExternalExecutionTask as regexLooksLikeBoundedExternalExecutionTask,
-  looksLikeOpenEndedDeliverableTask as regexLooksLikeOpenEndedDeliverableTask,
-} from '@/lib/server/chat-execution/stream-continuation'
-
-export function isDeliverableTask(classification: MessageClassification | null, message: string): boolean {
-  return classification?.isDeliverableTask ?? regexLooksLikeOpenEndedDeliverableTask(message)
+export function isDeliverableTask(classification: MessageClassification | null, message?: string): boolean {
+  void message
+  return classification?.isDeliverableTask === true
 }
 
-export function isBroadGoal(classification: MessageClassification | null, message: string): boolean {
-  return classification?.isBroadGoal ?? regexIsBroadGoal(message)
+export function isBroadGoal(classification: MessageClassification | null, message?: string): boolean {
+  void message
+  return classification?.isBroadGoal === true
 }
 
-export function hasWalletIntent(classification: MessageClassification | null, message: string): boolean {
-  if (classification) return classification.walletIntent !== 'none'
-  return regexLooksLikeExternalWalletTask(message)
+export function hasWalletIntent(classification: MessageClassification | null, message?: string): boolean {
+  void message
+  return classification?.walletIntent !== undefined && classification.walletIntent !== 'none'
 }
 
-export function hasTransactionalWalletIntent(classification: MessageClassification | null, message: string): boolean {
-  if (classification) return classification.walletIntent === 'transactional'
-  return regexLooksLikeBoundedExternalExecutionTask(message)
+export function hasTransactionalWalletIntent(classification: MessageClassification | null, message?: string): boolean {
+  void message
+  return classification?.walletIntent === 'transactional'
 }
 
-export function hasHumanSignals(classification: MessageClassification | null, transcript: string): boolean {
-  if (classification) return classification.hasHumanSignals
-  // Fallback to regex
-  return /\b(?:prefer|please|call me|don't call me|do not call me|i like|i dislike|i hate|i love|my pronouns|my partner|my wife|my husband|my kid|my child|my mom|my dad|my sister|my brother|birthday|anniversary|wedding|married|divorc|pregnan|baby|moved|moving|relocat|promotion|promoted|laid off|new job|job change|graduat|hospital|sick|illness|diagnos|passed away|funeral|grief|bereave|deadline|launch|fundraising|closing|house|home|travel)\b/i.test(transcript)
+export function hasHumanSignals(classification: MessageClassification | null, transcript?: string): boolean {
+  void transcript
+  return classification?.hasHumanSignals === true
 }
 
-export function hasSignificantEvent(classification: MessageClassification | null, text: string): boolean {
-  if (classification) return classification.hasSignificantEvent
-  return /\b(?:birthday|anniversary|wedding|married|divorc|pregnan|baby|moved|moving|relocat|promotion|promoted|laid off|new job|job change|graduat|hospital|sick|illness|diagnos|passed away|funeral|grief|bereave|deadline|launch|fundraising|closing|house|home|travel)\b/i.test(text)
+export function hasSignificantEvent(classification: MessageClassification | null, text?: string): boolean {
+  void text
+  return classification?.hasSignificantEvent === true
 }
 
-export function isResearchSynthesis(classification: MessageClassification | null, routingIntent: string | null): boolean {
-  if (classification) return classification.isResearchSynthesis
-  return routingIntent === 'research' || routingIntent === 'browsing'
+export function isResearchSynthesis(classification: MessageClassification | null, routingIntent?: string | null): boolean {
+  void routingIntent
+  return classification?.isResearchSynthesis === true
 }

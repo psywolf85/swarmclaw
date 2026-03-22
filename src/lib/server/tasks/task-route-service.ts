@@ -18,6 +18,7 @@ import {
   validateCompletedTasksQueue,
 } from '@/lib/server/runtime/queue'
 import { dispatchWake } from '@/lib/server/runtime/wake-dispatcher'
+import { serviceFail, serviceOk } from '@/lib/server/service-result'
 import { loadSettings } from '@/lib/server/settings/settings-repository'
 import {
   deleteTask,
@@ -31,6 +32,7 @@ import { applyTaskPatch, prepareTaskCreation } from '@/lib/server/tasks/task-ser
 import { enqueueSystemEvent } from '@/lib/server/runtime/system-events'
 import { notify } from '@/lib/server/ws-hub'
 import type { BoardTask, BoardTaskStatus, TaskComment } from '@/types'
+import type { ServiceResult } from '@/lib/server/service-result'
 
 import '@/lib/server/builtin-extensions'
 
@@ -67,31 +69,23 @@ export function prepareTasksForListing() {
   )
 }
 
-export function updateTaskFromRoute(id: string, body: Record<string, unknown>) {
+export function updateTaskFromRoute(id: string, body: Record<string, unknown>): ServiceResult<BoardTask> {
   const settings = loadSettings()
   const tasks = loadTasks()
-  if (!tasks[id]) return { ok: false as const, status: 404 as const }
+  if (!tasks[id]) return serviceFail(404, 'Task not found')
 
   const prevStatus = tasks[id].status
   if (Array.isArray(body.blockedBy)) {
     const dagResult = validateDag(tasks, id, body.blockedBy)
     if (!dagResult.valid) {
-      return {
-        ok: false as const,
-        status: 400 as const,
-        payload: { error: 'Dependency cycle detected', cycle: dagResult.cycle },
-      }
+      return serviceFail(400, 'Dependency cycle detected')
     }
   }
 
   if (body.appendComment) {
     const appendedComment = normalizeTaskCommentInput(body.appendComment)
     if (!appendedComment) {
-      return {
-        ok: false as const,
-        status: 400 as const,
-        payload: { error: 'Invalid task comment payload' },
-      }
+      return serviceFail(400, 'Invalid task comment payload')
     }
     if (!tasks[id].comments) tasks[id].comments = []
     tasks[id].comments.push(appendedComment)
@@ -149,13 +143,10 @@ export function updateTaskFromRoute(id: string, body: Record<string, unknown>) {
   if (prevStatus !== tasks[id].status && tasks[id].status === 'cancelled') {
     disableSessionHeartbeat(tasks[id].sessionId)
     notify('tasks')
-    return {
-      ok: true as const,
-      payload: enrichTaskWithMissionSummary({
-        ...tasks[id],
-        missionId: mission?.id || tasks[id].missionId || null,
-      }),
-    }
+    return serviceOk(enrichTaskWithMissionSummary({
+      ...tasks[id],
+      missionId: mission?.id || tasks[id].missionId || null,
+    }))
   }
 
   if (prevStatus !== tasks[id].status && (tasks[id].status === 'completed' || tasks[id].status === 'failed')) {
@@ -203,11 +194,7 @@ export function updateTaskFromRoute(id: string, body: Record<string, unknown>) {
       tasks[id].status = prevStatus
       tasks[id].updatedAt = Date.now()
       saveTask(id, tasks[id])
-      return {
-        ok: false as const,
-        status: 409 as const,
-        payload: { error: 'Cannot queue: blocked by incomplete tasks', blockedBy: incompleteBlocker },
-      }
+      return serviceFail(409, 'Cannot queue: blocked by incomplete tasks')
     }
   }
 
@@ -229,18 +216,15 @@ export function updateTaskFromRoute(id: string, body: Record<string, unknown>) {
   }
 
   notify('tasks')
-  return {
-    ok: true as const,
-    payload: enrichTaskWithMissionSummary({
-      ...tasks[id],
-      missionId: mission?.id || tasks[id].missionId || null,
-    }),
-  }
+  return serviceOk(enrichTaskWithMissionSummary({
+    ...tasks[id],
+    missionId: mission?.id || tasks[id].missionId || null,
+  }))
 }
 
-export function archiveTaskFromRoute(id: string) {
+export function archiveTaskFromRoute(id: string): ServiceResult<BoardTask> {
   const task = loadTask(id)
-  if (!task) return { ok: false as const }
+  if (!task) return serviceFail(404, 'Task not found')
   task.status = 'archived'
   task.archivedAt = Date.now()
   task.updatedAt = Date.now()
@@ -251,10 +235,10 @@ export function archiveTaskFromRoute(id: string) {
     text: `Task archived: "${task.title}" (${id}).`,
   })
   notify('tasks')
-  return { ok: true as const, payload: task }
+  return serviceOk(task)
 }
 
-export function createTaskFromRoute(body: Record<string, unknown>) {
+export function createTaskFromRoute(body: Record<string, unknown>): ServiceResult<BoardTask> {
   const id = genId()
   const now = Date.now()
   const tasks = loadTasks()
@@ -268,11 +252,7 @@ export function createTaskFromRoute(body: Record<string, unknown>) {
   if (Array.isArray(body.blockedBy) && body.blockedBy.length > 0) {
     const dagResult = validateDag(tasks, id, body.blockedBy)
     if (!dagResult.valid) {
-      return {
-        ok: false as const,
-        status: 400 as const,
-        payload: { error: 'Dependency cycle detected', cycle: dagResult.cycle },
-      }
+      return serviceFail(400, 'Dependency cycle detected')
     }
   }
   const description = typeof body.description === 'string' ? body.description : ''
@@ -335,10 +315,10 @@ export function createTaskFromRoute(body: Record<string, unknown>) {
     },
   })
   if (!prepared.ok) {
-    return { ok: false as const, status: 400 as const, payload: { error: prepared.error } }
+    return serviceFail(400, prepared.error)
   }
   if (prepared.duplicate) {
-    return { ok: true as const, payload: { ...prepared.duplicate, deduplicated: true } }
+    return serviceOk({ ...prepared.duplicate, deduplicated: true } as BoardTask)
   }
 
   const task = prepared.task
@@ -380,17 +360,17 @@ export function createTaskFromRoute(body: Record<string, unknown>) {
     enqueueTask(id)
   }
   notify('tasks')
-  return { ok: true as const, payload: finalTask }
+  return serviceOk(finalTask)
 }
 
-export function bulkUpdateTasksFromRoute(body: Record<string, unknown>) {
+export function bulkUpdateTasksFromRoute(body: Record<string, unknown>): ServiceResult<{ updated: number; ids: string[] }> {
   const ids = body.ids
   if (!Array.isArray(ids) || ids.length === 0) {
-    return { ok: false as const, status: 400 as const, payload: { error: 'ids must be a non-empty array' } }
+    return serviceFail(400, 'ids must be a non-empty array')
   }
   const taskIds = ids.filter((id): id is string => typeof id === 'string')
   if (taskIds.length === 0) {
-    return { ok: false as const, status: 400 as const, payload: { error: 'No valid task IDs provided' } }
+    return serviceFail(400, 'No valid task IDs provided')
   }
   const tasks = loadTasks()
   let updated = 0
@@ -447,7 +427,7 @@ export function bulkUpdateTasksFromRoute(body: Record<string, unknown>) {
     })
   }
   notify('tasks')
-  return { ok: true as const, payload: { updated, ids: results } }
+  return serviceOk({ updated, ids: results })
 }
 
 export function deleteTasksByFilter(filter: string | null) {

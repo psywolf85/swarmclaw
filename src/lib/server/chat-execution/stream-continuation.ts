@@ -8,7 +8,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { MessageToolEvent } from '@/types'
+import type { Message, MessageToolEvent } from '@/types'
 import { extractSuggestions } from '@/lib/server/suggestions'
 import { isSuccessfulMemoryMutationToolEvent } from '@/lib/server/chat-execution/memory-mutation-tools'
 import type { MessageClassification } from '@/lib/server/chat-execution/message-classifier'
@@ -108,7 +108,7 @@ function looksLikeIncompleteDeliverableResponse(text: string): boolean {
 }
 
 function hasRecentDeliverableContext(
-  history: Array<{ role?: string; text?: string }> | undefined,
+  history: Message[] | undefined,
   userMessage: string,
 ): boolean {
   if (!Array.isArray(history) || history.length === 0) return false
@@ -116,7 +116,7 @@ function hasRecentDeliverableContext(
   if (!trimmed || trimmed.length > 160) return false
   return history
     .slice(-8)
-    .some((entry) => entry.role === 'user' && looksLikeOpenEndedDeliverableTask((entry.text || '').trim()))
+    .some((entry) => entry.role === 'user' && entry.semantics?.isDeliverableTask === true)
 }
 
 const ARTIFACT_PATH_EXT_RE = /\.(?:md|txt|html?|json|csv|ya?ml|xml|pdf|png|jpe?g|webp|gif|svg|zip|ts|tsx|js|jsx|mjs|cjs|py|sql|sh)$/i
@@ -245,7 +245,7 @@ export function shouldForceExternalExecutionFollowthrough(params: {
   toolEvents: MessageToolEvent[]
   classification?: MessageClassification | null
 }): boolean {
-  const isTransactional = params.classification ? params.classification.walletIntent === 'transactional' : looksLikeBoundedExternalExecutionTask(params.userMessage)
+  const isTransactional = params.classification?.walletIntent === 'transactional'
   if (!isTransactional) return false
   if (!params.hasToolCalls || params.toolEvents.length < 4) return false
   if (hasStateChangingWalletEvidence(params.toolEvents)) return false
@@ -266,7 +266,7 @@ export function shouldForceExternalExecutionKickoffFollowthrough(params: {
   toolEvents: MessageToolEvent[]
   classification?: MessageClassification | null
 }): boolean {
-  const isTransactional = params.classification ? params.classification.walletIntent === 'transactional' : looksLikeBoundedExternalExecutionTask(params.userMessage)
+  const isTransactional = params.classification?.walletIntent === 'transactional'
   if (!isTransactional) return false
   if (params.hasToolCalls || params.toolEvents.length > 0) return false
 
@@ -289,11 +289,11 @@ export function shouldForceDeliverableFollowthrough(params: {
   hasToolCalls: boolean
   toolEvents: MessageToolEvent[]
   cwd?: string
-  history?: Array<{ role?: string; text?: string }>
+  history?: Message[]
   classification?: MessageClassification | null
 }): boolean {
   const recentDeliverableContext = hasRecentDeliverableContext(params.history, params.userMessage)
-  const isDeliverable = params.classification ? params.classification.isDeliverableTask : looksLikeOpenEndedDeliverableTask(params.userMessage)
+  const isDeliverable = params.classification?.isDeliverableTask === true
   const deliverableIntent = isDeliverable || recentDeliverableContext
   const requestedArtifacts = getRequestedArtifactStatus({
     userMessage: params.userMessage,
@@ -744,6 +744,9 @@ export function buildContinuationPrompt(params: {
   cwd?: string
   frequencyLimitedToolName?: string
   sessionExtensions?: string[]
+  isCoordinatorAgent?: boolean
+  recommendedDelegateName?: string | null
+  delegationRationale?: string | null
 }): string | null {
   switch (params.type) {
     case 'memory_write_followthrough':
@@ -819,12 +822,24 @@ export function buildContinuationPrompt(params: {
       ].filter(Boolean).join('\n')
 
     case 'coordinator_delegation_nudge':
-      return [
-        'IMPORTANT: You have specialist workers available but you have been doing substantial work directly with tools.',
-        'You MUST delegate the remaining work via `spawn_subagent` to the appropriate specialist worker NOW.',
-        'As a coordinator, your job is to orchestrate — not to do the work yourself. Direct tool use is only for quick lookups and validation.',
-        'Review the workers listed in your system prompt and delegate immediately.',
-      ].join('\n')
+      return params.isCoordinatorAgent
+        ? [
+            'IMPORTANT: You have specialist workers available but you have been doing substantial work directly with tools.',
+            params.recommendedDelegateName
+              ? `Delegate the remaining execution via \`spawn_subagent\` to ${params.recommendedDelegateName} now.`
+              : 'You MUST delegate the remaining work via `spawn_subagent` to the appropriate specialist worker NOW.',
+            'As a coordinator, your job is to orchestrate — not to do the work yourself. Direct tool use is only for quick lookups and validation.',
+            params.delegationRationale ? `Reason: ${params.delegationRationale}.` : '',
+            'Review the workers listed in your system prompt and delegate immediately.',
+          ].filter(Boolean).join('\n')
+        : [
+            'You have delegation available and a teammate is a materially better fit for the remaining work.',
+            params.recommendedDelegateName
+              ? `Use \`spawn_subagent\` to hand the execution to ${params.recommendedDelegateName} now.`
+              : 'Use `spawn_subagent` to hand the execution to the best-fit teammate now.',
+            params.delegationRationale ? `Reason: ${params.delegationRationale}.` : '',
+            'Keep your direct tool use to reconnaissance, validation, or synthesis unless delegation is blocked.',
+          ].filter(Boolean).join('\n')
 
     case 'loop_recovery': {
       const freqTool = params.frequencyLimitedToolName

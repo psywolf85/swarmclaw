@@ -2,10 +2,6 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAppStore } from '@/stores/use-app-store'
-import { useChatroomStore } from '@/stores/use-chatroom-store'
-import { useWs } from '@/hooks/use-ws'
-import { useMountedRef } from '@/hooks/use-mounted-ref'
-import { api } from '@/lib/app/api-client'
 import type { Connector } from '@/types'
 import {
   ConnectorPlatformIcon,
@@ -16,6 +12,9 @@ import {
 import { AgentAvatar } from '@/components/agents/agent-avatar'
 import { PageLoader } from '@/components/ui/page-loader'
 import { StatusDot } from '@/components/ui/status-dot'
+import { useConnectorsQuery, useConnectorActionMutation } from '@/features/connectors/queries'
+import { useAgentsQuery } from '@/features/agents/queries'
+import { useChatroomsQuery } from '@/features/chatrooms/queries'
 
 function relativeTime(ts: number): string {
   const diff = Date.now() - ts
@@ -45,32 +44,23 @@ function getConnectorGroup(connector: Connector): ConnectorGroup {
 }
 
 export function ConnectorList({ inSidebar }: { inSidebar?: boolean }) {
-  const connectors = useAppStore((s) => s.connectors)
-  const loadConnectors = useAppStore((s) => s.loadConnectors)
   const setConnectorSheetOpen = useAppStore((s) => s.setConnectorSheetOpen)
   const setEditingConnectorId = useAppStore((s) => s.setEditingConnectorId)
-  const agents = useAppStore((s) => s.agents)
-  const loadAgents = useAppStore((s) => s.loadAgents)
-  const chatrooms = useChatroomStore((s) => s.chatrooms)
-  const loadChatrooms = useChatroomStore((s) => s.loadChatrooms)
+  const connectorsQuery = useConnectorsQuery()
+  const agentsQuery = useAgentsQuery()
+  const chatroomsQuery = useChatroomsQuery()
+  const connectorActionMutation = useConnectorActionMutation()
+  const connectors = useMemo(() => connectorsQuery.data ?? {}, [connectorsQuery.data])
+  const agents = agentsQuery.data ?? {}
+  const chatrooms = chatroomsQuery.data ?? {}
   const [toggling, setToggling] = useState<string | null>(null)
   const [reconnecting, setReconnecting] = useState<string | null>(null)
-  const [loaded, setLoaded] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [groupFilter, setGroupFilter] = useState<'all' | ConnectorGroup>('all')
-  const mountedRef = useMountedRef()
   const openConnector = useCallback((id: string | null) => {
     setEditingConnectorId(id)
     setConnectorSheetOpen(true)
   }, [setEditingConnectorId, setConnectorSheetOpen])
-
-  const refresh = useCallback(async () => {
-    await Promise.all([loadConnectors(), loadAgents(), loadChatrooms()])
-    if (mountedRef.current) setLoaded(true)
-  }, [loadConnectors, loadAgents, loadChatrooms, mountedRef])
-
-  useEffect(() => { void refresh() }, [refresh])
-  useWs('connectors', loadConnectors, 15_000)
 
   // Auto-clear error after 5s
   useEffect(() => {
@@ -80,38 +70,34 @@ export function ConnectorList({ inSidebar }: { inSidebar?: boolean }) {
   const handleToggle = async (e: React.MouseEvent, c: Connector) => {
     e.stopPropagation()
     const action = c.status === 'running' ? 'stop' : 'start'
-    if (mountedRef.current) {
-      setToggling(c.id)
-      setError(null)
-    }
+    setToggling(c.id)
+    setError(null)
     try {
-      await api('PUT', `/connectors/${c.id}`, { action })
-      await refresh()
+      await connectorActionMutation.mutateAsync({ id: c.id, action })
     } catch (err: unknown) {
       const msg = err instanceof Error && err.message ? err.message : `Failed to ${action}`
-      if (mountedRef.current) setError(msg)
-      await refresh()
+      setError(msg)
     } finally {
-      if (mountedRef.current) setToggling(null)
+      setToggling(null)
     }
   }
 
   const handleReconnect = async (e: React.MouseEvent, c: Connector) => {
     e.stopPropagation()
-    if (mountedRef.current) {
-      setReconnecting(c.id)
-      setError(null)
-    }
+    setReconnecting(c.id)
+    setError(null)
     try {
-      try { await api('PUT', `/connectors/${c.id}`, { action: 'stop' }) } catch { /* may already be stopped */ }
-      await api('PUT', `/connectors/${c.id}`, { action: 'start' })
-      await refresh()
+      try {
+        await connectorActionMutation.mutateAsync({ id: c.id, action: 'stop' })
+      } catch {
+        // Connector may already be stopped.
+      }
+      await connectorActionMutation.mutateAsync({ id: c.id, action: 'start' })
     } catch (err: unknown) {
       const msg = err instanceof Error && err.message ? err.message : 'Failed to reconnect'
-      if (mountedRef.current) setError(msg)
-      await refresh()
+      setError(msg)
     } finally {
-      if (mountedRef.current) setReconnecting(null)
+      setReconnecting(null)
     }
   }
 
@@ -158,7 +144,7 @@ export function ConnectorList({ inSidebar }: { inSidebar?: boolean }) {
     },
   }
 
-  if (!loaded) {
+  if (connectorsQuery.isPending || agentsQuery.isPending || chatroomsQuery.isPending) {
     return <PageLoader label="Loading connectors..." />
   }
 

@@ -52,7 +52,7 @@ export function readDaemonAdminMetadata(): DaemonAdminMetadata | null {
 
 export function writeDaemonAdminMetadata(metadata: DaemonAdminMetadata): void {
   fs.mkdirSync(path.dirname(DAEMON_ADMIN_METADATA_PATH), { recursive: true })
-  fs.writeFileSync(DAEMON_ADMIN_METADATA_PATH, `${JSON.stringify(metadata, null, 2)}\n`, 'utf8')
+  fs.writeFileSync(DAEMON_ADMIN_METADATA_PATH, `${JSON.stringify(metadata, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 })
 }
 
 export function clearDaemonAdminMetadata(): void {

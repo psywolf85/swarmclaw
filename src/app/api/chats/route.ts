@@ -41,6 +41,6 @@ export async function POST(req: Request) {
   await ensureDaemonProcessRunning('api/chats:post')
   const body = await req.json().catch(() => ({}))
   const result = createChatSession(body as Record<string, unknown>)
-  if (!result.session) return NextResponse.json({ error: result.error }, { status: result.status })
-  return NextResponse.json(result.session, { status: result.status })
+  if (!result.ok) return NextResponse.json(result.payload, { status: result.status })
+  return NextResponse.json(result.payload)
 }
