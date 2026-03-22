@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/shared-utils'
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { execFile } from 'child_process'
@@ -91,8 +92,8 @@ async function executeWorkspaceAction(args: any) {
     }
 
     return `Unknown action "${action}".`
-  } catch (err: any) {
-    return JSON.stringify({ ok: false, error: err.stderr || err.message })
+  } catch (err: unknown) {
+    return JSON.stringify({ ok: false, error: (err instanceof Error && 'stderr' in err) ? (err as { stderr: string }).stderr : errorMessage(err) })
   }
 }
 

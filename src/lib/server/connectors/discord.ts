@@ -217,8 +217,8 @@ const discord: PlatformConnector = {
             return String(sent.id || '')
           },
         })
-      } catch (err: any) {
-        log.error(TAG, 'Error handling message:', err.message)
+      } catch (err: unknown) {
+        log.error(TAG, 'Error handling message:', errorMessage(err))
         try {
           await message.reply('Sorry, I encountered an error processing your message.')
         } catch { /* ignore */ }

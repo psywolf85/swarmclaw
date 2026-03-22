@@ -127,8 +127,8 @@ const telegram: PlatformConnector = {
             mimeType: m.mimeType,
           })
           if (stored) media.push(stored)
-        } catch (err: any) {
-          log.warn(TAG, `Failed to fetch media ${m.fileId}:`, err?.message || String(err))
+        } catch (err: unknown) {
+          log.warn(TAG, `Failed to fetch media ${m.fileId}:`, errorMessage(err))
           media.push({
             type: m.type,
             fileName: m.fileName,
@@ -177,8 +177,8 @@ const telegram: PlatformConnector = {
             return String(sent.message_id)
           },
         })
-      } catch (err: any) {
-        log.error(TAG, 'Error handling message:', err.message)
+      } catch (err: unknown) {
+        log.error(TAG, 'Error handling message:', errorMessage(err))
         try {
           await ctx.reply('Sorry, I encountered an error processing your message.')
         } catch { /* ignore */ }

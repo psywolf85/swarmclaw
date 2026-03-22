@@ -1,0 +1,349 @@
+import type { ProviderId, ProviderType, OllamaMode } from './provider'
+import type { SessionResetMode, IdentityContinuityState } from './session'
+import type { SkillAllowlistMode } from './skill'
+
+// --- Agent / Delegation ---
+
+export type AgentRole = 'worker' | 'coordinator'
+export type DelegationTargetMode = 'all' | 'selected'
+
+export interface AgentOrgChart {
+  parentId?: string | null
+  teamLabel?: string | null
+  teamColor?: string | null
+  x?: number | null
+  y?: number | null
+}
+
+export interface Agent {
+  id: string
+  name: string
+  openclawAgentId?: string | null
+  description: string
+  soul?: string
+  identityState?: IdentityContinuityState | null
+  emoji?: string
+  creature?: string
+  vibe?: string
+  theme?: string
+  avatar?: string
+  systemPrompt: string
+  provider: ProviderId
+  model: string
+  ollamaMode?: OllamaMode | null
+  credentialId?: string | null
+  fallbackCredentialIds?: string[]
+  apiEndpoint?: string | null
+  gatewayProfileId?: string | null
+  preferredGatewayTags?: string[]
+  preferredGatewayUseCase?: string | null
+  routingStrategy?: AgentRoutingStrategy | null
+  routingTargets?: AgentRoutingTarget[]
+  role?: AgentRole                // default 'worker' — coordinators get enhanced delegation prompts
+  delegationEnabled?: boolean
+  delegationTargetMode?: DelegationTargetMode
+  delegationTargetAgentIds?: string[]
+  tools?: string[]
+  extensions?: string[]
+  skills?: string[]             // e.g. ['frontend-design'] — pinned Claude Code skills to mention explicitly
+  skillIds?: string[]           // IDs of pinned managed skills to keep always-on for this agent
+  mcpServerIds?: string[]       // IDs of configured MCP servers to inject tools from
+  mcpDisabledTools?: string[]   // MCP tool names disabled for this agent (denylist)
+  orgChart?: AgentOrgChart | null
+  capabilities?: string[]       // e.g. ['frontend', 'screenshots', 'research', 'devops']
+  threadSessionId?: string | null  // persistent shortcut chat session for agent-centric UI
+  heartbeatEnabled?: boolean
+  heartbeatIntervalSec?: number | null
+  heartbeatInterval?: string | number | null
+  heartbeatPrompt?: string | null
+  heartbeatModel?: string | null
+  heartbeatAckMaxChars?: number | null
+  heartbeatShowOk?: boolean | null
+  heartbeatShowAlerts?: boolean | null
+  heartbeatTarget?: 'last' | 'none' | string | null
+  heartbeatGoal?: string | null
+  heartbeatNextAction?: string | null
+  heartbeatLightContext?: boolean | null
+  sessionResetMode?: SessionResetMode | null
+  sessionIdleTimeoutSec?: number | null
+  sessionMaxAgeSec?: number | null
+  sessionDailyResetAt?: string | null
+  sessionResetTimezone?: string | null
+  thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high'
+  memoryScopeMode?: 'auto' | 'all' | 'global' | 'agent' | 'session' | 'project' | null
+  memoryTierPreference?: 'working' | 'durable' | 'archive' | 'blended' | null
+  elevenLabsVoiceId?: string | null
+  projectId?: string
+  avatarSeed?: string
+  avatarUrl?: string | null
+  pinned?: boolean
+  lastUsedAt?: number
+  totalCost?: number
+  disabled?: boolean
+  trashedAt?: number
+  openclawSkillMode?: SkillAllowlistMode
+  openclawAllowedSkills?: string[]
+  walletIds?: string[]
+  activeWalletId?: string | null
+  /** @deprecated Use walletIds + activeWalletId */
+  walletId?: string | null
+  responseStyle?: 'concise' | 'normal' | 'detailed' | null
+  responseMaxChars?: number | null
+  monthlyBudget?: number | null
+  dailyBudget?: number | null
+  hourlyBudget?: number | null
+  autoRecovery?: boolean
+  proactiveMemory?: boolean
+  /** Auto-refresh a reviewed skill draft from meaningful chat turns for this agent. */
+  autoDraftSkillSuggestions?: boolean
+  /** Controls whether file operations are confined to the workspace or allowed anywhere on the host. Default: 'workspace'. */
+  filesystemScope?: 'workspace' | 'machine' | null
+  /** Per-agent filesystem restrictions. Globs matched against resolved paths. */
+  fileAccessPolicy?: {
+    /** If set, only these paths (globs) are writable. Others are blocked. */
+    allowedPaths?: string[]
+    /** These paths (globs) are always blocked even if allowedPaths matches. */
+    blockedPaths?: string[]
+  } | null
+
+  /** Docker container sandbox for shell command execution. */
+  sandboxConfig?: {
+    enabled: boolean
+    mode?: 'off' | 'non-main' | 'all' // default: 'all' when enabled, modeled after OpenClaw
+    scope?: 'session' | 'agent'       // default: 'session'
+    workspaceAccess?: 'ro' | 'rw'     // default: 'rw'
+    image?: string               // default: 'node:22-slim'
+    network?: 'none' | 'bridge'  // default: 'none'
+    memoryMb?: number            // default: 512
+    cpus?: number                // default: 1.0
+    readonlyRoot?: boolean       // default: false
+    workdir?: string             // default: '/workspace'
+    containerPrefix?: string     // default: 'swarmclaw-sb-'
+    pidsLimit?: number           // default: 256
+    setupCommand?: string
+    browser?: {
+      enabled?: boolean
+      image?: string
+      containerPrefix?: string
+      network?: 'none' | 'bridge'
+      cdpPort?: number
+      vncPort?: number
+      noVncPort?: number
+      headless?: boolean
+      enableNoVnc?: boolean
+      mountUploads?: boolean
+      autoStartTimeoutMs?: number
+    } | null
+    prune?: {
+      idleHours?: number
+      maxAgeDays?: number
+    } | null
+  } | null
+
+  /** Configuration for the `execute` tool (just-bash sandbox or host bash). */
+  executeConfig?: {
+    backend?: 'sandbox' | 'host'
+    network?: { enabled: boolean; allowedUrls?: string[] }
+    runtimes?: { python?: boolean; javascript?: boolean; sqlite?: boolean }
+    timeout?: number
+    credentials?: string[]
+  } | null
+
+  budgetAction?: 'warn' | 'block'
+  /** Runtime-enriched: current month's spend. Populated by GET /api/agents when monthlyBudget is set. */
+  monthlySpend?: number
+  /** Runtime-enriched: current day's spend. Populated by GET /api/agents when dailyBudget is set. */
+  dailySpend?: number
+  /** Runtime-enriched: trailing 1-hour spend. Populated by GET /api/agents when hourlyBudget is set. */
+  hourlySpend?: number
+  maxFollowupChain?: number
+
+  // Orchestrator Mode
+  orchestratorEnabled?: boolean
+  orchestratorMission?: string
+  orchestratorWakeInterval?: string | number | null
+  orchestratorGovernance?: 'autonomous' | 'approval-required' | 'notify-only'
+  orchestratorMaxCyclesPerDay?: number | null
+  orchestratorLastWakeAt?: number | null
+  orchestratorCycleCount?: number
+
+  createdAt: number
+  updatedAt: number
+}
+
+// --- Agent Wallets ---
+
+export type WalletChain = 'solana' | 'ethereum'
+
+export interface AgentWallet {
+  id: string
+  agentId: string
+  chain: WalletChain
+  publicKey: string
+  encryptedPrivateKey: string       // AES-256-GCM via encryptKey()
+  label?: string
+  spendingLimitAtomic?: string
+  dailyLimitAtomic?: string
+  /** @deprecated Use spendingLimitAtomic */
+  spendingLimitLamports?: number
+  /** @deprecated Use dailyLimitAtomic */
+  dailyLimitLamports?: number
+  requireApproval: boolean          // default true; can be globally overridden by app settings
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WalletAssetBalance {
+  id: string
+  chain: WalletChain
+  networkId: string
+  networkLabel: string
+  symbol: string
+  name?: string
+  decimals: number
+  balanceAtomic: string
+  balanceFormatted?: string
+  balanceDisplay?: string
+  isNative: boolean
+  contractAddress?: string
+  tokenMint?: string
+  explorerUrl?: string
+}
+
+export interface WalletPortfolioSummary {
+  totalAssets: number
+  nonZeroAssets: number
+  tokenAssets: number
+  networkCount: number
+}
+
+export type WalletTransactionType = 'send' | 'receive' | 'swap'
+export type WalletTransactionStatus = 'pending_approval' | 'pending' | 'confirmed' | 'failed' | 'denied'
+
+export interface WalletTransaction {
+  id: string
+  walletId: string
+  agentId: string
+  chain: WalletChain
+  type: WalletTransactionType
+  signature: string
+  fromAddress: string
+  toAddress: string
+  amountAtomic?: string
+  feeAtomic?: string
+  /** @deprecated Use amountAtomic */
+  amountLamports?: number
+  /** @deprecated Use feeAtomic */
+  feeLamports?: number
+  status: WalletTransactionStatus
+  memo?: string                     // agent's reason for tx
+  approvedBy?: 'user' | 'auto'
+  tokenMint?: string                // null = native chain asset
+  timestamp: number
+}
+
+export interface WalletBalanceSnapshot {
+  id: string
+  walletId: string
+  balanceAtomic?: string
+  /** @deprecated Use balanceAtomic */
+  balanceLamports?: number
+  timestamp: number
+}
+
+export type AgentTool = 'browser'
+
+export interface ClaudeSkill {
+  id: string
+  name: string
+  description: string
+}
+
+// --- Agent Routing / Packs ---
+
+export type AgentRoutingStrategy = 'single' | 'balanced' | 'economy' | 'premium' | 'reasoning'
+export type AgentRoutingTargetRole = 'primary' | 'economy' | 'premium' | 'reasoning' | 'backup'
+
+export interface AgentRoutingTarget {
+  id: string
+  label?: string
+  role?: AgentRoutingTargetRole
+  provider: ProviderId
+  model: string
+  ollamaMode?: OllamaMode | null
+  credentialId?: string | null
+  fallbackCredentialIds?: string[]
+  apiEndpoint?: string | null
+  gatewayProfileId?: string | null
+  preferredGatewayTags?: string[]
+  preferredGatewayUseCase?: string | null
+  priority?: number
+}
+
+export interface AgentPackEntry {
+  id: string
+  name: string
+  description?: string
+  provider: ProviderId
+  model: string
+  ollamaMode?: OllamaMode | null
+  credentialId?: string | null
+  fallbackCredentialIds?: string[]
+  apiEndpoint?: string | null
+  gatewayProfileId?: string | null
+  routingStrategy?: AgentRoutingStrategy | null
+  routingTargets?: AgentRoutingTarget[]
+  tools?: string[]
+  extensions?: string[]
+  capabilities?: string[]
+  elevenLabsVoiceId?: string | null
+  soul?: string
+  systemPrompt?: string
+}
+
+export interface AgentPackManifest {
+  schemaVersion: 1
+  kind: 'swarmclaw-agent-pack'
+  name: string
+  description?: string
+  exportedAt: number
+  recommendedProviders?: ProviderType[]
+  agents: AgentPackEntry[]
+}
+
+// --- External Agents ---
+
+export type ExternalAgentSourceType = 'codex' | 'claude' | 'opencode' | 'openclaw' | 'custom'
+export type ExternalAgentStatus = 'online' | 'idle' | 'offline' | 'stale'
+
+export interface ExternalAgentRuntime {
+  id: string
+  name: string
+  sourceType: ExternalAgentSourceType
+  status: ExternalAgentStatus
+  provider?: ProviderId | null
+  model?: string | null
+  workspace?: string | null
+  transport?: 'http' | 'ws' | 'cli' | 'gateway' | 'custom' | null
+  endpoint?: string | null
+  agentId?: string | null
+  gatewayProfileId?: string | null
+  capabilities?: string[]
+  labels?: string[]
+  lifecycleState?: 'active' | 'draining' | 'cordoned'
+  gatewayTags?: string[]
+  gatewayUseCase?: string | null
+  version?: string | null
+  lastHealthNote?: string | null
+  metadata?: Record<string, unknown> | null
+  tokenStats?: {
+    inputTokens?: number
+    outputTokens?: number
+    totalTokens?: number
+  } | null
+  lastHeartbeatAt?: number | null
+  lastSeenAt?: number | null
+  createdAt: number
+  updatedAt: number
+}
+

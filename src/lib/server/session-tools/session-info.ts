@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/shared-utils'
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import { genId } from '@/lib/id'
@@ -38,7 +39,7 @@ async function executeWhoAmI(context: { sessionId?: string; agentId?: string }) 
       toolPolicy,
       rootSessionId,
     }))
-  } catch (err: any) { return `Error: ${err.message}` }
+  } catch (err: unknown) { return `Error: ${errorMessage(err)}` }
 }
 
 function normalizeRuntimeExtensionId(extensionId: string): string {
@@ -226,7 +227,7 @@ async function executeSessionsAction(args: any, context: { sessionId?: string; a
       return JSON.stringify({ sessionId: targetId, updated: Object.keys(patch).filter((key) => allowedKeys.has(key)) })
     }
     return `Unknown action "${action}".`
-  } catch (err: any) { return `Error: ${err.message}` }
+  } catch (err: unknown) { return `Error: ${errorMessage(err)}` }
 }
 
 /**

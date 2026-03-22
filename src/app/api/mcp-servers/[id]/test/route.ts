@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { loadMcpServers } from '@/lib/server/storage'
 import { notFound } from '@/lib/server/collection-helpers'
 import { connectMcpServer, mcpToolsToLangChain, disconnectMcpServer } from '@/lib/server/mcp-client'
+import { errorMessage } from '@/lib/shared-utils'
 
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -15,9 +16,9 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     const toolNames = tools.map((t: any) => t.name)
     await disconnectMcpServer(client, transport)
     return NextResponse.json({ ok: true, tools: toolNames })
-  } catch (err: any) {
+  } catch (err: unknown) {
     return NextResponse.json(
-      { ok: false, error: err.message || 'Connection failed' },
+      { ok: false, error: errorMessage(err) || 'Connection failed' },
       { status: 500 }
     )
   }

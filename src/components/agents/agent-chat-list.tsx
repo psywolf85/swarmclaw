@@ -193,9 +193,11 @@ export function AgentChatList({ inSidebar, onSelect }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filteredAgents.map((a) => a.id).join(',')])
 
+  const [enableAgentTarget, setEnableAgentTarget] = useState<Agent | null>(null)
+
   const handleSelect = async (agent: Agent) => {
     if (agent.disabled === true && !agent.threadSessionId) {
-      toast.error(`${agent.name} is disabled. Re-enable it to start a new chat.`)
+      setEnableAgentTarget(agent)
       return
     }
     navigateTo('agents', agent.id)
@@ -546,6 +548,26 @@ export function AgentChatList({ inSidebar, onSelect }: Props) {
         danger
         onConfirm={() => { setConfirmBulkDelete(false); handleBulkDelete() }}
         onCancel={() => setConfirmBulkDelete(false)}
+      />
+      <ConfirmDialog
+        open={!!enableAgentTarget}
+        title={`Enable ${enableAgentTarget?.name ?? 'Agent'}?`}
+        message={`${enableAgentTarget?.name ?? 'This agent'} is currently disabled. Enable it to start a new chat.`}
+        confirmLabel="Enable"
+        onConfirm={async () => {
+          if (!enableAgentTarget) return
+          try {
+            await api('PUT', `/agents/${enableAgentTarget.id}`, { disabled: false })
+            await loadAgents()
+            const agent = enableAgentTarget
+            setEnableAgentTarget(null)
+            handleSelect(agent)
+          } catch {
+            toast.error('Failed to enable agent')
+            setEnableAgentTarget(null)
+          }
+        }}
+        onCancel={() => setEnableAgentTarget(null)}
       />
     </div>
   )

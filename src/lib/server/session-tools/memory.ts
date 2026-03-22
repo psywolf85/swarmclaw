@@ -684,7 +684,7 @@ export async function executeMemoryAction(input: unknown, ctx: MemoryActionConte
 /**
  * Register as a Built-in Extension
  */
-const MemoryExtension: Extension = {
+export const MemoryExtension: Extension = {
   name: 'Core Memory',
   description: 'Advanced database-backed long-term memory with semantic search and graph linking.',
   hooks: {

@@ -1,0 +1,27 @@
+// --- Approvals ---
+
+export type ApprovalCategory =
+  | 'tool_access'
+  | 'wallet_transfer'
+  | 'wallet_action'
+  | 'extension_scaffold'
+  | 'extension_install'
+  | 'task_tool'
+  | 'human_loop'
+  | 'connector_sender'
+
+export interface ApprovalRequest {
+  id: string
+  category: ApprovalCategory
+  agentId?: string | null
+  sessionId?: string | null
+  taskId?: string | null
+  title: string
+  description?: string
+  data: Record<string, unknown>
+  createdAt: number
+  updatedAt: number
+  status: 'pending' | 'approved' | 'rejected'
+}
+
+export type Approvals = Record<string, ApprovalRequest>

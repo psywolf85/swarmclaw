@@ -112,7 +112,7 @@ export function shouldTerminateOnSuccessfulMemoryMutation(params: {
     : exactToolName === 'memory_update'
       ? 'update'
       : resolveToolAction(params.toolInput)
-  if (action !== 'store' && action !== 'update') return false
+  if (action !== 'store' && action !== 'update' && action !== 'write') return false
   const output = extractSuggestions(params.toolOutput || '').clean.trim()
   if (!output || /^error[:\s]/i.test(output)) return false
   if (!/^(stored|updated) memory\b/i.test(output)) return false

@@ -1,6 +1,7 @@
 import { log } from '@/lib/server/logger'
 import type { PlatformConnector, ConnectorInstance, InboundMessage } from './types'
 import { resolveConnectorIngressReply } from './ingress-delivery'
+import { errorMessage } from '@/lib/shared-utils'
 
 const TAG = 'teams'
 
@@ -51,8 +52,8 @@ const teams: PlatformConnector = {
           const reply = await resolveConnectorIngressReply(onMessage, inbound)
           if (!reply) return
           await context.sendActivity(reply.visibleText)
-        } catch (err: any) {
-          log.error(TAG, 'Error handling message:', err.message)
+        } catch (err: unknown) {
+          log.error(TAG, 'Error handling message:', errorMessage(err))
           try {
             await context.sendActivity('Sorry, I encountered an error processing your message.')
           } catch { /* ignore */ }

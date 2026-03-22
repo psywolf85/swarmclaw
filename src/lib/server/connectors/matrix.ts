@@ -4,6 +4,7 @@ import path from 'path'
 import { DATA_DIR } from '../data-dir'
 import type { PlatformConnector, ConnectorInstance, InboundMessage } from './types'
 import { resolveConnectorIngressReply } from './ingress-delivery'
+import { errorMessage } from '@/lib/shared-utils'
 
 const TAG = 'matrix'
 
@@ -54,8 +55,8 @@ const matrix: PlatformConnector = {
         const reply = await resolveConnectorIngressReply(onMessage, inbound)
         if (!reply) return
         await client.sendText(roomId, reply.visibleText)
-      } catch (err: any) {
-        log.error(TAG, 'Error handling message:', err.message)
+      } catch (err: unknown) {
+        log.error(TAG, 'Error handling message:', errorMessage(err))
         try {
           await client.sendText(roomId, 'Sorry, I encountered an error processing your message.')
         } catch { /* ignore */ }

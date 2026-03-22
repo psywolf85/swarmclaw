@@ -48,7 +48,7 @@ import {
 import type { ToolBuildContext } from './context'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import type { BoardTask } from '@/types'
-import { dedup } from '@/lib/shared-utils'
+import { dedup, errorMessage } from '@/lib/shared-utils'
 import { isDirectConnectorSession } from '../connectors/session-kind'
 import { buildManageSkillsDescription, executeManageSkillsAction } from './skills'
 import { isMainSession } from '@/lib/server/agents/main-agent-loop'
@@ -1149,8 +1149,8 @@ export function buildCrudTools(bctx: ToolBuildContext): StructuredToolInterface[
               return JSON.stringify({ ok: true, taskId: id, claimedByAgentId: ctx?.agentId })
             }
             return `Unknown action "${action}". Valid: list, get, create, update, delete, claim_task`
-          } catch (err: any) {
-            return `Error: ${err.message}`
+          } catch (err: unknown) {
+            return `Error: ${errorMessage(err)}`
           }
         },
         {

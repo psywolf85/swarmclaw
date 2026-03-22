@@ -1,5 +1,5 @@
 import { genId } from '@/lib/id'
-import { hmrSingleton, sleep } from '@/lib/shared-utils'
+import { hmrSingleton, sleep, errorMessage } from '@/lib/shared-utils'
 import { spawn, type ChildProcessWithoutNullStreams } from 'child_process'
 import { detectDocker } from '@/lib/server/sandbox/docker-detect'
 import { log } from '@/lib/server/logger'
@@ -405,8 +405,8 @@ export function writeManagedProcessStdin(processId: string, data: string, eof?: 
     if (data) child.stdin.write(data)
     if (eof) child.stdin.end()
     return { ok: true }
-  } catch (err: any) {
-    return { ok: false, error: err.message || String(err) }
+  } catch (err: unknown) {
+    return { ok: false, error: errorMessage(err) || String(err) }
   }
 }
 
@@ -418,8 +418,8 @@ export function killManagedProcess(processId: string, signal: NodeJS.Signals = '
     rec.status = 'killed'
     child.kill(signal)
     return { ok: true }
-  } catch (err: any) {
-    return { ok: false, error: err.message || String(err) }
+  } catch (err: unknown) {
+    return { ok: false, error: errorMessage(err) || String(err) }
   }
 }
 

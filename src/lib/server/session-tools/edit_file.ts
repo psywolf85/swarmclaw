@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/shared-utils'
 import { z } from 'zod'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
 import fs from 'fs'
@@ -32,8 +33,8 @@ async function executeEditFile(args: { filePath: string; oldString: string; newS
     const updated = content.replace(oldString, newString)
     fs.writeFileSync(resolved, updated, 'utf-8')
     return `Successfully updated ${filePath} (1 replacement made).`
-  } catch (err: any) {
-    return `Error: ${err.message}`
+  } catch (err: unknown) {
+    return `Error: ${errorMessage(err)}`
   }
 }
 

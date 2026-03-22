@@ -714,8 +714,8 @@ const whatsapp: PlatformConnector = {
                 fileName: mediaCandidate.payload?.fileName || undefined,
               })
               media.push(saved)
-            } catch (err: any) {
-              log.error(TAG, `Failed to decode media: ${err?.message || String(err)}`)
+            } catch (err: unknown) {
+              log.error(TAG, `Failed to decode media: ${errorMessage(err)}`)
               media.push({
                 type: mediaCandidate.kind,
                 fileName: mediaCandidate.payload?.fileName || undefined,

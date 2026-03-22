@@ -145,11 +145,12 @@ const slack: PlatformConnector = {
       }
       botUserId = auth.user_id as string
       log.info(TAG, `Authenticated as @${auth.user} in workspace "${auth.team}"`)
-    } catch (err: any) {
-      const hint = err.code === 'slack_webapi_platform_error'
+    } catch (err: unknown) {
+      const hint = (err instanceof Error && 'code' in err) ? (err as { code: string }).code : undefined
+      const suffix = hint === 'slack_webapi_platform_error'
         ? '. Check that your Bot Token (xoxb-...) is correct and the app is installed to the workspace.'
         : ''
-      throw new Error(`Slack auth failed: ${err.message}${hint}`)
+      throw new Error(`Slack auth failed: ${errorMessage(err)}${suffix}`)
     }
 
     const app = new App({
@@ -215,8 +216,8 @@ const slack: PlatformConnector = {
                 media.push(stored)
                 continue
               }
-            } catch (err: any) {
-              log.warn(TAG, `Media download failed (${f?.name || 'file'}):`, err?.message || String(err))
+            } catch (err: unknown) {
+              log.warn(TAG, `Media download failed (${f?.name || 'file'}):`, errorMessage(err))
             }
           }
           media.push({
@@ -264,8 +265,8 @@ const slack: PlatformConnector = {
             return sent.ts || undefined
           },
         })
-      } catch (err: any) {
-        log.error(TAG, 'Error handling message:', err.message)
+      } catch (err: unknown) {
+        log.error(TAG, 'Error handling message:', errorMessage(err))
         try {
           await say('Sorry, I encountered an error processing your message.')
         } catch { /* ignore */ }
@@ -322,8 +323,8 @@ const slack: PlatformConnector = {
             return sent.ts || undefined
           },
         })
-      } catch (err: any) {
-        log.error(TAG, 'Error handling mention:', err.message)
+      } catch (err: unknown) {
+        log.error(TAG, 'Error handling mention:', errorMessage(err))
       }
     })
 

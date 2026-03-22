@@ -41,6 +41,11 @@ import { buildSkillRuntimeTools } from './skill-runtime'
 import { buildConnectorTools } from './connector'
 import { buildPeerQueryTools } from './peer-query'
 import { buildTeamContextTools } from './team-context'
+import { buildExecuteTools } from './execute'
+import { buildSkillsTools } from './skills-tool'
+import { buildFilesTools } from './files-tool'
+import { buildMemoryTool } from './memory-tool'
+import { buildPlatformV2Tools } from './platform-tool'
 import './connector'
 import { normalizeToolInputArgs } from './normalize-tool-args'
 import { enforceFileAccessPolicy } from './file-access-policy'
@@ -202,6 +207,11 @@ export async function buildSessionTools(cwd: string, enabledExtensions: string[]
       ['ask_human', buildHumanLoopTools],
       ['peer_query', buildPeerQueryTools],
       ['team_context', buildTeamContextTools],
+      ['execute', buildExecuteTools],
+      ['skills', buildSkillsTools],
+      ['files_v2', buildFilesTools],
+      ['memory_v2', buildMemoryTool],
+      ['platform_v2', buildPlatformV2Tools],
     ]
 
     for (const [extensionId, builder] of nativeBuilders) {
@@ -288,8 +298,8 @@ export async function buildSessionTools(cwd: string, enabledExtensions: string[]
               tools.push(t)
             }
           }
-        } catch (err: any) {
-          log.warn('session-tools', `Failed to connect MCP server "${config.name}"`, { serverId, error: err.message })
+        } catch (err: unknown) {
+          log.warn('session-tools', `Failed to connect MCP server "${config.name}"`, { serverId, error: errorMessage(err) })
         }
       }
       cleanupFns.push(async () => {
@@ -456,8 +466,8 @@ export async function buildSessionTools(cwd: string, enabledExtensions: string[]
       toolToExtensionMap,
       abortSignalRef,
     }
-  } catch (err: any) {
-    log.error(TAG, 'buildSessionTools critical failure:', err.message)
+  } catch (err: unknown) {
+    log.error(TAG, 'buildSessionTools critical failure:', errorMessage(err))
     throw err
   }
 }

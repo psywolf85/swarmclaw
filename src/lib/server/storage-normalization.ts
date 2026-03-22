@@ -484,6 +484,8 @@ function normalizeStoredRecordInner(
     delete agent.platformAssignScope
     delete agent.subAgentIds
     agent.sandboxConfig = normalizeAgentSandboxConfig(agent.sandboxConfig)
+    // Default executeConfig — null means not configured (falls back to defaults in execute.ts)
+    if (agent.executeConfig === undefined) agent.executeConfig = null
     // Default proactiveMemory to true for existing agents
     if (agent.proactiveMemory === undefined) agent.proactiveMemory = true
     if (!Array.isArray(agent.capabilities)) agent.capabilities = []

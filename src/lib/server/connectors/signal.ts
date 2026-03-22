@@ -4,6 +4,7 @@ import type { ChildProcess } from 'child_process'
 import type { Connector } from '@/types'
 import type { PlatformConnector, ConnectorInstance, InboundMessage, ConnectorIngressResult } from './types'
 import { resolveConnectorIngressReply } from './ingress-delivery'
+import { errorMessage } from '@/lib/shared-utils'
 
 const TAG = 'signal'
 
@@ -107,8 +108,8 @@ const signal: PlatformConnector = {
               `${cliPath} -u ${phoneNumber} send -m ${JSON.stringify(text)} ${channelId}`,
               { timeout: 15_000 },
             )
-          } catch (err: any) {
-            throw new Error(`Signal send failed: ${err.message}`)
+          } catch (err: unknown) {
+            throw new Error(`Signal send failed: ${errorMessage(err)}`)
           }
         }
       },
@@ -179,8 +180,8 @@ export async function handleSignalEvent(
         { timeout: 15_000 },
       )
     }
-  } catch (err: any) {
-    log.error(TAG, 'Error handling message:', err.message)
+  } catch (err: unknown) {
+    log.error(TAG, 'Error handling message:', errorMessage(err))
   }
 }
 

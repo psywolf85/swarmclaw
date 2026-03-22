@@ -1,3 +1,4 @@
+import { errorMessage } from '@/lib/shared-utils'
 import { z } from 'zod'
 import { randomUUID } from 'crypto'
 import { tool, type StructuredToolInterface } from '@langchain/core/tools'
@@ -103,8 +104,8 @@ export async function executeNodesAction(args: any, deps: OpenClawNodesDeps = {}
     }
 
     return JSON.stringify({ status: 'error', error: `Unknown nodes action "${action}".` })
-  } catch (err: any) {
-    return JSON.stringify({ error: err.message })
+  } catch (err: unknown) {
+    return JSON.stringify({ error: errorMessage(err) })
   }
 }
 
