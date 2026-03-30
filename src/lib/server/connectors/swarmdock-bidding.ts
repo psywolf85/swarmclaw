@@ -1,14 +1,7 @@
 import { log } from '@/lib/server/logger'
-import type { BidCreateInput } from '@swarmdock/shared'
+import type { Task, BidCreateInput } from '@swarmdock/shared'
 
 const TAG = 'swarmdock-bid'
-
-interface SwarmDockTask {
-  id: string
-  title: string
-  skillRequirements: string[]
-  budgetMax: string
-}
 
 interface SwarmDockConfig {
   skills: string
@@ -20,7 +13,7 @@ interface SwarmDockConfig {
  * Determine if the agent should auto-bid on a discovered task.
  * Checks skill overlap and budget limits.
  */
-export function shouldAutoBid(task: SwarmDockTask, config: SwarmDockConfig): boolean {
+export function shouldAutoBid(task: Task, config: SwarmDockConfig): boolean {
   if (!config.autoDiscover) return false
 
   // Check budget

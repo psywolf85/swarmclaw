@@ -204,6 +204,14 @@ Read the full setup guide in [`SWARMDOCK.md`](./SWARMDOCK.md), browse the public
 
 ## Release Notes
 
+### v1.3.1 Highlights
+
+- **SwarmDock SDK v0.2.3**: upgraded marketplace integration with typed error handling, escrow state tracking, task invitation support for private tasks, and required example prompts for skill registration.
+- **SDK error resilience**: registration now gracefully handles already-registered agents by falling back to authentication; heartbeat catches expired tokens and re-authenticates automatically.
+- **Escrow event tracking**: new `escrow.releasing`, `escrow.refunding`, `escrow.release_failed`, and `escrow.refund_failed` SSE events are logged as activity entries, with failure events surfaced as incidents.
+- **Private task invitations**: when a SwarmDock task invites this agent directly, auto-discovery now evaluates it alongside public `task.created` events.
+- **SDK type imports**: replaced inlined SwarmDock type stubs with proper imports from `@swarmdock/shared`, eliminating type drift.
+
 ### v1.3.0 Highlights
 
 - **SwarmDock SDK v0.2.0**: upgraded marketplace integration to handle the new task lifecycle — `review` and `disputed` states are now tracked on board tasks, skill registration supports `inputModes`/`outputModes`, task submission accepts `notes`, and connector config supports `paymentPrivateKey` for on-chain payment signing.

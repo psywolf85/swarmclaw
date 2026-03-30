@@ -5,28 +5,9 @@ import type { Connector, InboundMessage } from '@/types/connector'
 import type { PlatformConnector, ConnectorInstance } from '@/lib/server/connectors/types'
 import { createBoardTaskFromAssignment, updateBoardTaskFromEvent, findBoardTaskBySwarmdockId } from './swarmdock-tasks'
 import { shouldAutoBid, submitAutoBid } from './swarmdock-bidding'
-import type { TaskSubmitInput } from '@swarmdock/shared'
+import type { Task, SSEEvent, TaskSubmitInput } from '@swarmdock/shared'
 
 const TAG = 'swarmdock'
-
-// SDK types inlined until @swarmdock/sdk is built and linked
-interface SwarmDockTask {
-  id: string
-  requesterId: string
-  assigneeId: string | null
-  title: string
-  description: string
-  skillRequirements: string[]
-  budgetMax: string
-  status: string
-  deadline: string | null
-}
-
-interface SwarmDockSSEEvent {
-  type: string
-  data: Record<string, unknown>
-  timestamp: string
-}
 
 interface SwarmDockConfig {
   apiUrl: string
@@ -51,7 +32,7 @@ function parseConfig(connector: Connector): SwarmDockConfig {
   }
 }
 
-function buildTaskPrompt(task: SwarmDockTask): string {
+function buildTaskPrompt(task: Task): string {
   const lines: string[] = [
     `# SwarmDock Task: ${task.title}`,
     '',
@@ -63,6 +44,17 @@ function buildTaskPrompt(task: SwarmDockTask): string {
   if (task.deadline) lines.push(`**Deadline:** ${task.deadline}`)
   lines.push('', 'Complete this task and provide your deliverables. Your response will be submitted as the task result on the SwarmDock marketplace.')
   return lines.join('\n')
+}
+
+export function generateExamplePrompts(skillId: string): string[] {
+  const name = skillId.replace(/-/g, ' ')
+  return [
+    `Perform a ${name} task`,
+    `Help me with ${name}`,
+    `I need ${name} work done`,
+    `Complete a ${name} assignment`,
+    `Handle a ${name} request`,
+  ]
 }
 
 function formatUsdc(microUnits: string): string {
@@ -98,11 +90,15 @@ const swarmdock: PlatformConnector = {
     if (!privateKey) throw new Error('SwarmDock connector requires an Ed25519 private key credential')
     if (!config.walletAddress) throw new Error('SwarmDock connector requires a Base L2 wallet address in config')
 
-    // Dynamic import of the SDK (must be built and linked first)
+    // Dynamic import of the SDK
     let SwarmDockClient: typeof import('@swarmdock/sdk').SwarmDockClient
+    let ConflictError: typeof import('@swarmdock/sdk').ConflictError
+    let AuthenticationError: typeof import('@swarmdock/sdk').AuthenticationError
     try {
       const sdk = await import('@swarmdock/sdk')
       SwarmDockClient = sdk.SwarmDockClient
+      ConflictError = sdk.ConflictError
+      AuthenticationError = sdk.AuthenticationError
     } catch {
       throw new Error('SwarmDock SDK (@swarmdock/sdk) is not installed. Run: npm install @swarmdock/sdk')
     }
@@ -128,36 +124,47 @@ const swarmdock: PlatformConnector = {
         basePrice: '1000000', // $1.00 default
         inputModes: ['text'],
         outputModes: ['text'],
+        examplePrompts: generateExamplePrompts(skillId),
       }))
 
     log.info(TAG, `Registering agent "${connector.name}" on SwarmDock at ${config.apiUrl}`)
-    const registration = await client.register({
-      displayName: connector.name,
-      description: config.agentDescription,
-      framework: 'swarmclaw',
-      walletAddress: config.walletAddress,
-      skills: skillList,
-    })
-    log.info(TAG, `Registered as ${registration.agent.did} (trust level ${registration.agent.trustLevel})`)
+    try {
+      const registration = await client.register({
+        displayName: connector.name,
+        description: config.agentDescription,
+        framework: 'swarmclaw',
+        walletAddress: config.walletAddress,
+        skills: skillList,
+      })
+      log.info(TAG, `Registered as ${registration.agent.did} (trust level ${registration.agent.trustLevel})`)
 
-    logActivity({
-      entityType: 'connector',
-      entityId: connectorId,
-      action: 'swarmdock-registered',
-      actor: 'system',
-      summary: `Agent "${connector.name}" registered on SwarmDock as ${registration.agent.did}`,
-    })
+      logActivity({
+        entityType: 'connector',
+        entityId: connectorId,
+        action: 'swarmdock-registered',
+        actor: 'system',
+        summary: `Agent "${connector.name}" registered on SwarmDock as ${registration.agent.did}`,
+      })
+    } catch (err) {
+      if (err instanceof ConflictError) {
+        log.info(TAG, `Agent already registered, authenticating`)
+        await client.authenticate()
+      } else {
+        throw err
+      }
+    }
 
     // Set up SSE event stream
     let alive = true
 
-    const handleSSEEvent = async (event: SwarmDockSSEEvent) => {
+    const handleSSEEvent = async (event: SSEEvent) => {
       if (!alive) return
       try {
         switch (event.type) {
-          case 'task.created': {
+          case 'task.created':
+          case 'task.invited': {
             if (!config.autoDiscover) break
-            const task = event.data as unknown as SwarmDockTask
+            const task = event.data as unknown as Task
             if (shouldAutoBid(task, config)) {
               await submitAutoBid(client, task.id, config)
               logActivity({
@@ -172,7 +179,7 @@ const swarmdock: PlatformConnector = {
           }
 
           case 'task.assigned': {
-            const task = event.data as unknown as SwarmDockTask
+            const task = event.data as unknown as Task
             if (!task.assigneeId) break
 
             // Signal work started on SwarmDock
@@ -236,6 +243,32 @@ const swarmdock: PlatformConnector = {
             })
             break
           }
+
+          case 'escrow.releasing':
+          case 'escrow.refunding': {
+            const data = event.data as Record<string, string>
+            logActivity({
+              entityType: 'connector',
+              entityId: connectorId,
+              action: 'swarmdock-escrow',
+              actor: 'system',
+              summary: `Escrow ${event.type.split('.')[1]} for task ${data.taskId}`,
+            })
+            break
+          }
+
+          case 'escrow.release_failed':
+          case 'escrow.refund_failed': {
+            const data = event.data as Record<string, string>
+            logActivity({
+              entityType: 'connector',
+              entityId: connectorId,
+              action: 'incident',
+              actor: 'system',
+              summary: `Escrow ${event.type.replace('escrow.', '')} for task ${data.taskId}`,
+            })
+            break
+          }
         }
       } catch (err) {
         log.error(TAG, `Error handling SSE event ${event.type}: ${err instanceof Error ? err.message : String(err)}`)
@@ -250,7 +283,12 @@ const swarmdock: PlatformConnector = {
         await client.heartbeat()
         log.debug(TAG, 'SwarmDock token refreshed')
       } catch (err) {
-        log.error(TAG, `SwarmDock heartbeat failed: ${err instanceof Error ? err.message : String(err)}`)
+        if (err instanceof AuthenticationError) {
+          log.warn(TAG, 'SwarmDock token expired, re-authenticating')
+          try { await client.authenticate() } catch {}
+        } else {
+          log.error(TAG, `SwarmDock heartbeat failed: ${err instanceof Error ? err.message : String(err)}`)
+        }
       }
     }, 23 * 60 * 60 * 1000)
 

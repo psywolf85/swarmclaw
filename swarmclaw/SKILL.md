@@ -1,7 +1,7 @@
 ---
 name: swarmclaw
-description: Manage your SwarmClaw agent fleet — agents, tasks, chats, chatrooms, missions, schedules, memory, wallets, connectors, autonomy, and 40+ more command groups. Use when asked to dispatch work, check agent status, coordinate multi-agent work, run diagnostics, manage schedules, control missions, or orchestrate across a SwarmClaw dashboard instance.
-version: 2.0.0
+description: Manage your SwarmClaw agent fleet — agents, tasks, chats, chatrooms, goals, schedules, memory, wallets, connectors, autonomy, and 40+ more command groups. Use when asked to dispatch work, check agent status, coordinate multi-agent work, run diagnostics, manage schedules, set goals, or orchestrate across a SwarmClaw dashboard instance.
+version: 2.1.0
 metadata:
   openclaw:
     requires:
@@ -16,7 +16,7 @@ homepage: https://github.com/swarmclawai/swarmclaw
 
 ## Overview
 
-SwarmClaw is a self-hosted AI agent orchestration platform. This skill gives you CLI access to manage agents, tasks, chats, chatrooms, missions, schedules, memory, wallets, connectors, autonomy controls, webhooks, extensions, knowledge, and more across one or many SwarmClaw instances.
+SwarmClaw is a self-hosted AI agent orchestration platform. This skill gives you CLI access to manage agents, tasks, chats, chatrooms, goals, schedules, memory, wallets, connectors, autonomy controls, webhooks, extensions, and more across one or many SwarmClaw instances.
 
 The CLI maps 1:1 to the SwarmClaw REST API. Every command follows the pattern:
 
@@ -216,24 +216,25 @@ swarmclaw memory maintenance-run --json
 
 Other: `get`, `graph`
 
-### Missions
+### Goals
 
-Durable multi-step mission execution with control actions.
+Hierarchical goal management — organization, team, project, agent, and task-level goals with parent-child chains.
 
 ```bash
-# List missions (filterable by status, phase, agent, project)
-swarmclaw missions list --json
-swarmclaw missions list --json --query status=active --query agentId=<id>
+# List all goals
+swarmclaw goals list --json
 
-# Get mission detail
-swarmclaw missions get <missionId> --json
+# Create a goal
+swarmclaw goals create --data '{"title":"Increase revenue 20%","level":"organization","description":"Q2 revenue target"}' --json
 
-# Get mission event timeline
-swarmclaw missions events <missionId> --json
+# Get goal details
+swarmclaw goals get <goalId> --json
 
-# Run a mission control action (resume, replan, retry_verification, wait, cancel)
-swarmclaw missions action <missionId> --data '{"action":"resume"}' --json
-swarmclaw missions action <missionId> --data '{"action":"cancel"}' --json
+# Update a goal
+swarmclaw goals update <goalId> --data '{"status":"in_progress"}' --json
+
+# Delete a goal
+swarmclaw goals delete <goalId> --json
 ```
 
 ### Search
@@ -244,12 +245,19 @@ Global cross-resource search across agents, tasks, chats, schedules, webhooks, a
 swarmclaw search query --json --query q=pricing
 ```
 
-### System Status
+### System
 
-Lightweight health endpoint (v1.2.0+). Safe for external monitors and quick checks.
+System health, version, and usage information.
 
 ```bash
-swarmclaw system-status get --json
+# Health check (lightweight, safe for polling)
+swarmclaw system status --json
+
+# Check current version and updates
+swarmclaw system version --json
+
+# View resource usage
+swarmclaw system usage --json
 ```
 
 ## More Commands
@@ -271,8 +279,11 @@ These groups are available but used less frequently by agents. Use `swarmclaw <g
 | **extensions** | Extension marketplace and config | `list`, `set`, `install`, `marketplace`, `settings-get`, `settings-set`, `builtins` |
 | **skills** | Reusable skill management | `list`, `get`, `create`, `update`, `delete`, `import` |
 | **learned-skills** | Agent-scoped learned skill review | `list`, `promote`, `dismiss`, `delete`, `review-counts` |
-| **knowledge** | Knowledge base entries and document upload | `list`, `get`, `create`, `update`, `delete`, `upload` |
-| **projects** | Project grouping for agents and tasks | `list`, `get`, `create`, `update`, `delete` |
+| **skill-suggestions** | AI-generated skill recommendations | `list`, `draft`, `approve`, `reject` |
+| **external-agents** | External agent registration and heartbeat | `list`, `create`, `update`, `delete`, `heartbeat` |
+| **delegation-jobs** | Cross-agent delegation job tracking | `list` |
+| **portability** | Config import/export between installs | `export`, `import` |
+| **settings** | App-level configuration | `get`, `update` |
 | **runs** | Chat run queue and execution history | `list`, `get`, `events` |
 | **activity** | Activity feed events | `list` (supports `--query entityType=`, `--query action=`) |
 | **daemon** | Background daemon lifecycle | `status`, `start`, `stop`, `health-check` |
@@ -293,7 +304,7 @@ These groups are available but used less frequently by agents. Use `swarmclaw <g
 6. For complex multi-step orchestration, create individual tasks rather than chaining commands.
 7. Prefer `--json` output mode for all commands. Use `--raw` only for legacy commands that don't support `--json`.
 8. Do not run commands that modify or delete agents without explicit user confirmation.
-9. Use `system-status get` for quick health checks — it's lightweight and safe for repeated polling.
+9. Use `system status` for quick health checks — it's lightweight and safe for repeated polling.
 10. Use `search query --query q=<term>` to discover resources across agents, tasks, chats, schedules, and skills.
 11. The CLI group `chats` = "sessions" in the SwarmClaw UI. The legacy `sessions` alias is no longer available; always use `chats`.
 12. Use `autonomy estop-set` to engage emergency stop across all autonomous agents when safety action is needed.
@@ -329,7 +340,7 @@ Then summarize which agents are idle, which have active chats, and any tasks in 
 User says: "Something seems wrong with SwarmClaw"
 
 ```bash
-swarmclaw system-status get --json
+swarmclaw system status --json
 swarmclaw setup doctor --json
 ```
 
@@ -368,16 +379,15 @@ swarmclaw autonomy estop-set --data '{"engaged":true}' --json
 
 Then confirm the emergency stop is engaged and all autonomous execution has halted.
 
-### Mission control
+### Set up a goal hierarchy
 
-User says: "Check on the migration mission and resume it if it's paused"
+User says: "Create a Q2 revenue goal and link my sales agent's tasks to it"
 
 ```bash
-swarmclaw missions list --json --query status=active
-swarmclaw missions get <missionId> --json
-swarmclaw missions events <missionId> --json
-# If paused, resume it
-swarmclaw missions action <missionId> --data '{"action":"resume"}' --json
+swarmclaw goals create --data '{"title":"Increase Q2 revenue 20%","level":"organization","description":"Hit $1.2M ARR by end of Q2"}' --json
+# Use the returned goalId to link agent tasks
+swarmclaw tasks list --json --query agentId=<sales-agent-id>
+swarmclaw tasks update <taskId> --data '{"goalId":"<goalId>"}' --json
 ```
 
 ## Discovery

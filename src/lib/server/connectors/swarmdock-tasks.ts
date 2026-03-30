@@ -2,23 +2,14 @@ import { genId } from '@/lib/id'
 import { loadTasks, saveTasks } from '@/lib/server/tasks/task-repository'
 import { logActivity } from '@/lib/server/activity/activity-log'
 import type { BoardTask } from '@/types/task'
-
-interface SwarmDockTask {
-  id: string
-  requesterId: string
-  title: string
-  description: string
-  skillRequirements: string[]
-  budgetMax: string
-  deadline: string | null
-}
+import type { Task } from '@swarmdock/shared'
 
 /**
  * Create a SwarmClaw BoardTask from a SwarmDock task assignment.
  * Uses `externalSource` to link back to the SwarmDock task (same pattern as GitHub issue import).
  */
 export async function createBoardTaskFromAssignment(
-  task: SwarmDockTask,
+  task: Task,
   agentId: string,
   connectorId: string,
   apiUrl: string,

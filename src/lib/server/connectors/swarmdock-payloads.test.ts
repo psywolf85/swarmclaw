@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 
 import { submitAutoBid } from '@/lib/server/connectors/swarmdock-bidding'
-import { submitSwarmdockTaskResult } from '@/lib/server/connectors/swarmdock'
+import { submitSwarmdockTaskResult, generateExamplePrompts } from '@/lib/server/connectors/swarmdock'
 
 test('submitAutoBid includes empty portfolio refs for SDK compatibility', async () => {
   const seen: {
@@ -35,6 +35,23 @@ test('submitAutoBid includes empty portfolio refs for SDK compatibility', async 
     proposedPrice: '2500000',
     portfolioRefs: [],
   })
+})
+
+test('generateExamplePrompts returns exactly 5 non-empty strings', () => {
+  const prompts = generateExamplePrompts('data-analysis')
+  assert.equal(prompts.length, 5)
+  for (const prompt of prompts) {
+    assert.equal(typeof prompt, 'string')
+    assert.ok(prompt.length > 0, 'prompt must be non-empty')
+    assert.ok(prompt.includes('data analysis'), 'prompt should include the humanized skill name')
+  }
+
+  // Single-word skill
+  const simple = generateExamplePrompts('coding')
+  assert.equal(simple.length, 5)
+  for (const prompt of simple) {
+    assert.ok(prompt.includes('coding'))
+  }
 })
 
 test('submitSwarmdockTaskResult includes empty files and propagates submit errors', async () => {
